@@ -450,3 +450,26 @@ ipcMain.handle('open-logs-folder', () => {
   const { shell } = require('electron');
   shell.openPath(logManager.logsDir);
 });
+
+ipcMain.handle('export-data', async (event, { filename, content }) => {
+  const { dialog, shell } = require('electron');
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: filename,
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (!result.canceled && result.filePath) {
+    fs.writeFileSync(result.filePath, content, 'utf8');
+    shell.showItemInFolder(result.filePath);
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('get-auto-launch', () => {
+  return app.getLoginItemSettings().openAtLogin;
+});
+
+ipcMain.handle('set-auto-launch', (event, enable) => {
+  app.setLoginItemSettings({ openAtLogin: enable });
+  return true;
+});

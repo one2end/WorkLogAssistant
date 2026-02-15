@@ -22,8 +22,17 @@
             <span class="monitor-dot" :class="{ pulse: isMonitoring }"></span>
             {{ isMonitoring ? '监控中' : '已暂停' }}
           </button>
+          <div class="date-picker">
+            <button @click="changeDate(-1)" class="date-nav-btn">‹</button>
+            <input type="date" v-model="selectedDate" @change="onDateChange" class="date-input" />
+            <button @click="changeDate(1)" class="date-nav-btn" :disabled="isToday">›</button>
+            <button v-if="!isToday" @click="goToToday" class="today-btn">今天</button>
+          </div>
         </div>
         <div class="header-right">
+          <button @click="exportData" class="icon-btn" title="导出数据">
+            📥
+          </button>
           <button @click="activeTab = 'settings'" class="icon-btn" title="设置">
             ⚙️
           </button>
@@ -34,7 +43,7 @@
         <div v-if="activeTab !== 'settings'" class="stats-section">
           <div class="stat-card">
             <div class="stat-value">{{ statistics.totalActivities }}</div>
-            <div class="stat-label">今日活动</div>
+            <div class="stat-label">{{ isToday ? '今日活动' : '当日活动' }}</div>
           </div>
           <div class="stat-card">
             <div class="stat-value">{{ statistics.uniqueApplications }}</div>
@@ -264,12 +273,39 @@
               </div>
               <div class="setting-item">
                 <label>AI提示词</label>
-                <textarea 
-                  v-model="config.summary.prompt" 
+                <textarea
+                  v-model="config.summary.prompt"
                   @change="saveConfig"
                   placeholder="自定义AI提示词，留空使用默认提示词"
                   rows="4"
                 ></textarea>
+              </div>
+            </div>
+
+            <div class="settings-group">
+              <h3>通用</h3>
+              <div class="setting-item">
+                <label>开机自启动</label>
+                <input
+                  v-model="autoLaunch"
+                  type="checkbox"
+                  @change="toggleAutoLaunch"
+                >
+              </div>
+              <div class="setting-item">
+                <label>主题</label>
+                <select v-model="theme" @change="onThemeChange" class="select-input">
+                  <option value="dark">深色</option>
+                  <option value="light">浅色</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-group about-section">
+              <h3>关于</h3>
+              <div class="about-info">
+                <p>WorkLog Assistant <span class="version">v1.0.0</span></p>
+                <p class="about-desc">自动追踪工作活动，AI 生成工作日志</p>
               </div>
             </div>
           </div>
@@ -323,8 +359,15 @@ export default {
       },
       logs: [],
       theme: 'dark',
-      isGeneratingSummary: false
+      isGeneratingSummary: false,
+      selectedDate: new Date().toISOString().split('T')[0],
+      autoLaunch: false
     };
+  },
+  computed: {
+    isToday() {
+      return this.selectedDate === new Date().toISOString().split('T')[0];
+    }
   },
   async mounted() {
     await this.loadConfig();
@@ -340,6 +383,7 @@ export default {
       try {
         this.config = await ipcRenderer.invoke('get-config');
         this.theme = this.config.ui?.theme || 'dark';
+        this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
       } catch (error) {
         console.error('加载配置失败:', error);
       }
@@ -381,7 +425,7 @@ export default {
     },
     async loadActivities() {
       try {
-        const allActivities = await ipcRenderer.invoke('get-activities');
+        const allActivities = await ipcRenderer.invoke('get-activities', this.selectedDate);
         this.activities = [...allActivities].reverse();
         this.updateStatistics();
         this.updateCharts();
@@ -391,7 +435,7 @@ export default {
     },
     async loadSummaries() {
       try {
-        this.summaries = await ipcRenderer.invoke('get-summaries');
+        this.summaries = await ipcRenderer.invoke('get-summaries', this.selectedDate);
         this.summaries = [...this.summaries].reverse();
       } catch (error) {
         console.error('加载摘要失败:', error);
@@ -441,6 +485,55 @@ export default {
     closeWindow() {
       ipcRenderer.invoke('minimize-window');
     },
+    changeDate(delta) {
+      const d = new Date(this.selectedDate);
+      d.setDate(d.getDate() + delta);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (d <= today) {
+        this.selectedDate = d.toISOString().split('T')[0];
+        this.onDateChange();
+      }
+    },
+    goToToday() {
+      this.selectedDate = new Date().toISOString().split('T')[0];
+      this.onDateChange();
+    },
+    async onDateChange() {
+      await this.loadActivities();
+      await this.loadSummaries();
+    },
+    async exportData() {
+      const data = {
+        date: this.selectedDate,
+        activities: this.activities,
+        summaries: this.summaries,
+        statistics: this.statistics
+      };
+      const blob = JSON.stringify(data, null, 2);
+      const filename = `worklog_${this.selectedDate}.json`;
+
+      // Use a simple download approach via IPC
+      try {
+        await ipcRenderer.invoke('export-data', { filename, content: blob });
+        this.addLog(`数据已导出: ${filename}`);
+      } catch (error) {
+        this.addLog('导出失败: ' + error.message);
+      }
+    },
+    async toggleAutoLaunch() {
+      try {
+        await ipcRenderer.invoke('set-auto-launch', this.autoLaunch);
+        this.addLog(this.autoLaunch ? '已启用开机自启动' : '已关闭开机自启动');
+      } catch (error) {
+        this.addLog('设置自启动失败: ' + error.message);
+      }
+    },
+    onThemeChange() {
+      this.config.ui = this.config.ui || {};
+      this.config.ui.theme = this.theme;
+      this.saveConfig();
+    },
     updateStatistics() {
       const appUsage = {};
       this.activities.forEach(activity => {
@@ -487,22 +580,17 @@ export default {
         return;
       }
 
-      const today = new Date().toDateString();
       const appDuration = {};
       const sortedActivities = [...this.activities].reverse();
       const maxGapMs = 5 * 60 * 1000; // 超过5分钟的间隔忽略
 
       sortedActivities.forEach((activity, index) => {
-        const activityDate = new Date(activity.timestamp).toDateString();
-        if (activityDate === today && index < sortedActivities.length - 1) {
+        if (index < sortedActivities.length - 1) {
           const nextActivity = sortedActivities[index + 1];
-          const nextActivityDate = new Date(nextActivity.timestamp).toDateString();
-          if (nextActivityDate === today) {
-            const duration = new Date(nextActivity.timestamp) - new Date(activity.timestamp);
-            if (duration <= maxGapMs) {
-              const appName = activity.processName;
-              appDuration[appName] = (appDuration[appName] || 0) + duration;
-            }
+          const duration = new Date(nextActivity.timestamp) - new Date(activity.timestamp);
+          if (duration <= maxGapMs) {
+            const appName = activity.processName;
+            appDuration[appName] = (appDuration[appName] || 0) + duration;
           }
         }
       });
@@ -748,6 +836,63 @@ export default {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.date-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.date-nav-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.date-nav-btn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.date-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.date-input {
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  color-scheme: dark;
+}
+
+.today-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--accent-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.today-btn:hover {
+  background: var(--accent-bg);
 }
 
 .monitor-btn {
@@ -1430,5 +1575,47 @@ export default {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+
+.select-input {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.about-section {
+  text-align: center;
+}
+
+.about-info p {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.version {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.about-desc {
+  font-size: 12px !important;
+  opacity: 0.7;
+}
+
+.setting-item textarea {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
 }
 </style>
