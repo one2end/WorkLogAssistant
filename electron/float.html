@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: transparent;
+  overflow: hidden;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.float-widget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(22, 33, 62, 0.92);
+  border: 1px solid rgba(100, 255, 218, 0.3);
+  border-radius: 20px;
+  backdrop-filter: blur(10px);
+  cursor: move;
+  transition: all 0.2s;
+}
+.float-widget:hover {
+  border-color: rgba(100, 255, 218, 0.6);
+  background: rgba(22, 33, 62, 0.96);
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64ffda;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(100, 255, 218, 0.4); }
+  70% { box-shadow: 0 0 0 4px rgba(100, 255, 218, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(100, 255, 218, 0); }
+}
+.app-name {
+  font-size: 12px;
+  color: #e8e8e8;
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.duration {
+  font-size: 11px;
+  color: #64ffda;
+  font-weight: 600;
+}
+</style>
+</head>
+<body>
+<div class="float-widget" id="widget">
+  <div class="dot"></div>
+  <span class="app-name" id="appName">--</span>
+  <span class="duration" id="duration">0分钟</span>
+</div>
+<script>
+const { ipcRenderer } = require('electron');
+
+ipcRenderer.on('float-update', (event, data) => {
+  document.getElementById('appName').textContent = data.appName || '--';
+  document.getElementById('duration').textContent = data.duration || '0分钟';
+});
+
+document.getElementById('widget').addEventListener('dblclick', () => {
+  ipcRenderer.invoke('show-main-window');
+});
+</script>
+</body>
+</html>

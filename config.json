@@ -1,0 +1,25 @@
+{
+  "language": "zh",
+  "monitoring": {
+    "interval": 60,
+    "captureScreenshot": false,
+    "screenshotInterval": 60
+  },
+  "api": {
+    "apiKey": "",
+    "baseUrl": "https://api.deepseek.com/chat/completions",
+    "modelName": "deepseek-chat"
+  },
+  "summary": {
+    "intervalMinutes": 30,
+    "lookbackMinutes": 60,
+    "maxTokens": 500,
+    "compressActivities": true,
+    "prompt": ""
+  },
+  "ui": {
+    "theme": "dark",
+    "fontSize": 14,
+    "showTimestamps": true
+  }
+}
