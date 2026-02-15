@@ -3,7 +3,7 @@
   "monitoring": {
     "interval": 60,
     "captureScreenshot": false,
-    "screenshotInterval": 60
+    "screenshotInterval": 300
   },
   "api": {
     "apiKey": "",

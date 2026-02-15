@@ -1,6 +1,6 @@
 {
   "name": "worklog-assistant",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "WorkLog Assistant - Electron + Vue version",
   "main": "electron/main.js",
   "scripts": {
