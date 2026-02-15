@@ -2,7 +2,7 @@
   "language": "zh",
   "monitoring": {
     "interval": 60,
-    "captureScreenshot": false,
+    "captureScreenshot": true,
     "screenshotInterval": 300
   },
   "api": {
