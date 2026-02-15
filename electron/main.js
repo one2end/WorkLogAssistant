@@ -19,6 +19,7 @@ let summaryInterval = null;
 let lastSummaryTime = null;
 let currentAppName = '';
 let currentAppStartTime = null;
+let floatSize = { width: 220, height: 36 };
 
 const configManager = new ConfigManager();
 const storageManager = new StorageManager();
@@ -29,11 +30,17 @@ const ocrManager = new OCRManager();
 const logManager = new LogManager();
 
 function createWindow() {
+  const { screen } = require('electron');
+  const display = screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+
   mainWindow = new BrowserWindow({
-    width: 960,
-    height: 700,
-    minWidth: 800,
-    minHeight: 560,
+    width: 480,
+    height: workArea.height,
+    x: workArea.x + workArea.width - 480,
+    y: workArea.y,
+    minWidth: 420,
+    minHeight: 600,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -42,7 +49,7 @@ function createWindow() {
     show: false,
     frame: false,
     titleBarStyle: 'hidden',
-    backgroundColor: '#1a1a2e'
+    backgroundColor: '#0d0d0d'
   });
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -78,7 +85,9 @@ function createTray() {
   let trayIcon;
   
   try {
-    const iconPath = path.join(__dirname, '../build/icon.png');
+    const iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.png')
+      : path.join(__dirname, '../build/icon.png');
     trayIcon = nativeImage.createFromPath(iconPath);
     
     if (trayIcon.isEmpty()) {
@@ -99,7 +108,7 @@ function createTray() {
     { label: '打开数据文件夹', click: () => openDataFolder() },
     { type: 'separator' },
     { 
-      label: isMonitoring ? '暂停监控' : '开始监控', 
+      label: isMonitoring ? '暂停记录' : '开始记录',
       click: () => toggleMonitoring() 
     },
     { type: 'separator' },
@@ -130,11 +139,14 @@ function createFloatWindow() {
   const { screen } = require('electron');
   const display = screen.getPrimaryDisplay();
   const { width } = display.workAreaSize;
+  const config = configManager.getConfig();
+  const floatW = config.ui?.floatWidth || 220;
+  floatSize = { width: floatW, height: 36 };
 
   floatWindow = new BrowserWindow({
-    width: 260,
+    width: floatW,
     height: 36,
-    x: width - 280,
+    x: width - floatW - 20,
     y: 20,
     frame: false,
     transparent: true,
@@ -151,16 +163,22 @@ function createFloatWindow() {
   floatWindow.loadFile(path.join(__dirname, 'float.html'));
   floatWindow.setVisibleOnAllWorkspaces(true);
 
+  floatWindow.webContents.once('did-finish-load', () => {
+    const theme = configManager.getConfig().ui?.theme || 'dark';
+    floatWindow.webContents.send('float-theme', theme);
+    floatWindow.webContents.send('float-monitoring-status', isMonitoring);
+  });
+
   floatWindow.on('closed', () => {
     floatWindow = null;
   });
 }
 
 function updateFloatWindow() {
-  if (!floatWindow || !isMonitoring) return;
+  if (!floatWindow) return;
 
-  let duration = '0分钟';
-  if (currentAppStartTime) {
+  let duration = '';
+  if (isMonitoring && currentAppStartTime) {
     const diffMs = Date.now() - currentAppStartTime;
     const minutes = Math.floor(diffMs / 60000);
     if (minutes < 1) duration = '<1分钟';
@@ -173,8 +191,9 @@ function updateFloatWindow() {
   }
 
   floatWindow.webContents.send('float-update', {
-    appName: currentAppName || '--',
-    duration
+    appName: isMonitoring ? (currentAppName || '--') : '--',
+    duration,
+    isMonitoring
   });
 }
 
@@ -231,7 +250,7 @@ function updateTrayMenu() {
     { label: '打开数据文件夹', click: () => openDataFolder() },
     { type: 'separator' },
     { 
-      label: isMonitoring ? '暂停监控' : '开始监控', 
+      label: isMonitoring ? '暂停记录' : '开始记录',
       click: () => toggleMonitoring() 
     },
     { type: 'separator' },
@@ -245,8 +264,8 @@ function startMonitoring() {
   const config = configManager.getConfig();
   const monitorIntervalTime = config.monitoring.interval * 1000;
   
-  logManager.addLog('开始监控', 'info');
-  logManager.addLog('监控间隔: ' + config.monitoring.interval + '秒', 'info');
+  logManager.addLog('开始记录', 'info');
+  logManager.addLog('记录间隔: ' + config.monitoring.interval + '秒', 'info');
   
   monitorInterval = setInterval(async () => {
     try {
@@ -270,8 +289,8 @@ function startMonitoring() {
         updateFloatWindow();
       }
     } catch (error) {
-      console.error('监控错误:', error);
-      logManager.addLog('监控错误: ' + error.message, 'error');
+      console.error('记录错误:', error);
+      logManager.addLog('记录错误: ' + error.message, 'error');
     }
   }, monitorIntervalTime);
   
@@ -332,8 +351,8 @@ function startMonitoring() {
 }
 
 function stopMonitoring() {
-  logManager.addLog('停止监控', 'info');
-  logManager.addLog('监控已暂停', 'info');
+  logManager.addLog('停止记录', 'info');
+  logManager.addLog('记录已暂停', 'info');
   if (monitorInterval) {
     clearInterval(monitorInterval);
     monitorInterval = null;
@@ -356,6 +375,21 @@ function quitApp() {
   }
   app.quit();
 }
+
+// Single instance lock
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized() || !mainWindow.isVisible()) {
+        mainWindow.show();
+      }
+      mainWindow.focus();
+    }
+  });
 
 app.whenReady().then(() => {
   logManager.addLog('应用程序启动中...', 'info');
@@ -386,11 +420,15 @@ ipcMain.handle('get-config', () => {
 ipcMain.handle('save-config', (event, config) => {
   configManager.saveConfig(config);
   summarizer.updateConfig(config);
-  
+
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', config);
   }
-  
+
+  if (floatWindow) {
+    floatWindow.webContents.send('float-theme', config.ui?.theme || 'dark');
+  }
+
   return true;
 });
 
@@ -408,6 +446,12 @@ ipcMain.handle('generate-summary', async () => {
 
 ipcMain.handle('toggle-monitoring', () => {
   toggleMonitoring();
+  if (floatWindow) {
+    floatWindow.webContents.send('float-monitoring-status', isMonitoring);
+  }
+  if (mainWindow) {
+    mainWindow.webContents.send('monitoring-status-changed', isMonitoring);
+  }
   return isMonitoring;
 });
 
@@ -422,8 +466,13 @@ ipcMain.handle('get-ocr-result', (event, activityId) => {
 ipcMain.handle('minimize-window', () => {
   if (mainWindow) {
     mainWindow.hide();
-    if (isMonitoring) {
-      createFloatWindow();
+    const config = configManager.getConfig();
+    if (config.ui?.floatWindow !== false) {
+      if (floatWindow) {
+        floatWindow.show();
+      } else {
+        createFloatWindow();
+      }
       updateFloatWindow();
     }
   }
@@ -431,6 +480,31 @@ ipcMain.handle('minimize-window', () => {
 
 ipcMain.handle('show-main-window', () => {
   showMainWindow();
+});
+
+ipcMain.handle('get-float-bounds', () => {
+  if (floatWindow) return floatWindow.getBounds();
+  return { width: 220, x: 0, y: 0 };
+});
+
+ipcMain.handle('set-float-pos', (event, x, y) => {
+  if (floatWindow) {
+    floatWindow.setBounds({ x: Math.round(x), y: Math.round(y), width: floatSize.width, height: floatSize.height });
+  }
+});
+
+ipcMain.handle('set-float-width', (event, w) => {
+  if (floatWindow) {
+    const bounds = floatWindow.getBounds();
+    floatSize.width = w;
+    floatWindow.setBounds({ x: bounds.x, y: bounds.y, width: w, height: floatSize.height });
+  }
+});
+
+ipcMain.handle('save-float-width', () => {
+  if (floatWindow) {
+    configManager.updateConfig({ ui: { floatWidth: floatSize.width } });
+  }
 });
 
 ipcMain.handle('get-logs', () => {
@@ -469,7 +543,59 @@ ipcMain.handle('get-auto-launch', () => {
   return app.getLoginItemSettings().openAtLogin;
 });
 
+ipcMain.handle('get-dates-with-data', () => {
+  const activities = storageManager.getAllActivities();
+  const dates = new Set();
+  activities.forEach(a => {
+    const d = new Date(a.timestamp);
+    dates.add(d.toISOString().split('T')[0]);
+  });
+  return [...dates];
+});
+
 ipcMain.handle('set-auto-launch', (event, enable) => {
   app.setLoginItemSettings({ openAtLogin: enable });
   return true;
 });
+
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  const https = require('https');
+  const currentVersion = app.getVersion();
+
+  return new Promise((resolve) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/one2end/WorkLogAssistant/releases/latest',
+      headers: { 'User-Agent': 'WorkLogAssistant' }
+    };
+
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const release = JSON.parse(data);
+          const latestVersion = (release.tag_name || '').replace(/^v/, '');
+          const hasUpdate = latestVersion && latestVersion !== currentVersion &&
+            latestVersion.localeCompare(currentVersion, undefined, { numeric: true }) > 0;
+          resolve({
+            hasUpdate,
+            latestVersion,
+            currentVersion,
+            downloadUrl: release.html_url || ''
+          });
+        } catch {
+          resolve({ hasUpdate: false, latestVersion: '', currentVersion, downloadUrl: '', error: '解析失败' });
+        }
+      });
+    }).on('error', (err) => {
+      resolve({ hasUpdate: false, latestVersion: '', currentVersion, downloadUrl: '', error: err.message });
+    });
+  });
+});
+
+} // end single instance else block

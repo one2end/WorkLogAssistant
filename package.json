@@ -1,6 +1,6 @@
 {
   "name": "worklog-assistant",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "WorkLog Assistant - Electron + Vue version",
   "main": "electron/main.js",
   "scripts": {
@@ -36,6 +36,9 @@
       "dist/**/*",
       "electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      { "from": "build/icon.png", "to": "icon.png" }
     ],
     "win": {
       "target": [

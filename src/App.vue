@@ -1,6 +1,9 @@
 <template>
   <div id="app" :class="theme">
     <div class="container">
+      <div v-if="toastMessage" class="toast" :class="toastType" @click="toastMessage = ''">
+        {{ toastMessage }}
+      </div>
       <div class="title-bar">
         <div class="title-bar-drag">
           <span class="app-icon">⏱</span>
@@ -20,11 +23,43 @@
         <div class="header-left">
           <button @click="toggleMonitoring" :class="['monitor-btn', isMonitoring ? 'active' : '']">
             <span class="monitor-dot" :class="{ pulse: isMonitoring }"></span>
-            {{ isMonitoring ? '监控中' : '已暂停' }}
+            {{ isMonitoring ? '记录中' : '已暂停' }}
           </button>
           <div class="date-picker">
             <button @click="changeDate(-1)" class="date-nav-btn">‹</button>
-            <input type="date" v-model="selectedDate" @change="onDateChange" class="date-input" />
+            <div class="date-input-wrapper">
+              <button class="date-display-btn" @click="showCalendar = !showCalendar">
+                {{ formatDateDisplay(selectedDate) }}
+              </button>
+              <div v-if="showCalendar" class="calendar-popup" @mousedown.stop>
+                <div class="calendar-header">
+                  <button @click="changeCalendarMonth(-1)" class="cal-nav-btn">‹</button>
+                  <span class="cal-title">{{ calendarYear }}年{{ calendarMonth + 1 }}月</span>
+                  <button @click="changeCalendarMonth(1)" class="cal-nav-btn">›</button>
+                </div>
+                <div class="calendar-weekdays">
+                  <span v-for="d in ['日','一','二','三','四','五','六']" :key="d">{{ d }}</span>
+                </div>
+                <div class="calendar-days">
+                  <button
+                    v-for="day in calendarDays"
+                    :key="day.key"
+                    class="cal-day"
+                    :class="{
+                      'other-month': !day.currentMonth,
+                      'is-today': day.isToday,
+                      'is-selected': day.dateStr === selectedDate,
+                      'has-data': datesWithData.has(day.dateStr),
+                      'is-future': day.isFuture
+                    }"
+                    :disabled="day.isFuture"
+                    @click="selectCalendarDate(day)"
+                  >
+                    {{ day.day }}
+                  </button>
+                </div>
+              </div>
+            </div>
             <button @click="changeDate(1)" class="date-nav-btn" :disabled="isToday">›</button>
             <button v-if="!isToday" @click="goToToday" class="today-btn">今天</button>
           </div>
@@ -58,26 +93,6 @@
         <div v-if="activeTab !== 'settings'" class="charts-section">
           <div class="chart-card">
             <div class="chart-header">
-              <h3>子活动次数排名</h3>
-              <span class="chart-badge">Top {{ Object.keys(subActivityStats).length }}</span>
-            </div>
-            <div class="chart-content">
-              <div v-for="(count, title, index) in subActivityStats" :key="title" class="app-bar">
-                <div class="app-rank">{{ index + 1 }}</div>
-                <div class="app-name" :title="title">{{ title }}</div>
-                <div class="app-bar-container">
-                  <div class="app-bar-fill" :style="{ width: getBarWidth(count) + '%' }"></div>
-                </div>
-                <div class="app-count">{{ count }}</div>
-              </div>
-              <div v-if="Object.keys(subActivityStats).length === 0" class="empty-state">
-                <p>暂无数据</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="chart-card">
-            <div class="chart-header">
               <h3>应用使用时长</h3>
               <span class="chart-badge">{{ Object.keys(appDurationStats).length }} 个应用</span>
             </div>
@@ -95,18 +110,39 @@
               </div>
             </div>
           </div>
+
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>子活动次数排名</h3>
+              <span class="chart-badge">Top {{ Object.keys(subActivityStats).length }}</span>
+            </div>
+            <div class="chart-content">
+              <div v-for="(count, title, index) in subActivityStats" :key="title" class="app-bar">
+                <div class="app-rank">{{ index + 1 }}</div>
+                <div class="app-name" :title="title">{{ title }}</div>
+                <div class="app-bar-container">
+                  <div class="app-bar-fill" :style="{ width: getBarWidth(count) + '%' }"></div>
+                </div>
+                <div class="app-count">{{ count }}</div>
+              </div>
+              <div v-if="Object.keys(subActivityStats).length === 0" class="empty-state">
+                <p>暂无数据</p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div v-if="activeTab !== 'settings'" class="tabs">
-          <button 
-            v-for="tab in tabs" 
-            :key="tab.id"
-            :class="['tab-btn', { active: activeTab === tab.id }]"
-            @click="activeTab = tab.id"
-          >
-            {{ tab.label }}
-          </button>
-        </div>
+        <div v-if="activeTab !== 'settings'" class="tab-card">
+          <div class="tabs">
+            <button
+              v-for="tab in tabs"
+              :key="tab.id"
+              :class="['tab-btn', { active: activeTab === tab.id }]"
+              @click="activeTab = tab.id"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
 
         <div class="tab-content">
           <div v-if="activeTab === 'activities'" class="activities-list">
@@ -177,8 +213,10 @@
               </div>
             </div>
           </div>
+        </div>
+        </div>
 
-          <div v-if="activeTab === 'settings'" class="settings-panel-full">
+        <div v-if="activeTab === 'settings'" class="settings-panel-full">
             <div class="settings-header">
               <button @click="activeTab = 'activities'" class="back-btn">
                 ← 返回
@@ -186,9 +224,9 @@
               <h2>设置</h2>
             </div>
             <div class="settings-group">
-              <h3>监控设置</h3>
+              <h3>记录设置</h3>
               <div class="setting-item">
-                <label>监控间隔 (秒)</label>
+                <label>记录间隔 (秒)</label>
                 <input 
                   v-model.number="config.monitoring.interval" 
                   type="number" 
@@ -293,10 +331,21 @@
                 >
               </div>
               <div class="setting-item">
+                <label>最小化浮窗</label>
+                <input
+                  v-model="config.ui.floatWindow"
+                  type="checkbox"
+                  @change="saveConfig"
+                >
+              </div>
+              <div class="setting-item">
                 <label>主题</label>
                 <select v-model="theme" @change="onThemeChange" class="select-input">
                   <option value="dark">深色</option>
                   <option value="light">浅色</option>
+                  <option value="ocean">海洋</option>
+                  <option value="forest">森林</option>
+                  <option value="rose">玫瑰</option>
                 </select>
               </div>
             </div>
@@ -304,12 +353,28 @@
             <div class="settings-group about-section">
               <h3>关于</h3>
               <div class="about-info">
-                <p>WorkLog Assistant <span class="version">v1.0.0</span></p>
+                <p>WorkLog Assistant <span class="version">v{{ appVersion }}</span></p>
                 <p class="about-desc">自动追踪工作活动，AI 生成工作日志</p>
+                <div class="update-section">
+                  <button @click="checkForUpdates" class="action-btn" :disabled="checkingUpdate">
+                    {{ checkingUpdate ? '检查中...' : '检查更新' }}
+                  </button>
+                  <div v-if="updateInfo" class="update-result">
+                    <template v-if="updateInfo.error">
+                      <span class="update-error">检查失败: {{ updateInfo.error }}</span>
+                    </template>
+                    <template v-else-if="updateInfo.hasUpdate">
+                      <span class="update-available">发现新版本 v{{ updateInfo.latestVersion }}</span>
+                      <button @click="openDownloadLink" class="action-btn">前往下载</button>
+                    </template>
+                    <template v-else>
+                      <span class="update-latest">已是最新版本</span>
+                    </template>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
       </main>
     </div>
   </div>
@@ -361,12 +426,59 @@ export default {
       theme: 'dark',
       isGeneratingSummary: false,
       selectedDate: new Date().toISOString().split('T')[0],
-      autoLaunch: false
+      autoLaunch: false,
+      appVersion: '',
+      updateInfo: null,
+      checkingUpdate: false,
+      datesWithData: new Set(),
+      showCalendar: false,
+      calendarYear: new Date().getFullYear(),
+      calendarMonth: new Date().getMonth(),
+      toastMessage: '',
+      toastType: 'error',
+      toastTimer: null
     };
   },
   computed: {
     isToday() {
       return this.selectedDate === new Date().toISOString().split('T')[0];
+    },
+    calendarDays() {
+      const year = this.calendarYear;
+      const month = this.calendarMonth;
+      const firstDay = new Date(year, month, 1);
+      const startDow = firstDay.getDay();
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = today.toISOString().split('T')[0];
+      const days = [];
+
+      // Previous month padding
+      const prevMonthEnd = new Date(year, month, 0).getDate();
+      for (let i = startDow - 1; i >= 0; i--) {
+        const d = prevMonthEnd - i;
+        const dt = new Date(year, month - 1, d);
+        const dateStr = dt.toISOString().split('T')[0];
+        days.push({ day: d, dateStr, currentMonth: false, isToday: dateStr === todayStr, isFuture: dt > today, key: 'p' + d });
+      }
+
+      // Current month
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dt = new Date(year, month, d);
+        const dateStr = dt.toISOString().split('T')[0];
+        days.push({ day: d, dateStr, currentMonth: true, isToday: dateStr === todayStr, isFuture: dt > today, key: 'c' + d });
+      }
+
+      // Next month padding
+      const remaining = 42 - days.length;
+      for (let d = 1; d <= remaining; d++) {
+        const dt = new Date(year, month + 1, d);
+        const dateStr = dt.toISOString().split('T')[0];
+        days.push({ day: d, dateStr, currentMonth: false, isToday: dateStr === todayStr, isFuture: dt > today, key: 'n' + d });
+      }
+
+      return days;
     }
   },
   async mounted() {
@@ -375,14 +487,23 @@ export default {
     await this.loadSummaries();
     await this.loadLogs();
     await this.checkMonitoringStatus();
+    await this.loadDatesWithData();
     this.setupEventListeners();
+    this.appVersion = await ipcRenderer.invoke('get-app-version');
+    document.addEventListener('mousedown', this.closeCalendar);
     this.addLog('应用已启动');
+  },
+  beforeUnmount() {
+    document.removeEventListener('mousedown', this.closeCalendar);
   },
   methods: {
     async loadConfig() {
       try {
         this.config = await ipcRenderer.invoke('get-config');
         this.theme = this.config.ui?.theme || 'dark';
+        if (this.config.ui) {
+          this.config.ui.floatWindow = this.config.ui.floatWindow !== false;
+        }
         this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
       } catch (error) {
         console.error('加载配置失败:', error);
@@ -412,7 +533,8 @@ export default {
           ui: {
             theme: String(this.config.ui?.theme || 'dark'),
             fontSize: parseInt(this.config.ui?.fontSize) || 14,
-            showTimestamps: Boolean(this.config.ui?.showTimestamps) || true
+            showTimestamps: Boolean(this.config.ui?.showTimestamps) || true,
+            floatWindow: this.config.ui?.floatWindow !== false
           }
         };
         
@@ -433,6 +555,14 @@ export default {
         console.error('加载活动失败:', error);
       }
     },
+    async loadDatesWithData() {
+      try {
+        const dates = await ipcRenderer.invoke('get-dates-with-data');
+        this.datesWithData = new Set(dates);
+      } catch (error) {
+        console.error('加载日期数据失败:', error);
+      }
+    },
     async loadSummaries() {
       try {
         this.summaries = await ipcRenderer.invoke('get-summaries', this.selectedDate);
@@ -443,8 +573,8 @@ export default {
     },
     async loadLogs() {
       try {
-        this.logs = await ipcRenderer.invoke('get-logs');
-        this.scrollToBottom();
+        const logs = await ipcRenderer.invoke('get-logs');
+        this.logs = [...logs].reverse();
       } catch (error) {
         console.error('加载日志失败:', error);
       }
@@ -453,16 +583,16 @@ export default {
       try {
         this.isMonitoring = await ipcRenderer.invoke('get-monitoring-status');
       } catch (error) {
-        console.error('检查监控状态失败:', error);
+        console.error('检查记录状态失败:', error);
       }
     },
     async toggleMonitoring() {
       try {
         this.isMonitoring = await ipcRenderer.invoke('toggle-monitoring');
-        this.addLog(this.isMonitoring ? '监控已开始' : '监控已暂停');
+        this.addLog(this.isMonitoring ? '记录已开始' : '记录已暂停');
       } catch (error) {
-        console.error('切换监控状态失败:', error);
-        this.addLog('切换监控状态失败: ' + error.message);
+        console.error('切换记录状态失败:', error);
+        this.addLog('切换记录状态失败: ' + error.message);
       }
     },
     async generateSummary() {
@@ -472,9 +602,11 @@ export default {
         await ipcRenderer.invoke('generate-summary');
         await this.loadSummaries();
         this.addLog('摘要生成成功');
+        this.showToast('摘要生成成功', 'success');
       } catch (error) {
         console.error('生成摘要失败:', error);
         this.addLog('生成摘要失败: ' + error.message);
+        this.showToast('生成摘要失败: ' + error.message, 'error');
       } finally {
         this.isGeneratingSummary = false;
       }
@@ -492,12 +624,39 @@ export default {
       today.setHours(0, 0, 0, 0);
       if (d <= today) {
         this.selectedDate = d.toISOString().split('T')[0];
+        this.calendarYear = d.getFullYear();
+        this.calendarMonth = d.getMonth();
         this.onDateChange();
       }
     },
     goToToday() {
       this.selectedDate = new Date().toISOString().split('T')[0];
+      this.calendarYear = new Date().getFullYear();
+      this.calendarMonth = new Date().getMonth();
       this.onDateChange();
+    },
+    formatDateDisplay(dateStr) {
+      const d = new Date(dateStr);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    },
+    changeCalendarMonth(delta) {
+      let m = this.calendarMonth + delta;
+      let y = this.calendarYear;
+      if (m < 0) { m = 11; y--; }
+      if (m > 11) { m = 0; y++; }
+      this.calendarMonth = m;
+      this.calendarYear = y;
+    },
+    selectCalendarDate(day) {
+      if (day.isFuture) return;
+      this.selectedDate = day.dateStr;
+      this.showCalendar = false;
+      this.onDateChange();
+    },
+    closeCalendar(e) {
+      if (this.showCalendar) {
+        this.showCalendar = false;
+      }
     },
     async onDateChange() {
       await this.loadActivities();
@@ -569,7 +728,7 @@ export default {
       );
 
       this.subActivityStats = Object.fromEntries(
-        Object.entries(subActivity).sort((a, b) => b[1] - a[1]).slice(0, 15)
+        Object.entries(subActivity).sort((a, b) => b[1] - a[1])
       );
 
       this.updateAppDurationStats();
@@ -631,6 +790,8 @@ export default {
         this.activities.unshift(activity);
         this.updateStatistics();
         this.updateCharts();
+        const dateStr = new Date(activity.timestamp).toISOString().split('T')[0];
+        this.datesWithData.add(dateStr);
         this.addLog(`活动记录: ${activity.processName} - ${activity.windowTitle}`);
       });
 
@@ -652,6 +813,10 @@ export default {
         this.theme = this.config.ui?.theme || 'dark';
         this.addLog('配置已更新');
       });
+
+      ipcRenderer.on('monitoring-status-changed', (event, status) => {
+        this.isMonitoring = status;
+      });
     },
     addLog(message, type = 'info') {
       const logEntry = {
@@ -659,13 +824,11 @@ export default {
         message: message,
         type: type
       };
-      this.logs.push(logEntry);
-      
-      if (this.logs.length > 500) {
-        this.logs.shift();
-      }
+      this.logs.unshift(logEntry);
 
-      this.scrollToBottom();
+      if (this.logs.length > 500) {
+        this.logs.pop();
+      }
     },
     async clearLogs() {
       try {
@@ -714,6 +877,28 @@ export default {
     renderMarkdown(content) {
       if (!content) return '';
       return marked(content);
+    },
+    async checkForUpdates() {
+      this.checkingUpdate = true;
+      this.updateInfo = null;
+      try {
+        this.updateInfo = await ipcRenderer.invoke('check-for-updates');
+      } catch (error) {
+        this.updateInfo = { error: error.message };
+      } finally {
+        this.checkingUpdate = false;
+      }
+    },
+    openDownloadLink() {
+      if (this.updateInfo?.downloadUrl) {
+        shell.openExternal(this.updateInfo.downloadUrl);
+      }
+    },
+    showToast(message, type = 'error') {
+      this.toastMessage = message;
+      this.toastType = type;
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, 5000);
     }
   }
 };
@@ -732,18 +917,51 @@ export default {
   overflow: hidden;
 }
 
+.toast {
+  position: fixed;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 9999;
+  cursor: pointer;
+  animation: toast-in 0.3s ease;
+  max-width: 90%;
+  text-align: center;
+}
+
+.toast.error {
+  background-color: rgba(239, 68, 68, 0.95);
+  color: #fff;
+}
+
+.toast.success {
+  background-color: rgba(16, 185, 129, 0.95);
+  color: #fff;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 #app.dark {
-  --bg-primary: #1a1a2e;
-  --bg-secondary: #16213e;
-  --bg-tertiary: #0f3460;
+  --bg-primary: #0d0d0d;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #2a2a2a;
   --text-primary: #e8e8e8;
-  --text-secondary: #8892b0;
-  --border-color: #233554;
+  --text-secondary: #888888;
+  --border-color: #333333;
   --accent-color: #64ffda;
   --accent-bg: rgba(100, 255, 218, 0.1);
   --success-color: #64ffda;
   --danger-color: #ff6b6b;
   --warning-color: #ffd93d;
+  --pulse-color: rgba(100, 255, 218, 0.4);
+  --badge-text: #0d0d0d;
+  --color-scheme: dark;
 }
 
 #app.light {
@@ -758,6 +976,60 @@ export default {
   --success-color: #198754;
   --danger-color: #dc3545;
   --warning-color: #ffc107;
+  --pulse-color: rgba(13, 110, 253, 0.4);
+  --badge-text: #ffffff;
+  --color-scheme: light;
+}
+
+#app.ocean {
+  --bg-primary: #0b1929;
+  --bg-secondary: #0d2137;
+  --bg-tertiary: #122d4d;
+  --text-primary: #d4e4f7;
+  --text-secondary: #7ea8cc;
+  --border-color: #1a3a5c;
+  --accent-color: #4fc3f7;
+  --accent-bg: rgba(79, 195, 247, 0.1);
+  --success-color: #4fc3f7;
+  --danger-color: #ef5350;
+  --warning-color: #ffb74d;
+  --pulse-color: rgba(79, 195, 247, 0.4);
+  --badge-text: #0b1929;
+  --color-scheme: dark;
+}
+
+#app.forest {
+  --bg-primary: #1a2e1a;
+  --bg-secondary: #1e3620;
+  --bg-tertiary: #264228;
+  --text-primary: #d4e8d0;
+  --text-secondary: #8baa85;
+  --border-color: #2e5430;
+  --accent-color: #81c784;
+  --accent-bg: rgba(129, 199, 132, 0.1);
+  --success-color: #81c784;
+  --danger-color: #e57373;
+  --warning-color: #ffb74d;
+  --pulse-color: rgba(129, 199, 132, 0.4);
+  --badge-text: #1a2e1a;
+  --color-scheme: dark;
+}
+
+#app.rose {
+  --bg-primary: #2e1a24;
+  --bg-secondary: #3a1f2e;
+  --bg-tertiary: #4a2838;
+  --text-primary: #f0d4e0;
+  --text-secondary: #c48da0;
+  --border-color: #5c2e44;
+  --accent-color: #f48fb1;
+  --accent-bg: rgba(244, 143, 177, 0.1);
+  --success-color: #81c784;
+  --danger-color: #ef5350;
+  --warning-color: #ffcc80;
+  --pulse-color: rgba(244, 143, 177, 0.4);
+  --badge-text: #2e1a24;
+  --color-scheme: dark;
 }
 
 .container {
@@ -869,15 +1141,144 @@ export default {
   cursor: not-allowed;
 }
 
-.date-input {
-  padding: 3px 8px;
+.date-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.date-display-btn {
+  padding: 3px 10px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: transparent;
   color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
-  color-scheme: dark;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.date-display-btn:hover {
+  border-color: var(--accent-color);
+}
+
+.calendar-popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  z-index: 1000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.cal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cal-nav-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cal-nav-btn:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.calendar-weekdays span {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+
+.calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal-day {
+  width: 100%;
+  aspect-ratio: 1;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: all 0.15s;
+}
+
+.cal-day:hover:not(:disabled) {
+  background-color: var(--bg-tertiary);
+}
+
+.cal-day.other-month {
+  color: var(--text-secondary);
+  opacity: 0.4;
+}
+
+.cal-day.is-today {
+  border: 1px solid var(--accent-color);
+  font-weight: 600;
+}
+
+.cal-day.is-selected {
+  background-color: var(--accent-color);
+  color: var(--badge-text);
+  font-weight: 600;
+}
+
+.cal-day.has-data:not(.is-selected)::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: #10b981;
+}
+
+.cal-day.is-future {
+  opacity: 0.25;
+  cursor: not-allowed;
 }
 
 .today-btn {
@@ -900,43 +1301,59 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 6px 16px;
-  border: 1px solid var(--border-color);
+  border: 1px solid #6b7280;
   border-radius: 20px;
-  background-color: transparent;
-  color: var(--text-secondary);
+  background-color: rgba(107, 114, 128, 0.15);
+  color: #9ca3af;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
   transition: all 0.2s;
 }
 
 .monitor-btn:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
+  border-color: #f59e0b;
+  color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.1);
 }
 
 .monitor-btn.active {
-  background-color: var(--accent-bg);
-  border-color: var(--accent-color);
-  color: var(--accent-color);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(5, 150, 105, 0.15));
+  border-color: #10b981;
+  color: #10b981;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+.monitor-btn.active:hover {
+  border-color: #f59e0b;
+  color: #f59e0b;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(217, 119, 6, 0.15));
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.25);
 }
 
 .monitor-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background-color: var(--text-secondary);
+  background-color: #6b7280;
   transition: background-color 0.2s;
 }
 
 .monitor-dot.pulse {
-  background-color: var(--success-color);
-  animation: pulse 2s infinite;
+  background-color: #10b981;
+  animation: monitor-pulse 2s infinite;
+}
+
+@keyframes monitor-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
 }
 
 @keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(100, 255, 218, 0.4); }
-  70% { box-shadow: 0 0 0 6px rgba(100, 255, 218, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(100, 255, 218, 0); }
+  0% { box-shadow: 0 0 0 0 var(--pulse-color); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 .icon-btn {
@@ -999,6 +1416,7 @@ export default {
 
 .charts-section {
   display: flex;
+  flex-direction: column;
   gap: 12px;
   padding: 0 20px 12px;
 }
@@ -1029,12 +1447,12 @@ export default {
   padding: 2px 8px;
   border-radius: 10px;
   background-color: var(--accent-color);
-  color: white;
+  color: var(--badge-text);
   opacity: 0.8;
 }
 
 .chart-content {
-  max-height: 200px;
+  max-height: 170px;
   overflow-y: auto;
 }
 
@@ -1065,8 +1483,9 @@ export default {
 .app-bar:nth-child(3) .app-rank { color: #cd7f32; }
 
 .app-name {
-  min-width: 100px;
-  max-width: 160px;
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -1085,13 +1504,13 @@ export default {
 
 .app-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-color), rgba(100, 255, 218, 0.4));
+  background: linear-gradient(90deg, var(--accent-color), var(--accent-bg));
   border-radius: 4px;
   transition: width 0.3s ease;
 }
 
 .app-bar-fill.duration-fill {
-  background: linear-gradient(90deg, #ffd93d, rgba(255, 217, 61, 0.4));
+  background: linear-gradient(90deg, var(--warning-color), rgba(255, 217, 61, 0.3));
 }
 
 .app-count {
@@ -1137,15 +1556,29 @@ export default {
   color: var(--accent-color);
 }
 
+.tab-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0 20px 12px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 0;
+}
+
 .tabs {
   display: flex;
-  padding: 0 20px;
-  gap: 4px;
+  padding: 0;
+  gap: 0;
   background-color: transparent;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .tab-btn {
-  padding: 10px 20px;
+  flex: 1;
+  padding: 10px 0;
   border: none;
   background-color: transparent;
   color: var(--text-secondary);
@@ -1154,6 +1587,7 @@ export default {
   border-bottom: 2px solid transparent;
   font-size: 13px;
   font-weight: 500;
+  text-align: center;
 }
 
 .tab-btn:hover {
@@ -1168,7 +1602,8 @@ export default {
 .tab-content {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 20px;
+  overflow-x: hidden;
+  padding: 12px;
 }
 
 .activities-list,
@@ -1528,7 +1963,9 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  padding: 16px 0;
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .settings-header {
@@ -1585,6 +2022,7 @@ export default {
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
+  color-scheme: var(--color-scheme);
 }
 
 .about-section {
@@ -1605,6 +2043,34 @@ export default {
 .about-desc {
   font-size: 12px !important;
   opacity: 0.7;
+}
+
+.update-section {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.update-available {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.update-latest {
+  color: var(--success-color);
+}
+
+.update-error {
+  color: var(--danger-color);
 }
 
 .setting-item textarea {

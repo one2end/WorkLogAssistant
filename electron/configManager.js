@@ -56,7 +56,8 @@ class ConfigManager {
       ui: {
         theme: 'dark',
         fontSize: 14,
-        showTimestamps: true
+        showTimestamps: true,
+        floatWindow: true
       }
     };
 
