@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const { app } = require('electron');
 
 class OCRManager {
   constructor() {
-    this.ocrDir = path.join(__dirname, '../Data/ocr');
+    const userDataPath = app.getPath('userData');
+    this.ocrDir = path.join(userDataPath, 'Data', 'ocr');
     this.ensureOCRDir();
   }
 

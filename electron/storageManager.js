@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const { app } = require('electron');
 
 class StorageManager {
   constructor() {
-    this.dataDir = path.join(__dirname, '../Data');
+    const userDataPath = app.getPath('userData');
+    this.dataDir = path.join(userDataPath, 'Data');
     this.activitiesFile = path.join(this.dataDir, 'activities.json');
     this.summariesFile = path.join(this.dataDir, 'summaries.json');
     this.screenshotsDir = path.join(this.dataDir, 'screenshots');

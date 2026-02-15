@@ -1,6 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { app } = require('electron');
 
 class Summarizer {
   constructor() {
@@ -10,10 +11,21 @@ class Summarizer {
 
   loadConfig() {
     try {
-      const configPath = path.join(__dirname, '../config.json');
+      const userDataPath = app.getPath('userData');
+      const configPath = path.join(userDataPath, 'config.json');
       if (fs.existsSync(configPath)) {
         const configData = fs.readFileSync(configPath, 'utf8');
-        this.config = JSON.parse(configData);
+        const config = JSON.parse(configData);
+        // Also load local config for API key
+        const localConfigPath = path.join(userDataPath, 'config.local.json');
+        if (fs.existsSync(localConfigPath)) {
+          const localData = fs.readFileSync(localConfigPath, 'utf8');
+          const localConfig = JSON.parse(localData);
+          if (localConfig.api && localConfig.api.apiKey) {
+            config.api = { ...config.api, ...localConfig.api };
+          }
+        }
+        this.config = config;
       } else {
         this.config = this.getDefaultConfig();
       }
@@ -192,13 +204,6 @@ ${activityText}`;
 
   updateConfig(newConfig) {
     this.config = { ...this.config, ...newConfig };
-    
-    try {
-      const configPath = path.join(__dirname, '../config.json');
-      fs.writeFileSync(configPath, JSON.stringify(this.config, null, 2), 'utf8');
-    } catch (error) {
-      console.error('保存配置失败:', error);
-    }
   }
 }
 

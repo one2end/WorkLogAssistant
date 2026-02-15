@@ -3,12 +3,14 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const { app } = require('electron');
 
 const execAsync = promisify(exec);
 
 class ScreenshotManager {
   constructor() {
-    this.screenshotDir = path.join(__dirname, '../Data/screenshots');
+    const userDataPath = app.getPath('userData');
+    this.screenshotDir = path.join(userDataPath, 'Data', 'screenshots');
     this.ensureScreenshotDir();
   }
 

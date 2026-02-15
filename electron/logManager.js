@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const { app } = require('electron');
 
 class LogManager {
   constructor() {
-    this.logsDir = path.join(__dirname, '../Data/logs');
+    const userDataPath = app.getPath('userData');
+    this.logsDir = path.join(userDataPath, 'Data', 'logs');
     this.ensureLogsDir();
     this.logEntries = [];
     this.maxLogEntries = 1000;

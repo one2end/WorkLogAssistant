@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const { app } = require('electron');
 
 class ConfigManager {
   constructor() {
-    this.configPath = path.join(__dirname, '../config.json');
-    this.localConfigPath = path.join(__dirname, '../config.local.json');
+    const userDataPath = app.getPath('userData');
+    this.configPath = path.join(userDataPath, 'config.json');
+    this.localConfigPath = path.join(userDataPath, 'config.local.json');
     this.config = this.loadConfig();
   }
 
