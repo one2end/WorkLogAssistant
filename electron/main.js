@@ -2,11 +2,9 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage } = require('electr
 const path = require('path');
 const fs = require('fs');
 const WindowMonitor = require('./windowMonitor');
-const ScreenshotManager = require('./screenshotManager');
 const Summarizer = require('./summarizer');
 const ConfigManager = require('./configManager');
 const StorageManager = require('./storageManager');
-const OCRManager = require('./ocrManager');
 const LogManager = require('./logManager');
 
 let mainWindow;
@@ -14,8 +12,9 @@ let floatWindow;
 let tray;
 let isMonitoring = false;
 let monitorInterval = null;
-let screenshotInterval = null;
 let summaryInterval = null;
+let scheduleCheckerInterval = null;
+let triggeredSchedules = new Set();
 let lastSummaryTime = null;
 let currentAppName = '';
 let currentAppStartTime = null;
@@ -24,9 +23,7 @@ let floatSize = { width: 220, height: 36 };
 const configManager = new ConfigManager();
 const storageManager = new StorageManager();
 const windowMonitor = new WindowMonitor();
-const screenshotManager = new ScreenshotManager();
 const summarizer = new Summarizer();
-const ocrManager = new OCRManager();
 const logManager = new LogManager();
 
 function createWindow() {
@@ -293,60 +290,67 @@ function startMonitoring() {
       logManager.addLog('记录错误: ' + error.message, 'error');
     }
   }, monitorIntervalTime);
-  
-  if (config.monitoring.captureScreenshot) {
-    const screenshotIntervalTime = config.monitoring.screenshotInterval * 1000;
-    logManager.addLog('截图间隔: ' + config.monitoring.screenshotInterval + '秒', 'info');
-    
-    screenshotInterval = setInterval(async () => {
-      try {
-        const activity = await windowMonitor.getCurrentActivity();
-        if (activity) {
-          const screenshot = await screenshotManager.captureScreen();
-          if (screenshot) {
-            storageManager.saveActivity(activity);
-            storageManager.saveScreenshot(activity.id, screenshot);
-            logManager.addLog('保存截图: ' + screenshot.path, 'info');
-            
-            logManager.addLog('开始OCR识别...', 'info');
-            const ocrResult = await ocrManager.recognizeImage(screenshot.path);
-            if (ocrResult) {
-              ocrManager.saveOCRResult(activity.id, ocrResult);
-              logManager.addLog('OCR识别完成: ' + (ocrResult.success ? '成功' : '失败'), ocrResult.success ? 'info' : 'error');
-            }
-            
-            if (mainWindow) {
-              mainWindow.webContents.send('activity-logged', activity);
+
+  const schedules = config.summary?.schedules || [];
+
+  if (schedules.length > 0) {
+    // 使用调度器模式：每分钟检查是否匹配某个 schedule 的 endTime
+    logManager.addLog('已配置 ' + schedules.length + ' 个总结周期', 'info');
+    triggeredSchedules = new Set();
+
+    scheduleCheckerInterval = setInterval(async () => {
+      const now = new Date();
+      const currentTime = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+      // 午夜清空已触发记录
+      if (currentTime === '00:00') {
+        triggeredSchedules.clear();
+      }
+
+      for (const schedule of schedules) {
+        const key = schedule.startTime + '-' + schedule.endTime;
+        if (currentTime === schedule.endTime && !triggeredSchedules.has(key)) {
+          triggeredSchedules.add(key);
+          // 计算回溯分钟数
+          const [sh, sm] = schedule.startTime.split(':').map(Number);
+          const [eh, em] = schedule.endTime.split(':').map(Number);
+          const lookbackMinutes = (eh * 60 + em) - (sh * 60 + sm);
+          if (lookbackMinutes > 0) {
+            try {
+              logManager.addLog(`正在生成 ${schedule.startTime}-${schedule.endTime} 时段摘要...`, 'info');
+              await summarizer.generateSummaryForLookback(lookbackMinutes);
+              logManager.addLog(`${schedule.startTime}-${schedule.endTime} 时段摘要生成成功`, 'info');
+              if (mainWindow) {
+                mainWindow.webContents.send('summary-generated');
+              }
+            } catch (error) {
+              logManager.addLog(`${schedule.startTime}-${schedule.endTime} 时段摘要生成失败: ` + error.message, 'error');
             }
           }
         }
-      } catch (error) {
-        console.error('截图错误:', error);
-        logManager.addLog('截图错误: ' + error.message, 'error');
       }
-    }, screenshotIntervalTime);
-  }
+    }, 60 * 1000);
+  } else {
+    // 无调度配置，使用原有 intervalMinutes 定时器
+    const summaryIntervalMinutes = config.summary?.intervalMinutes || 60;
+    if (summaryIntervalMinutes > 0) {
+      const summaryIntervalTime = summaryIntervalMinutes * 60 * 1000;
+      logManager.addLog('摘要间隔: ' + summaryIntervalMinutes + '分钟', 'info');
 
-  const summaryIntervalMinutes = config.summary?.intervalMinutes || 60;
-  if (summaryIntervalMinutes > 0) {
-    const summaryIntervalTime = summaryIntervalMinutes * 60 * 1000;
-    logManager.addLog('摘要间隔: ' + summaryIntervalMinutes + '分钟', 'info');
-    
-    summaryInterval = setInterval(async () => {
-      try {
-        logManager.addLog('正在自动生成摘要...', 'info');
-        logManager.addLog('开始自动摘要生成', 'info');
-        await summarizer.generateSummary();
-        logManager.addLog('自动摘要生成成功', 'info');
-        logManager.addLog('自动摘要生成完成', 'info');
-        if (mainWindow) {
-          mainWindow.webContents.send('summary-generated');
+      summaryInterval = setInterval(async () => {
+        try {
+          logManager.addLog('正在自动生成摘要...', 'info');
+          await summarizer.generateSummary();
+          logManager.addLog('自动摘要生成完成', 'info');
+          if (mainWindow) {
+            mainWindow.webContents.send('summary-generated');
+          }
+        } catch (error) {
+          console.error('自动摘要生成失败:', error);
+          logManager.addLog('自动摘要生成失败: ' + error.message, 'error');
         }
-      } catch (error) {
-        console.error('自动摘要生成失败:', error);
-        logManager.addLog('自动摘要生成失败: ' + error.message, 'error');
-      }
-    }, summaryIntervalTime);
+      }, summaryIntervalTime);
+    }
   }
 }
 
@@ -357,13 +361,13 @@ function stopMonitoring() {
     clearInterval(monitorInterval);
     monitorInterval = null;
   }
-  if (screenshotInterval) {
-    clearInterval(screenshotInterval);
-    screenshotInterval = null;
-  }
   if (summaryInterval) {
     clearInterval(summaryInterval);
     summaryInterval = null;
+  }
+  if (scheduleCheckerInterval) {
+    clearInterval(scheduleCheckerInterval);
+    scheduleCheckerInterval = null;
   }
 }
 
@@ -397,8 +401,15 @@ app.whenReady().then(() => {
   logManager.addLog('主窗口已创建', 'info');
   createTray();
   logManager.addLog('托盘图标已创建', 'info');
+
+  // 自动开始记录
+  isMonitoring = true;
+  startMonitoring();
+  updateTrayMenu();
+  logManager.addLog('已自动开始记录', 'info');
+
   logManager.addLog('应用程序已就绪', 'info');
-  
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -420,6 +431,12 @@ ipcMain.handle('get-config', () => {
 ipcMain.handle('save-config', (event, config) => {
   configManager.saveConfig(config);
   summarizer.updateConfig(config);
+
+  // 重启监控定时器以使新配置生效
+  if (isMonitoring) {
+    stopMonitoring();
+    startMonitoring();
+  }
 
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', config);
@@ -444,6 +461,10 @@ ipcMain.handle('generate-summary', async () => {
   return await summarizer.generateSummary();
 });
 
+ipcMain.handle('generate-summary-range', async (event, { startTime, endTime }) => {
+  return await summarizer.generateSummaryForRange(startTime, endTime);
+});
+
 ipcMain.handle('toggle-monitoring', () => {
   toggleMonitoring();
   if (floatWindow) {
@@ -457,10 +478,6 @@ ipcMain.handle('toggle-monitoring', () => {
 
 ipcMain.handle('get-monitoring-status', () => {
   return isMonitoring;
-});
-
-ipcMain.handle('get-ocr-result', (event, activityId) => {
-  return ocrManager.getOCRResult(activityId);
 });
 
 ipcMain.handle('minimize-window', () => {

@@ -80,7 +80,18 @@ class StorageManager {
     start.setHours(0, 0, 0, 0);
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
-    
+
+    return allActivities.filter(activity => {
+      const activityDate = new Date(activity.timestamp);
+      return activityDate >= start && activityDate <= end;
+    });
+  }
+
+  getActivitiesByTimeRange(startTime, endTime) {
+    const allActivities = this.getAllActivities();
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+
     return allActivities.filter(activity => {
       const activityDate = new Date(activity.timestamp);
       return activityDate >= start && activityDate <= end;

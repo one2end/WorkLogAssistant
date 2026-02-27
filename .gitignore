@@ -13,3 +13,5 @@ Thumbs.db
 *.swo
 *~
 config.local.json
+config.json
+.claude/

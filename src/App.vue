@@ -85,8 +85,12 @@
             <div class="stat-label">应用数量</div>
           </div>
           <div class="stat-card">
-            <div class="stat-value">{{ statistics.mostUsedApplication?.name || '-' }}</div>
-            <div class="stat-label">最常用应用</div>
+            <div class="stat-value">{{ formatDuration(totalRecordedTime) }}</div>
+            <div class="stat-label">记录时长</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ formatDuration(idleTime) }}</div>
+            <div class="stat-label">未操作电脑</div>
           </div>
         </div>
 
@@ -162,14 +166,6 @@
                   <div class="activity-process">{{ activity.processName }}</div>
                   <div class="activity-window">{{ activity.windowTitle }}</div>
                 </div>
-                <div v-if="activity.screenshot" class="activity-screenshot">
-                  <button @click="viewScreenshot(activity.screenshot)" class="screenshot-btn" title="查看截图">
-                    📷
-                  </button>
-                  <button @click="viewOCR(activity)" class="screenshot-btn" title="查看OCR">
-                    📝
-                  </button>
-                </div>
               </div>
             </div>
           </div>
@@ -178,6 +174,17 @@
             <div class="summary-actions">
               <button @click="generateSummary" class="action-btn" :disabled="isGeneratingSummary">
                 {{ isGeneratingSummary ? '生成中...' : '生成摘要' }}
+              </button>
+            </div>
+            <div class="summary-range-actions">
+              <div class="range-inputs">
+                <label>开始</label>
+                <input type="datetime-local" v-model="summaryStartTime" class="datetime-input">
+                <label>结束</label>
+                <input type="datetime-local" v-model="summaryEndTime" class="datetime-input">
+              </div>
+              <button @click="generateSummaryForRange" class="action-btn" :disabled="isGeneratingSummary">
+                {{ isGeneratingSummary ? '生成中...' : '按时间段生成' }}
               </button>
             </div>
             <div v-if="summaries.length === 0" class="empty-state">
@@ -231,23 +238,6 @@
                   v-model.number="config.monitoring.interval" 
                   type="number" 
                   min="10"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>启用截图</label>
-                <input 
-                  v-model="config.monitoring.captureScreenshot" 
-                  type="checkbox"
-                  @change="saveConfig"
-                >
-              </div>
-              <div v-if="config.monitoring.captureScreenshot" class="setting-item">
-                <label>截图间隔 (秒)</label>
-                <input 
-                  v-model.number="config.monitoring.screenshotInterval" 
-                  type="number" 
-                  min="60"
                   @change="saveConfig"
                 >
               </div>
@@ -317,6 +307,41 @@
                   placeholder="自定义AI提示词，留空使用默认提示词"
                   rows="4"
                 ></textarea>
+              </div>
+              <div class="setting-item schedule-section">
+                <label>总结周期</label>
+                <div class="schedule-list">
+                  <div v-for="(schedule, index) in config.summary.schedules" :key="index" class="schedule-row">
+                    <input type="time" v-model="schedule.startTime" @change="saveConfig" class="time-input">
+                    <span class="schedule-sep">~</span>
+                    <input type="time" v-model="schedule.endTime" @change="saveConfig" class="time-input">
+                    <button @click="removeSchedule(index)" class="schedule-del-btn" title="删除">✕</button>
+                  </div>
+                  <button @click="addSchedule" class="schedule-add-btn">+ 添加时间段</button>
+                  <p class="schedule-hint">配置后将在每个时间段结束时自动生成该时段的摘要</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-group">
+              <h3>费用预估</h3>
+              <div class="setting-item">
+                <label>输入价格 (元/百万token)</label>
+                <input v-model.number="costEstimate.inputPricePerMillion" type="number" min="0" step="0.1">
+              </div>
+              <div class="setting-item">
+                <label>输出价格 (元/百万token)</label>
+                <input v-model.number="costEstimate.outputPricePerMillion" type="number" min="0" step="0.1">
+              </div>
+              <div class="setting-item">
+                <label>每日工作时长 (小时)</label>
+                <input v-model.number="costEstimate.workHoursPerDay" type="number" min="1" max="24">
+              </div>
+              <div class="cost-result">
+                <p>每日调用次数: {{ estimatedDailyCalls }} 次</p>
+                <p>每次预估 token: 输入 ~{{ estimatedInputTokens }}, 输出 ~{{ config.summary?.maxTokens || 500 }}</p>
+                <p>每日预估费用: {{ estimatedDailyCost }} 元</p>
+                <p>每月预估费用: {{ estimatedMonthlyCost }} 元</p>
               </div>
             </div>
 
@@ -405,11 +430,16 @@ export default {
       appUsageStats: {},
       subActivityStats: {},
       appDurationStats: {},
+      idleTime: 0,
+      totalRecordedTime: 0,
+      costEstimate: {
+        inputPricePerMillion: 1,
+        outputPricePerMillion: 2,
+        workHoursPerDay: 10
+      },
       config: {
         monitoring: {
-          interval: 60,
-          captureScreenshot: false,
-          screenshotInterval: 300
+          interval: 60
         },
         api: {
           apiKey: '',
@@ -419,12 +449,15 @@ export default {
         summary: {
           lookbackMinutes: 60,
           maxTokens: 500,
-          compressActivities: true
+          compressActivities: true,
+          schedules: []
         }
       },
       logs: [],
       theme: 'dark',
       isGeneratingSummary: false,
+      summaryStartTime: '',
+      summaryEndTime: '',
       selectedDate: new Date().toISOString().split('T')[0],
       autoLaunch: false,
       appVersion: '',
@@ -479,6 +512,28 @@ export default {
       }
 
       return days;
+    },
+    estimatedDailyCalls() {
+      const lookback = parseInt(this.config.summary?.lookbackMinutes) || 60;
+      const workHours = this.costEstimate.workHoursPerDay || 10;
+      return Math.floor(workHours * 60 / lookback);
+    },
+    estimatedInputTokens() {
+      const lookback = parseInt(this.config.summary?.lookbackMinutes) || 60;
+      const interval = parseInt(this.config.monitoring?.interval) || 60;
+      const activitiesPerCall = Math.floor(lookback * 60 / interval);
+      return Math.round(activitiesPerCall * 50 / 2);
+    },
+    estimatedDailyCost() {
+      const calls = this.estimatedDailyCalls;
+      const inputTokens = this.estimatedInputTokens;
+      const outputTokens = parseInt(this.config.summary?.maxTokens) || 500;
+      const inputCost = (inputTokens * calls / 1000000) * (this.costEstimate.inputPricePerMillion || 0);
+      const outputCost = (outputTokens * calls / 1000000) * (this.costEstimate.outputPricePerMillion || 0);
+      return (inputCost + outputCost).toFixed(4);
+    },
+    estimatedMonthlyCost() {
+      return (parseFloat(this.estimatedDailyCost) * 30).toFixed(2);
     }
   },
   async mounted() {
@@ -491,6 +546,7 @@ export default {
     this.setupEventListeners();
     this.appVersion = await ipcRenderer.invoke('get-app-version');
     document.addEventListener('mousedown', this.closeCalendar);
+    this.initSummaryTimeRange();
     this.addLog('应用已启动');
   },
   beforeUnmount() {
@@ -504,6 +560,9 @@ export default {
         if (this.config.ui) {
           this.config.ui.floatWindow = this.config.ui.floatWindow !== false;
         }
+        if (!this.config.summary.schedules) {
+          this.config.summary.schedules = [];
+        }
         this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
       } catch (error) {
         console.error('加载配置失败:', error);
@@ -514,9 +573,7 @@ export default {
         const configToSave = {
           language: this.config.language || 'zh',
           monitoring: {
-            interval: parseInt(this.config.monitoring?.interval) || 60,
-            captureScreenshot: Boolean(this.config.monitoring?.captureScreenshot) || false,
-            screenshotInterval: parseInt(this.config.monitoring?.screenshotInterval) || 300
+            interval: parseInt(this.config.monitoring?.interval) || 60
           },
           api: {
             apiKey: String(this.config.api?.apiKey || ''),
@@ -527,8 +584,9 @@ export default {
             intervalMinutes: parseInt(this.config.summary?.intervalMinutes) || 30,
             lookbackMinutes: parseInt(this.config.summary?.lookbackMinutes) || 60,
             maxTokens: parseInt(this.config.summary?.maxTokens) || 500,
-            compressActivities: Boolean(this.config.summary?.compressActivities) || true,
-            prompt: String(this.config.summary?.prompt || '')
+            compressActivities: !!this.config.summary?.compressActivities,
+            prompt: String(this.config.summary?.prompt || ''),
+            schedules: JSON.parse(JSON.stringify(this.config.summary?.schedules || []))
           },
           ui: {
             theme: String(this.config.ui?.theme || 'dark'),
@@ -610,6 +668,39 @@ export default {
       } finally {
         this.isGeneratingSummary = false;
       }
+    },
+    async generateSummaryForRange() {
+      if (!this.summaryStartTime || !this.summaryEndTime) {
+        this.showToast('请选择开始和结束时间', 'error');
+        return;
+      }
+      try {
+        this.isGeneratingSummary = true;
+        this.addLog(`正在生成 ${this.summaryStartTime} ~ ${this.summaryEndTime} 时间段摘要...`);
+        await ipcRenderer.invoke('generate-summary-range', {
+          startTime: new Date(this.summaryStartTime).toISOString(),
+          endTime: new Date(this.summaryEndTime).toISOString()
+        });
+        await this.loadSummaries();
+        this.addLog('时间段摘要生成成功');
+        this.showToast('时间段摘要生成成功', 'success');
+      } catch (error) {
+        console.error('生成时间段摘要失败:', error);
+        this.addLog('生成时间段摘要失败: ' + error.message);
+        this.showToast('生成时间段摘要失败: ' + error.message, 'error');
+      } finally {
+        this.isGeneratingSummary = false;
+      }
+    },
+    initSummaryTimeRange() {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0);
+      this.summaryStartTime = this.toLocalDatetimeString(today);
+      this.summaryEndTime = this.toLocalDatetimeString(now);
+    },
+    toLocalDatetimeString(date) {
+      const pad = n => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
     },
     minimizeWindow() {
       ipcRenderer.invoke('minimize-window');
@@ -693,6 +784,17 @@ export default {
       this.config.ui.theme = this.theme;
       this.saveConfig();
     },
+    addSchedule() {
+      if (!this.config.summary.schedules) {
+        this.config.summary.schedules = [];
+      }
+      this.config.summary.schedules.push({ startTime: '09:00', endTime: '12:00' });
+      this.saveConfig();
+    },
+    removeSchedule(index) {
+      this.config.summary.schedules.splice(index, 1);
+      this.saveConfig();
+    },
     updateStatistics() {
       const appUsage = {};
       this.activities.forEach(activity => {
@@ -736,12 +838,16 @@ export default {
     updateAppDurationStats() {
       if (this.activities.length === 0) {
         this.appDurationStats = {};
+        this.idleTime = 0;
+        this.totalRecordedTime = 0;
         return;
       }
 
       const appDuration = {};
       const sortedActivities = [...this.activities].reverse();
-      const maxGapMs = 5 * 60 * 1000; // 超过5分钟的间隔忽略
+      const intervalSec = parseInt(this.config.monitoring?.interval) || 60;
+      const maxGapMs = intervalSec * 3 * 1000;
+      let idleMs = 0;
 
       sortedActivities.forEach((activity, index) => {
         if (index < sortedActivities.length - 1) {
@@ -750,9 +856,16 @@ export default {
           if (duration <= maxGapMs) {
             const appName = activity.processName;
             appDuration[appName] = (appDuration[appName] || 0) + duration;
+          } else {
+            idleMs += duration;
           }
         }
       });
+
+      const firstTime = new Date(sortedActivities[0].timestamp);
+      const lastTime = new Date(sortedActivities[sortedActivities.length - 1].timestamp);
+      this.totalRecordedTime = lastTime - firstTime;
+      this.idleTime = idleMs;
 
       this.appDurationStats = Object.fromEntries(
         Object.entries(appDuration).sort((a, b) => b[1] - a[1])
@@ -857,22 +970,6 @@ export default {
     },
     formatDateTime(timestamp) {
       return new Date(timestamp).toLocaleString('zh-CN');
-    },
-    async viewOCR(activity) {
-      try {
-        const ocrResult = await ipcRenderer.invoke('get-ocr-result', activity.id);
-        if (ocrResult) {
-          alert(`OCR识别结果:\n\n${ocrResult.text}`);
-        } else {
-          alert('暂无OCR识别结果');
-        }
-      } catch (error) {
-        console.error('获取OCR结果失败:', error);
-        alert('获取OCR结果失败');
-      }
-    },
-    viewScreenshot(screenshot) {
-      shell.openPath(screenshot.path);
     },
     renderMarkdown(content) {
       if (!content) return '';
@@ -1387,31 +1484,33 @@ export default {
 
 .stats-section {
   display: flex;
-  gap: 12px;
-  padding: 12px 20px;
+  gap: 6px;
+  padding: 8px 20px;
 }
 
 .stat-card {
   flex: 1;
-  padding: 12px 16px;
+  padding: 6px 8px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 6px;
   text-align: center;
 }
 
 .stat-value {
-  font-size: 22px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--accent-color);
-  margin-bottom: 2px;
+  margin-bottom: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stat-label {
-  font-size: 12px;
+  font-size: 10px;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 
 .charts-section {
@@ -1663,25 +1762,6 @@ export default {
   color: var(--text-secondary);
 }
 
-.activity-screenshot {
-  min-width: 40px;
-}
-
-.screenshot-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  cursor: pointer;
-  font-size: 16px;
-  transition: background-color 0.2s;
-}
-
-.screenshot-btn:hover {
-  background-color: var(--border-color);
-}
-
 .summary-header {
   display: flex;
   justify-content: space-between;
@@ -1780,7 +1860,40 @@ export default {
 }
 
 .summary-actions {
+  margin-bottom: 12px;
+}
+
+.summary-range-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin-bottom: 16px;
+  padding: 10px 12px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.range-inputs label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.datetime-input {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  color-scheme: var(--color-scheme);
 }
 
 .action-btn {
@@ -2083,5 +2196,92 @@ export default {
   font-size: 13px;
   font-family: inherit;
   resize: vertical;
+}
+
+.cost-result {
+  padding: 10px 12px;
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.cost-result p {
+  margin: 0;
+}
+
+.schedule-section {
+  flex-direction: column;
+  align-items: flex-start !important;
+}
+
+.schedule-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-input {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  color-scheme: var(--color-scheme);
+}
+
+.schedule-sep {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.schedule-del-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--danger-color);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.schedule-del-btn:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.schedule-add-btn {
+  padding: 4px 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.schedule-add-btn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.schedule-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  margin: 2px 0 0 0;
 }
 </style>

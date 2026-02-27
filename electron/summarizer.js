@@ -54,7 +54,7 @@ class Summarizer {
   async generateSummary() {
     try {
       const activities = this.getRecentActivities();
-      
+
       if (activities.length === 0) {
         console.log('没有可用的活动记录');
         return null;
@@ -62,15 +62,69 @@ class Summarizer {
 
       const prompt = this.buildPrompt(activities);
       const summary = await this.callAI(prompt);
-      
+
       if (summary) {
         this.saveSummary(summary, activities);
         return summary;
       }
-      
+
       return null;
     } catch (error) {
       console.error('生成摘要失败:', error);
+      throw error;
+    }
+  }
+
+  async generateSummaryForRange(startTime, endTime) {
+    try {
+      const StorageManager = require('./storageManager');
+      const storage = new StorageManager();
+      const activities = storage.getActivitiesByTimeRange(startTime, endTime);
+
+      if (activities.length === 0) {
+        console.log('该时间段没有活动记录');
+        return null;
+      }
+
+      const prompt = this.buildPrompt(activities);
+      const summary = await this.callAI(prompt);
+
+      if (summary) {
+        this.saveSummary(summary, activities);
+        return summary;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('生成时间段摘要失败:', error);
+      throw error;
+    }
+  }
+
+  async generateSummaryForLookback(lookbackMinutes) {
+    try {
+      const StorageManager = require('./storageManager');
+      const storage = new StorageManager();
+      const cutoffTime = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+      const now = new Date();
+      const activities = storage.getActivitiesByTimeRange(cutoffTime.toISOString(), now.toISOString());
+
+      if (activities.length === 0) {
+        console.log('该时间段没有活动记录');
+        return null;
+      }
+
+      const prompt = this.buildPrompt(activities);
+      const summary = await this.callAI(prompt);
+
+      if (summary) {
+        this.saveSummary(summary, activities);
+        return summary;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('生成回溯摘要失败:', error);
       throw error;
     }
   }
@@ -203,7 +257,29 @@ ${activityText}`;
   }
 
   updateConfig(newConfig) {
-    this.config = { ...this.config, ...newConfig };
+    this.config = this.mergeDeep(this.config, newConfig);
+  }
+
+  mergeDeep(target, source) {
+    const output = { ...target };
+    if (this.isObject(target) && this.isObject(source)) {
+      Object.keys(source).forEach(key => {
+        if (this.isObject(source[key])) {
+          if (!(key in target)) {
+            Object.assign(output, { [key]: source[key] });
+          } else {
+            output[key] = this.mergeDeep(target[key], source[key]);
+          }
+        } else {
+          Object.assign(output, { [key]: source[key] });
+        }
+      });
+    }
+    return output;
+  }
+
+  isObject(item) {
+    return item && typeof item === 'object' && !Array.isArray(item);
   }
 }
 

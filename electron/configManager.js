@@ -37,9 +37,7 @@ class ConfigManager {
     const defaultConfig = {
       language: 'zh',
       monitoring: {
-        interval: 60,
-        captureScreenshot: false,
-        screenshotInterval: 300
+        interval: 60
       },
       api: {
         apiKey: '',
@@ -51,7 +49,8 @@ class ConfigManager {
         lookbackMinutes: 60,
         maxTokens: 500,
         compressActivities: true,
-        prompt: ''
+        prompt: '',
+        schedules: []
       },
       ui: {
         theme: 'dark',
