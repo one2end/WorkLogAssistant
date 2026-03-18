@@ -1,5 +1,52 @@
 <template>
   <div id="app" :class="theme">
+    <!-- Arhat Mode Overlay -->
+    <div v-if="arhatStartDialog" class="arhat-start-dialog">
+      <div class="arhat-start-card">
+        <h3>进入罗汉模式</h3>
+        <p>写下当前最重要的一件事</p>
+        <input
+          ref="arhatStartInput"
+          v-model="arhatFocusInput"
+          class="arhat-start-input"
+          placeholder="例如：完成API重构"
+          @keydown.enter="startArhat"
+          @keydown.escape="arhatStartDialog = false"
+        >
+        <div class="arhat-start-actions">
+          <button @click="arhatStartDialog = false" class="action-btn">取消</button>
+          <button @click="startArhat" class="action-btn primary">开始觉察</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="arhatActive" class="arhat-overlay">
+      <div class="arhat-breath" :class="{ paused: arhatNoteFocused }"></div>
+      <div class="arhat-content">
+        <div class="arhat-focus-text">{{ arhatFocusText || '觉察当下' }}</div>
+        <div class="arhat-timer">{{ arhatTimerDisplay }}</div>
+        <div class="arhat-note-area">
+          <input
+            ref="arhatNoteInput"
+            v-model="arhatNoteText"
+            class="arhat-note-input"
+            :class="{ visible: arhatNoteVisible }"
+            placeholder="杂念闪记...按 Enter 保存"
+            @focus="arhatNoteFocused = true"
+            @blur="arhatNoteFocused = false"
+            @keydown.enter="saveArhatNote"
+            @keydown.escape="arhatNoteVisible = false"
+          >
+          <button v-if="!arhatNoteVisible" class="arhat-note-trigger" @click="showArhatNote">
+            记一笔杂念
+          </button>
+        </div>
+        <div v-if="arhatNotes.length > 0" class="arhat-notes-count">
+          已记录 {{ arhatNotes.length }} 条杂念
+        </div>
+        <button class="arhat-exit-btn" @click="stopArhat">结束觉察</button>
+      </div>
+    </div>
+
     <div class="container">
       <div v-if="toastMessage" class="toast" :class="toastType" @click="toastMessage = ''">
         {{ toastMessage }}
@@ -65,9 +112,22 @@
           </div>
         </div>
         <div class="header-right">
-          <button @click="exportData" class="icon-btn" title="导出数据">
-            📥
+          <button @click="showArhatStart" class="icon-btn" title="罗汉模式">
+            🧘
           </button>
+          <div class="dropdown-wrapper">
+            <button @click="showDataMenu = !showDataMenu" class="icon-btn" title="数据管理">
+              📥
+            </button>
+            <div v-if="showDataMenu" class="dropdown-menu" @mouseleave="showDataMenu = false">
+              <button @click="exportData" class="dropdown-item">导出当日 JSON</button>
+              <button @click="exportFullJSON" class="dropdown-item">导出全部 JSON</button>
+              <button @click="exportCSV" class="dropdown-item">导出全部 CSV</button>
+              <div class="dropdown-divider"></div>
+              <button @click="importData('merge')" class="dropdown-item">导入合并</button>
+              <button @click="importData('overwrite')" class="dropdown-item danger">导入覆盖</button>
+            </div>
+          </div>
           <button @click="activeTab = 'settings'" class="icon-btn" title="设置">
             ⚙️
           </button>
@@ -198,7 +258,7 @@
               >
                 <div class="summary-header">
                   <div class="summary-meta">
-                    <span class="summary-time">{{ formatDateTime(summary.timestamp) }}</span>
+                    <span class="summary-time">{{ formatSummaryTimeRange(summary) }}</span>
                     <span class="summary-divider">·</span>
                     <span class="summary-count">{{ summary.activityCount }} 个活动</span>
                   </div>
@@ -246,25 +306,33 @@
             <div class="settings-group">
               <h3>API 设置</h3>
               <div class="setting-item">
+                <label>模型提供商</label>
+                <select v-model="config.api.provider" @change="onProviderChange" class="select-input">
+                  <option v-for="(preset, key) in providerPresets" :key="key" :value="key">
+                    {{ preset.name }}
+                  </option>
+                </select>
+              </div>
+              <div class="setting-item">
                 <label>API Key</label>
-                <input 
-                  v-model="config.api.apiKey" 
+                <input
+                  v-model="config.api.apiKey"
                   type="password"
                   @change="saveConfig"
                 >
               </div>
               <div class="setting-item">
                 <label>Base URL</label>
-                <input 
-                  v-model="config.api.baseUrl" 
+                <input
+                  v-model="config.api.baseUrl"
                   type="text"
                   @change="saveConfig"
                 >
               </div>
               <div class="setting-item">
                 <label>模型名称</label>
-                <input 
-                  v-model="config.api.modelName" 
+                <input
+                  v-model="config.api.modelName"
                   type="text"
                   @change="saveConfig"
                 >
@@ -365,13 +433,34 @@
               </div>
               <div class="setting-item">
                 <label>主题</label>
-                <select v-model="theme" @change="onThemeChange" class="select-input">
-                  <option value="dark">深色</option>
-                  <option value="light">浅色</option>
-                  <option value="ocean">海洋</option>
-                  <option value="forest">森林</option>
-                  <option value="rose">玫瑰</option>
-                </select>
+                <div class="theme-cards">
+                  <button
+                    v-for="t in themeOptions"
+                    :key="t.id"
+                    class="theme-card"
+                    :class="{ active: theme === t.id }"
+                    :title="t.label"
+                    @click="theme = t.id; onThemeChange()"
+                  >
+                    <span class="theme-dot" :style="{ background: t.accent }"></span>
+                    <span class="theme-label">{{ t.label }}</span>
+                  </button>
+                </div>
+              </div>
+              <div class="setting-item">
+                <label>数据存储路径</label>
+                <div class="storage-path-row">
+                  <input
+                    :value="storagePath || '默认路径'"
+                    type="text"
+                    readonly
+                    class="storage-path-input"
+                    :title="storagePath"
+                  >
+                  <button @click="selectStoragePath" class="action-btn small">选择</button>
+                  <button v-if="config.storage && config.storage.customPath" @click="resetStoragePath" class="action-btn small danger">重置</button>
+                </div>
+                <p class="setting-hint">设置为 iCloud/OneDrive/坚果云 同步目录可实现跨设备同步</p>
               </div>
             </div>
 
@@ -442,6 +531,7 @@ export default {
           interval: 60
         },
         api: {
+          provider: 'deepseek',
           apiKey: '',
           baseUrl: 'https://api.deepseek.com/chat/completions',
           modelName: 'deepseek-chat'
@@ -451,6 +541,9 @@ export default {
           maxTokens: 500,
           compressActivities: true,
           schedules: []
+        },
+        storage: {
+          customPath: ''
         }
       },
       logs: [],
@@ -469,7 +562,28 @@ export default {
       calendarMonth: new Date().getMonth(),
       toastMessage: '',
       toastType: 'error',
-      toastTimer: null
+      toastTimer: null,
+      storagePath: '',
+      providerPresets: {},
+      // Arhat mode
+      arhatActive: false,
+      arhatStartDialog: false,
+      arhatFocusInput: '',
+      arhatFocusText: '',
+      arhatNoteVisible: false,
+      arhatNoteText: '',
+      arhatNoteFocused: false,
+      arhatNotes: [],
+      arhatTimerDisplay: '00:00',
+      arhatTimerInterval: null,
+      showDataMenu: false,
+      themeOptions: [
+        { id: 'dark', label: '深色', accent: '#64ffda' },
+        { id: 'light', label: '浅色', accent: '#0d6efd' },
+        { id: 'ocean', label: '海洋', accent: '#4fc3f7' },
+        { id: 'forest', label: '森林', accent: '#81c784' },
+        { id: 'rose', label: '玫瑰', accent: '#f48fb1' }
+      ]
     };
   },
   computed: {
@@ -538,6 +652,7 @@ export default {
   },
   async mounted() {
     await this.loadConfig();
+    await this.loadProviderPresets();
     await this.loadActivities();
     await this.loadSummaries();
     await this.loadLogs();
@@ -551,6 +666,10 @@ export default {
   },
   beforeUnmount() {
     document.removeEventListener('mousedown', this.closeCalendar);
+    this.removeEventListeners();
+    if (this.arhatTimerInterval) {
+      clearInterval(this.arhatTimerInterval);
+    }
   },
   methods: {
     async loadConfig() {
@@ -563,10 +682,30 @@ export default {
         if (!this.config.summary.schedules) {
           this.config.summary.schedules = [];
         }
+        if (!this.config.storage) {
+          this.config.storage = { customPath: '' };
+        }
+        this.storagePath = this.config.storage.customPath || '';
         this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
       } catch (error) {
         console.error('加载配置失败:', error);
       }
+    },
+    async loadProviderPresets() {
+      try {
+        this.providerPresets = await ipcRenderer.invoke('get-provider-presets');
+      } catch (error) {
+        console.error('加载模型预设失败:', error);
+      }
+    },
+    onProviderChange() {
+      const preset = this.providerPresets[this.config.api.provider];
+      if (preset) {
+        // Only auto-fill baseUrl and modelName if they match the previous preset or are empty
+        this.config.api.baseUrl = preset.baseUrl;
+        this.config.api.modelName = preset.modelName;
+      }
+      this.saveConfig();
     },
     async saveConfig() {
       try {
@@ -754,6 +893,7 @@ export default {
       await this.loadSummaries();
     },
     async exportData() {
+      this.showDataMenu = false;
       const data = {
         date: this.selectedDate,
         activities: this.activities,
@@ -763,7 +903,6 @@ export default {
       const blob = JSON.stringify(data, null, 2);
       const filename = `worklog_${this.selectedDate}.json`;
 
-      // Use a simple download approach via IPC
       try {
         await ipcRenderer.invoke('export-data', { filename, content: blob });
         this.addLog(`数据已导出: ${filename}`);
@@ -899,37 +1038,45 @@ export default {
       return `${hours}小时${remainingMinutes}分钟`;
     },
     setupEventListeners() {
-      ipcRenderer.on('activity-logged', (event, activity) => {
-        this.activities.unshift(activity);
-        this.updateStatistics();
-        this.updateCharts();
-        const dateStr = new Date(activity.timestamp).toISOString().split('T')[0];
-        this.datesWithData.add(dateStr);
-        this.addLog(`活动记录: ${activity.processName} - ${activity.windowTitle}`);
-      });
-
-      ipcRenderer.on('summary-generated', () => {
-        this.loadSummaries();
-        this.addLog('摘要已生成');
-      });
-
-      ipcRenderer.on('log-message', (event, message) => {
-        this.addLog(message);
-      });
-
-      ipcRenderer.on('error-message', (event, message) => {
-        this.addLog('错误: ' + message);
-      });
-
-      ipcRenderer.on('config-updated', (event, newConfig) => {
-        this.config = { ...this.config, ...newConfig };
-        this.theme = this.config.ui?.theme || 'dark';
-        this.addLog('配置已更新');
-      });
-
-      ipcRenderer.on('monitoring-status-changed', (event, status) => {
-        this.isMonitoring = status;
-      });
+      this._ipcListeners = {
+        'activity-logged': (event, activity) => {
+          this.activities.unshift(activity);
+          this.updateStatistics();
+          this.updateCharts();
+          const dateStr = new Date(activity.timestamp).toISOString().split('T')[0];
+          this.datesWithData.add(dateStr);
+          this.addLog(`活动记录: ${activity.processName} - ${activity.windowTitle}`);
+        },
+        'summary-generated': () => {
+          this.loadSummaries();
+          this.addLog('摘要已生成');
+        },
+        'log-message': (event, message) => {
+          this.addLog(message);
+        },
+        'error-message': (event, message) => {
+          this.addLog('错误: ' + message);
+        },
+        'config-updated': (event, newConfig) => {
+          this.config = { ...this.config, ...newConfig };
+          this.theme = this.config.ui?.theme || 'dark';
+          this.addLog('配置已更新');
+        },
+        'monitoring-status-changed': (event, status) => {
+          this.isMonitoring = status;
+        }
+      };
+      for (const [channel, handler] of Object.entries(this._ipcListeners)) {
+        ipcRenderer.on(channel, handler);
+      }
+    },
+    removeEventListeners() {
+      if (this._ipcListeners) {
+        for (const [channel, handler] of Object.entries(this._ipcListeners)) {
+          ipcRenderer.removeListener(channel, handler);
+        }
+        this._ipcListeners = null;
+      }
     },
     addLog(message, type = 'info') {
       const logEntry = {
@@ -971,6 +1118,16 @@ export default {
     formatDateTime(timestamp) {
       return new Date(timestamp).toLocaleString('zh-CN');
     },
+    formatSummaryTimeRange(summary) {
+      if (summary.startTime && summary.endTime) {
+        const start = new Date(summary.startTime);
+        const end = new Date(summary.endTime);
+        const startStr = start.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const endStr = end.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        return `${startStr} ~ ${endStr}`;
+      }
+      return this.formatDateTime(summary.timestamp);
+    },
     renderMarkdown(content) {
       if (!content) return '';
       return marked(content);
@@ -996,6 +1153,126 @@ export default {
       this.toastType = type;
       if (this.toastTimer) clearTimeout(this.toastTimer);
       this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, 5000);
+    },
+    async selectStoragePath() {
+      try {
+        const folderPath = await ipcRenderer.invoke('select-storage-folder');
+        if (!folderPath) return;
+
+        const result = await ipcRenderer.invoke('migrate-storage', folderPath);
+        if (result.success) {
+          this.config.storage = this.config.storage || {};
+          this.config.storage.customPath = folderPath;
+          await this.saveConfig();
+          this.storagePath = folderPath;
+          this.showToast(`数据已迁移到新路径（${result.fileCount} 个文件），重启后生效`, 'success');
+        } else {
+          this.showToast('迁移失败: ' + result.error, 'error');
+        }
+      } catch (error) {
+        this.showToast('选择路径失败: ' + error.message, 'error');
+      }
+    },
+    async resetStoragePath() {
+      this.config.storage = this.config.storage || {};
+      this.config.storage.customPath = '';
+      await this.saveConfig();
+      this.storagePath = '';
+      this.showToast('已重置为默认存储路径，重启后生效', 'success');
+    },
+    // --- Arhat Mode ---
+    showArhatStart() {
+      this.arhatFocusInput = '';
+      this.arhatStartDialog = true;
+      this.$nextTick(() => {
+        if (this.$refs.arhatStartInput) {
+          this.$refs.arhatStartInput.focus();
+        }
+      });
+    },
+    async startArhat() {
+      this.arhatStartDialog = false;
+      this.arhatFocusText = this.arhatFocusInput || '觉察当下';
+      this.arhatNotes = [];
+      this.arhatNoteVisible = false;
+      this.arhatNoteText = '';
+      this.arhatActive = true;
+
+      await ipcRenderer.invoke('arhat-start', this.arhatFocusText);
+      this.addLog('罗汉模式已开始');
+
+      // Start timer
+      const startTime = Date.now();
+      this.arhatTimerInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const mins = Math.floor(elapsed / 60000);
+        const secs = Math.floor((elapsed % 60000) / 1000);
+        this.arhatTimerDisplay = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      }, 1000);
+    },
+    async stopArhat() {
+      if (this.arhatTimerInterval) {
+        clearInterval(this.arhatTimerInterval);
+        this.arhatTimerInterval = null;
+      }
+      const session = await ipcRenderer.invoke('arhat-stop');
+      this.arhatActive = false;
+      if (session) {
+        const mins = Math.round(session.durationMs / 60000);
+        this.showToast(`觉察结束，持续 ${mins} 分钟，记录 ${session.notesCount} 条杂念`, 'success');
+      }
+    },
+    showArhatNote() {
+      this.arhatNoteVisible = true;
+      this.$nextTick(() => {
+        if (this.$refs.arhatNoteInput) {
+          this.$refs.arhatNoteInput.focus();
+        }
+      });
+    },
+    async saveArhatNote() {
+      const text = this.arhatNoteText.trim();
+      if (!text) return;
+      await ipcRenderer.invoke('arhat-add-note', text, 'random');
+      this.arhatNotes.push({ text, timestamp: new Date().toISOString() });
+      this.arhatNoteText = '';
+      this.arhatNoteVisible = false;
+    },
+    // --- Data Import/Export ---
+    async exportFullJSON() {
+      this.showDataMenu = false;
+      try {
+        const result = await ipcRenderer.invoke('export-full-data', 'json');
+        if (result) this.showToast('完整数据已导出', 'success');
+      } catch (error) {
+        this.showToast('导出失败: ' + error.message, 'error');
+      }
+    },
+    async exportCSV() {
+      this.showDataMenu = false;
+      try {
+        const result = await ipcRenderer.invoke('export-full-data', 'csv');
+        if (result) this.showToast('CSV 数据已导出', 'success');
+      } catch (error) {
+        this.showToast('导出失败: ' + error.message, 'error');
+      }
+    },
+    async importData(mode) {
+      this.showDataMenu = false;
+      try {
+        const result = await ipcRenderer.invoke('import-data', mode);
+        if (result.canceled) return;
+        if (result.success) {
+          this.showToast(`导入成功，共 ${result.importedCount} 条活动`, 'success');
+          await this.loadActivities();
+          await this.loadSummaries();
+          await this.loadDatesWithData();
+        } else {
+          this.showToast('导入失败: ' + result.error, 'error');
+        }
+      } catch (error) {
+        this.showToast('导入失败: ' + error.message, 'error');
+      }
     }
   }
 };
@@ -2283,5 +2560,322 @@ export default {
   color: var(--text-secondary);
   opacity: 0.7;
   margin: 2px 0 0 0;
+}
+
+.storage-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.storage-path-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: default;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.setting-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  margin: 2px 0 0 120px;
+}
+
+.action-btn.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.action-btn.danger {
+  color: var(--danger-color);
+  border-color: var(--danger-color);
+}
+
+.action-btn.danger:hover {
+  background-color: var(--danger-color);
+  color: #fff;
+}
+/* --- Arhat Mode --- */
+
+.arhat-start-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.arhat-start-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 32px;
+  width: 340px;
+  text-align: center;
+}
+
+.arhat-start-card h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.arhat-start-card p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.arhat-start-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 14px;
+  margin-bottom: 20px;
+  outline: none;
+}
+
+.arhat-start-input:focus {
+  border-color: var(--accent-color);
+}
+
+.arhat-start-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.action-btn.primary {
+  background: var(--accent-color);
+  color: var(--badge-text);
+  border-color: var(--accent-color);
+}
+
+.arhat-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.arhat-breath {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-bg) 0%, transparent 70%);
+  animation: arhat-breathe 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.arhat-breath.paused {
+  animation-play-state: paused;
+}
+
+@keyframes arhat-breathe {
+  0%, 100% { transform: scale(0.6); opacity: 0.3; }
+  50% { transform: scale(1.2); opacity: 0.7; }
+}
+
+.arhat-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.arhat-focus-text {
+  font-size: 22px;
+  font-weight: 300;
+  color: var(--text-primary);
+  letter-spacing: 2px;
+  text-align: center;
+  max-width: 360px;
+}
+
+.arhat-timer {
+  font-size: 48px;
+  font-weight: 200;
+  color: var(--accent-color);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 4px;
+}
+.arhat-note-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 50px;
+}
+
+.arhat-note-input {
+  width: 300px;
+  padding: 10px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+}
+
+.arhat-note-input.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.arhat-note-input:focus {
+  border-color: var(--accent-color);
+}
+
+.arhat-note-trigger {
+  padding: 8px 20px;
+  border: 1px dashed var(--border-color);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.arhat-note-trigger:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.arhat-notes-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.arhat-exit-btn {
+  margin-top: 20px;
+  padding: 8px 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.arhat-exit-btn:hover {
+  border-color: var(--danger-color);
+  color: var(--danger-color);
+}
+
+.dropdown-wrapper {
+  position: relative;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 4px 0;
+  min-width: 150px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dropdown-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.dropdown-item.danger {
+  color: var(--danger-color);
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
+.theme-cards {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.theme-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.theme-card:hover {
+  border-color: var(--text-secondary);
+}
+
+.theme-card.active {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+  background: var(--accent-bg);
+}
+
+.theme-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.theme-label {
+  white-space: nowrap;
 }
 </style>

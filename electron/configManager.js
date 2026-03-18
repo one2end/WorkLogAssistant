@@ -40,6 +40,7 @@ class ConfigManager {
         interval: 60
       },
       api: {
+        provider: 'deepseek',
         apiKey: '',
         baseUrl: 'https://api.deepseek.com/chat/completions',
         modelName: 'deepseek-chat'
@@ -51,6 +52,9 @@ class ConfigManager {
         compressActivities: true,
         prompt: '',
         schedules: []
+      },
+      storage: {
+        customPath: ''
       },
       ui: {
         theme: 'dark',

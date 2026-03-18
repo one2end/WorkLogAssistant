@@ -6,6 +6,7 @@ const Summarizer = require('./summarizer');
 const ConfigManager = require('./configManager');
 const StorageManager = require('./storageManager');
 const LogManager = require('./logManager');
+const ArhatManager = require('./arhatManager');
 
 let mainWindow;
 let floatWindow;
@@ -21,10 +22,12 @@ let currentAppStartTime = null;
 let floatSize = { width: 220, height: 36 };
 
 const configManager = new ConfigManager();
-const storageManager = new StorageManager();
+const customPath = configManager.getConfig().storage?.customPath || '';
+const storageManager = new StorageManager(customPath);
 const windowMonitor = new WindowMonitor();
 const summarizer = new Summarizer();
-const logManager = new LogManager();
+const logManager = new LogManager(customPath);
+const arhatManager = new ArhatManager(customPath);
 
 function createWindow() {
   const { screen } = require('electron');
@@ -197,9 +200,14 @@ function updateFloatWindow() {
 function showTodaySummary() {
   const summaries = storageManager.getTodaySummaries();
   if (summaries.length > 0) {
-    const latest = summaries[summaries.length - 1];
+    // Open the summaries_md folder so user can see today's markdown files
     const { shell } = require('electron');
-    shell.openPath(latest.path);
+    const mdDir = path.join(storageManager.getDataDir(), 'summaries_md');
+    if (fs.existsSync(mdDir)) {
+      shell.openPath(mdDir);
+    } else {
+      shell.openPath(storageManager.getDataDir());
+    }
   } else {
     if (mainWindow) {
       mainWindow.webContents.send('log-message', '今日暂无摘要');
@@ -428,6 +436,10 @@ ipcMain.handle('get-config', () => {
   return configManager.getConfig();
 });
 
+ipcMain.handle('get-provider-presets', () => {
+  return Summarizer.getProviderPresets();
+});
+
 ipcMain.handle('save-config', (event, config) => {
   configManager.saveConfig(config);
   summarizer.updateConfig(config);
@@ -556,18 +568,176 @@ ipcMain.handle('export-data', async (event, { filename, content }) => {
   return false;
 });
 
+ipcMain.handle('export-full-data', async (event, format) => {
+  const { dialog, shell } = require('electron');
+
+  if (format === 'csv') {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: `worklog_export_${new Date().toISOString().split('T')[0]}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    });
+    if (result.canceled || !result.filePath) return false;
+
+    const activities = storageManager.getAllActivities();
+    let csv = 'timestamp,processName,windowTitle\n';
+    activities.forEach(a => {
+      const ts = a.timestamp || '';
+      const proc = (a.processName || '').replace(/"/g, '""');
+      const win = (a.windowTitle || '').replace(/"/g, '""');
+      csv += `"${ts}","${proc}","${win}"\n`;
+    });
+    fs.writeFileSync(result.filePath, '\uFEFF' + csv, 'utf8');
+    shell.showItemInFolder(result.filePath);
+    logManager.addLog('数据已导出为 CSV', 'info');
+    return true;
+  }
+
+  // JSON full export
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: `worklog_full_export_${new Date().toISOString().split('T')[0]}.json`,
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (result.canceled || !result.filePath) return false;
+
+  const data = {
+    version: app.getVersion(),
+    exportDate: new Date().toISOString(),
+    activities: storageManager.getAllActivities(),
+    summaries: storageManager.getAllSummaries(),
+    arhatSessions: arhatManager._getAllFromDir(arhatManager.sessionsDir),
+    arhatNotes: arhatManager.getAllNotes(),
+    config: configManager.getConfig()
+  };
+  fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf8');
+  shell.showItemInFolder(result.filePath);
+  logManager.addLog('完整数据已导出为 JSON', 'info');
+  return true;
+});
+
+ipcMain.handle('import-data', async (event, mode) => {
+  const { dialog } = require('electron');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择导入文件',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+    properties: ['openFile']
+  });
+  if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
+
+  try {
+    const content = fs.readFileSync(result.filePaths[0], 'utf8');
+    const data = JSON.parse(content);
+
+    if (!data.activities && !data.summaries) {
+      return { success: false, error: '无效的数据文件格式' };
+    }
+
+    let importedCount = 0;
+
+    if (mode === 'overwrite') {
+      // Clear existing data first
+      storageManager.clearActivities();
+    }
+
+    // Import activities
+    if (Array.isArray(data.activities)) {
+      data.activities.forEach(a => {
+        if (a.timestamp && a.processName) {
+          storageManager.saveActivity(a);
+          importedCount++;
+        }
+      });
+    }
+
+    // Import summaries
+    if (Array.isArray(data.summaries)) {
+      data.summaries.forEach(s => {
+        if (s.timestamp && s.summary) {
+          storageManager.saveSummary(s);
+        }
+      });
+    }
+
+    logManager.addLog(`数据导入完成 (${mode})，导入 ${importedCount} 条活动`, 'info');
+    if (mainWindow) {
+      mainWindow.webContents.send('summary-generated');
+    }
+    return { success: true, importedCount };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('select-storage-folder', async () => {
+  const { dialog } = require('electron');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: '选择数据存储文件夹'
+  });
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0];
+  }
+  return null;
+});
+
+ipcMain.handle('migrate-storage', async (event, newPath) => {
+  try {
+    const result = storageManager.migrateDataTo(newPath);
+    if (result.success) {
+      logManager.addLog(`数据已迁移到 ${newPath}，共 ${result.fileCount} 个文件`, 'info');
+    }
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-storage-path', () => {
+  return storageManager.getDataDir();
+});
+
+// --- Arhat Mode ---
+
+ipcMain.handle('arhat-start', (event, focusText) => {
+  const session = arhatManager.startSession(focusText);
+  logManager.addLog('罗汉模式已开始: ' + (focusText || '无主题'), 'info');
+  return session;
+});
+
+ipcMain.handle('arhat-stop', () => {
+  const session = arhatManager.endSession();
+  if (session) {
+    const mins = Math.round(session.durationMs / 60000);
+    logManager.addLog(`罗汉模式结束，持续 ${mins} 分钟，记录 ${session.notesCount} 条杂念`, 'info');
+  }
+  return session;
+});
+
+ipcMain.handle('arhat-get-session', () => {
+  return arhatManager.getActiveSession();
+});
+
+ipcMain.handle('arhat-add-note', (event, text, category) => {
+  return arhatManager.addNote(text, category);
+});
+
+ipcMain.handle('arhat-get-notes', (event, date) => {
+  return arhatManager.getNotes(date);
+});
+
+ipcMain.handle('arhat-get-stats', () => {
+  return arhatManager.getStats();
+});
+
+ipcMain.handle('arhat-get-sessions', (event, date) => {
+  return arhatManager.getSessions(date);
+});
+
 ipcMain.handle('get-auto-launch', () => {
   return app.getLoginItemSettings().openAtLogin;
 });
 
 ipcMain.handle('get-dates-with-data', () => {
-  const activities = storageManager.getAllActivities();
-  const dates = new Set();
-  activities.forEach(a => {
-    const d = new Date(a.timestamp);
-    dates.add(d.toISOString().split('T')[0]);
-  });
-  return [...dates];
+  return storageManager.getDatesWithData();
 });
 
 ipcMain.handle('set-auto-launch', (event, enable) => {

@@ -3,9 +3,24 @@ const path = require('path');
 const { app } = require('electron');
 
 class LogManager {
-  constructor() {
+  constructor(customBasePath) {
     const userDataPath = app.getPath('userData');
-    this.logsDir = path.join(userDataPath, 'Data', 'logs');
+    const defaultDataDir = path.join(userDataPath, 'Data');
+
+    if (customBasePath && customBasePath.trim()) {
+      try {
+        if (!fs.existsSync(customBasePath)) {
+          fs.mkdirSync(customBasePath, { recursive: true });
+        }
+        this.logsDir = path.join(customBasePath, 'logs');
+      } catch (error) {
+        console.error('自定义日志路径不可用，使用默认路径:', error.message);
+        this.logsDir = path.join(defaultDataDir, 'logs');
+      }
+    } else {
+      this.logsDir = path.join(defaultDataDir, 'logs');
+    }
+
     this.ensureLogsDir();
     this.logEntries = [];
     this.maxLogEntries = 1000;

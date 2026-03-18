@@ -3,12 +3,45 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 
+// Provider presets: each defines default baseUrl, model, and request format
+const PROVIDER_PRESETS = {
+  deepseek: {
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/chat/completions',
+    modelName: 'deepseek-chat',
+    format: 'openai'
+  },
+  openai: {
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1/chat/completions',
+    modelName: 'gpt-4o-mini',
+    format: 'openai'
+  },
+  claude: {
+    name: 'Claude',
+    baseUrl: 'https://api.anthropic.com/v1/messages',
+    modelName: 'claude-sonnet-4-20250514',
+    format: 'claude'
+  },
+  gemini: {
+    name: 'Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
+    modelName: 'gemini-2.0-flash',
+    format: 'gemini'
+  },
+  custom: {
+    name: '自定义 (OpenAI兼容)',
+    baseUrl: '',
+    modelName: '',
+    format: 'openai'
+  }
+};
+
 class Summarizer {
   constructor() {
     this.config = null;
     this.loadConfig();
   }
-
   loadConfig() {
     try {
       const userDataPath = app.getPath('userData');
@@ -16,7 +49,6 @@ class Summarizer {
       if (fs.existsSync(configPath)) {
         const configData = fs.readFileSync(configPath, 'utf8');
         const config = JSON.parse(configData);
-        // Also load local config for API key
         const localConfigPath = path.join(userDataPath, 'config.local.json');
         if (fs.existsSync(localConfigPath)) {
           const localData = fs.readFileSync(localConfigPath, 'utf8');
@@ -38,6 +70,7 @@ class Summarizer {
   getDefaultConfig() {
     return {
       api: {
+        provider: 'deepseek',
         apiKey: '',
         baseUrl: 'https://api.deepseek.com/chat/completions',
         modelName: 'deepseek-chat'
@@ -51,23 +84,39 @@ class Summarizer {
     };
   }
 
+  _getProvider() {
+    return this.config.api?.provider || 'deepseek';
+  }
+
+  _getFormat() {
+    const provider = this._getProvider();
+    const preset = PROVIDER_PRESETS[provider];
+    return preset ? preset.format : 'openai';
+  }
+
+  static getProviderPresets() {
+    return PROVIDER_PRESETS;
+  }
+
+  _createStorage() {
+    const StorageManager = require('./storageManager');
+    const customPath = this.config.storage?.customPath || '';
+    return new StorageManager(customPath);
+  }
+
   async generateSummary() {
     try {
       const activities = this.getRecentActivities();
-
       if (activities.length === 0) {
         console.log('没有可用的活动记录');
         return null;
       }
-
       const prompt = this.buildPrompt(activities);
       const summary = await this.callAI(prompt);
-
       if (summary) {
         this.saveSummary(summary, activities);
         return summary;
       }
-
       return null;
     } catch (error) {
       console.error('生成摘要失败:', error);
@@ -77,23 +126,18 @@ class Summarizer {
 
   async generateSummaryForRange(startTime, endTime) {
     try {
-      const StorageManager = require('./storageManager');
-      const storage = new StorageManager();
+      const storage = this._createStorage();
       const activities = storage.getActivitiesByTimeRange(startTime, endTime);
-
       if (activities.length === 0) {
         console.log('该时间段没有活动记录');
         return null;
       }
-
       const prompt = this.buildPrompt(activities);
       const summary = await this.callAI(prompt);
-
       if (summary) {
         this.saveSummary(summary, activities);
         return summary;
       }
-
       return null;
     } catch (error) {
       console.error('生成时间段摘要失败:', error);
@@ -103,25 +147,20 @@ class Summarizer {
 
   async generateSummaryForLookback(lookbackMinutes) {
     try {
-      const StorageManager = require('./storageManager');
-      const storage = new StorageManager();
+      const storage = this._createStorage();
       const cutoffTime = new Date(Date.now() - lookbackMinutes * 60 * 1000);
       const now = new Date();
       const activities = storage.getActivitiesByTimeRange(cutoffTime.toISOString(), now.toISOString());
-
       if (activities.length === 0) {
         console.log('该时间段没有活动记录');
         return null;
       }
-
       const prompt = this.buildPrompt(activities);
       const summary = await this.callAI(prompt);
-
       if (summary) {
         this.saveSummary(summary, activities);
         return summary;
       }
-
       return null;
     } catch (error) {
       console.error('生成回溯摘要失败:', error);
@@ -130,23 +169,14 @@ class Summarizer {
   }
 
   getRecentActivities() {
-    const StorageManager = require('./storageManager');
-    const storage = new StorageManager();
-    
+    const storage = this._createStorage();
     const lookbackMinutes = this.config.summary.lookbackMinutes;
     const cutoffTime = new Date(Date.now() - lookbackMinutes * 60 * 1000);
-    
-    const allActivities = storage.getAllActivities();
-    
-    return allActivities.filter(activity => {
-      const activityTime = new Date(activity.timestamp);
-      return activityTime >= cutoffTime;
-    });
+    const now = new Date();
+    return storage.getActivitiesByTimeRange(cutoffTime.toISOString(), now.toISOString());
   }
-
   buildPrompt(activities) {
     let customPrompt = this.config.summary.prompt;
-
     let activityText = '';
     if (this.config.summary.compressActivities) {
       const groupedActivities = this.groupActivities(activities);
@@ -183,37 +213,43 @@ ${activityText}`;
 
   groupActivities(activities) {
     const grouped = {};
-    
     activities.forEach(activity => {
       const processName = activity.processName;
-      
       if (!grouped[processName]) {
         grouped[processName] = [];
       }
-      
       if (!grouped[processName].includes(activity.windowTitle)) {
         grouped[processName].push(activity.windowTitle);
       }
     });
-    
     return grouped;
   }
 
+  _systemPrompt() {
+    return '你是一个工作日志助手。根据用户的电脑窗口活动记录，推断实际工作内容并生成结构化的 Markdown 摘要。不要简单罗列应用名称，而是根据窗口标题推断用户在做什么。输出简洁实用，像写给自己看的工作笔记。';
+  }
+
   async callAI(prompt) {
+    const format = this._getFormat();
+    switch (format) {
+      case 'claude':
+        return this._callClaude(prompt);
+      case 'gemini':
+        return this._callGemini(prompt);
+      default:
+        return this._callOpenAICompatible(prompt);
+    }
+  }
+
+  async _callOpenAICompatible(prompt) {
     try {
       const response = await axios.post(
         this.config.api.baseUrl,
         {
           model: this.config.api.modelName,
           messages: [
-            {
-              role: 'system',
-              content: '你是一个工作日志助手。根据用户的电脑窗口活动记录，推断实际工作内容并生成结构化的 Markdown 摘要。不要简单罗列应用名称，而是根据窗口标题推断用户在做什么。输出简洁实用，像写给自己看的工作笔记。'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
+            { role: 'system', content: this._systemPrompt() },
+            { role: 'user', content: prompt }
           ],
           max_tokens: this.config.summary.maxTokens,
           temperature: 0.7
@@ -225,25 +261,86 @@ ${activityText}`;
           }
         }
       );
-
-      if (response.data && response.data.choices && response.data.choices.length > 0) {
+      if (response.data?.choices?.[0]?.message?.content) {
         return response.data.choices[0].message.content;
       }
-      
       return null;
     } catch (error) {
-      console.error('AI API调用失败:', error.response?.data || error.message);
-      throw new Error('AI API调用失败: ' + (error.response?.data?.error?.message || error.message));
+      console.error('OpenAI兼容API调用失败:', error.response?.data || error.message);
+      throw new Error('API调用失败: ' + (error.response?.data?.error?.message || error.message));
+    }
+  }
+  async _callClaude(prompt) {
+    try {
+      const response = await axios.post(
+        this.config.api.baseUrl,
+        {
+          model: this.config.api.modelName,
+          max_tokens: this.config.summary.maxTokens,
+          system: this._systemPrompt(),
+          messages: [
+            { role: 'user', content: prompt }
+          ]
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.config.api.apiKey,
+            'anthropic-version': '2023-06-01'
+          }
+        }
+      );
+      if (response.data?.content?.[0]?.text) {
+        return response.data.content[0].text;
+      }
+      return null;
+    } catch (error) {
+      console.error('Claude API调用失败:', error.response?.data || error.message);
+      throw new Error('API调用失败: ' + (error.response?.data?.error?.message || error.message));
+    }
+  }
+
+  async _callGemini(prompt) {
+    try {
+      const url = this.config.api.baseUrl
+        .replace('{model}', this.config.api.modelName)
+        + `?key=${this.config.api.apiKey}`;
+
+      const response = await axios.post(
+        url,
+        {
+          system_instruction: {
+            parts: [{ text: this._systemPrompt() }]
+          },
+          contents: [{
+            parts: [{ text: prompt }]
+          }],
+          generationConfig: {
+            maxOutputTokens: this.config.summary.maxTokens,
+            temperature: 0.7
+          }
+        },
+        {
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+      if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        return response.data.candidates[0].content.parts[0].text;
+      }
+      return null;
+    } catch (error) {
+      console.error('Gemini API调用失败:', error.response?.data || error.message);
+      throw new Error('API调用失败: ' + (error.response?.data?.error?.message || error.message));
     }
   }
 
   saveSummary(summary, activities) {
-    const StorageManager = require('./storageManager');
-    const storage = new StorageManager();
-    
+    const storage = this._createStorage();
     const summaryData = {
       id: Date.now(),
       timestamp: new Date().toISOString(),
+      startTime: activities.length > 0 ? activities[0].timestamp : new Date().toISOString(),
+      endTime: activities.length > 0 ? activities[activities.length - 1].timestamp : new Date().toISOString(),
       summary: summary,
       activityCount: activities.length,
       activities: activities.map(a => ({
@@ -252,7 +349,6 @@ ${activityText}`;
         timestamp: a.timestamp
       }))
     };
-    
     storage.saveSummary(summaryData);
   }
 
