@@ -39,6 +39,62 @@ body {
   flex-direction: column;
 }
 
+/* 换肤动效：class 切换时让表面/描边/文字平滑过渡，而不是瞬间跳变。
+   background-image（卡片渐变、画布顶光）无法过渡，用错峰淡入 + 一层
+   accent 扫光补足，让整次切换读起来是连续的一下，而非硬跳。 */
+.app-root,
+.app-root .card,
+.app-root .btn,
+.app-root .titlebar,
+.app-root .rail,
+.app-root .content {
+  transition: background-color 460ms var(--ease), border-color 460ms var(--ease),
+    box-shadow 460ms var(--ease), color 300ms var(--ease);
+}
+
+@keyframes wl-theme-flash {
+  from { opacity: 0.84; }
+  to { opacity: 1; }
+}
+
+@keyframes wl-theme-card {
+  from { opacity: 0.72; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes wl-theme-sweep {
+  0% { opacity: 0; transform: translateX(-5%); }
+  30% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(5%); }
+}
+
+.app-root.theme-switching .content {
+  animation: wl-theme-flash 520ms var(--ease) both;
+}
+
+.app-root.theme-switching .card {
+  animation: wl-theme-card 520ms var(--ease) both;
+}
+
+.app-root.theme-switching .card:nth-child(2) { animation-delay: 30ms; }
+.app-root.theme-switching .card:nth-child(3) { animation-delay: 60ms; }
+.app-root.theme-switching .card:nth-child(4) { animation-delay: 90ms; }
+.app-root.theme-switching .card:nth-child(5) { animation-delay: 120ms; }
+.app-root.theme-switching .card:nth-child(6) { animation-delay: 150ms; }
+.app-root.theme-switching .card:nth-child(7) { animation-delay: 180ms; }
+.app-root.theme-switching .card:nth-child(8) { animation-delay: 210ms; }
+
+.app-root.theme-switching::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 12% -12%,
+    color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%);
+  animation: wl-theme-sweep 720ms var(--ease) both;
+}
+
 button {
   font-family: inherit;
   font-size: inherit;

@@ -471,6 +471,7 @@ function aggregate(sessions) {
         category: s.category,
         durationMs: 0,
         sessionCount: 0,
+        manualCount: 0,
         firstMs: s.startMs,
         lastMs: s.endMs,
         titles: []
@@ -479,6 +480,7 @@ function aggregate(sessions) {
     }
     app.durationMs += s.durationMs;
     app.sessionCount += 1;
+    app.manualCount += (s.manualCount || 0);
     app.firstMs = Math.min(app.firstMs, s.startMs);
     app.lastMs = Math.max(app.lastMs, s.endMs);
     app.category = s.category;
@@ -500,6 +502,9 @@ function aggregate(sessions) {
     .map(a => ({
       ...a,
       percent: totalMs > 0 ? a.durationMs / totalMs : 0,
+      // 手工补记把「事项名」写进了 app 字段，它不是应用；前端据此把它
+      // 从「应用排行」里排除，避免业务词被误当成凭空冒出来的软件。
+      manual: a.manualCount > 0 && a.manualCount === a.sessionCount,
       titles: a.titles.slice(0, DEFAULT_OPTIONS.maxTitlesPerApp)
     }))
     .sort((a, b) => b.durationMs - a.durationMs);

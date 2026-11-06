@@ -13,13 +13,6 @@
         <span class="rail-tip">{{ item.label }}</span>
       </button>
     </div>
-
-    <div class="rail-bottom">
-      <button class="rail-btn rail-btn-focus" aria-label="专注模式" @click="$emit('focus')">
-        <Icon name="zen" :size="18" />
-        <span class="rail-tip">专注模式</span>
-      </button>
-    </div>
   </nav>
 </template>
 
@@ -32,7 +25,7 @@ export default {
   props: {
     modelValue: { type: String, default: 'today' }
   },
-  emits: ['update:modelValue', 'focus'],
+  emits: ['update:modelValue'],
   data() {
     return {
       items: [
@@ -52,14 +45,13 @@ export default {
   flex: 0 0 var(--rail-w);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: var(--sp-2) 0;
   background: var(--bg-canvas);
   border-right: 1px solid var(--border-subtle);
 }
 
-.rail-top,
-.rail-bottom {
+.rail-top {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -98,10 +90,6 @@ export default {
   height: 16px;
   border-radius: var(--r-full);
   background: var(--accent);
-}
-
-.rail-btn-focus:hover {
-  color: var(--accent);
 }
 
 /* 悬浮提示 */

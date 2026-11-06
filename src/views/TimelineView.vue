@@ -142,23 +142,9 @@
 import Icon from '../components/Icon.vue';
 import DateNav from '../components/DateNav.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
+import { colorForCategory } from '../styles/palette.js';
 
 const { ipcRenderer } = require('electron');
-
-// 与 src/styles/tokens.css 的 --cat-* 保持一致：统一明度、中低饱和
-const CAT_COLORS = {
-  '沟通协作': '#6c8cf5',
-  'AI 助手': '#a98af0',
-  '开发编码': '#3fc1a9',
-  '文档写作': '#e9b25e',
-  '任务与效率': '#ed86af',
-  '浏览检索': '#58b7e8',
-  '影音娱乐': '#ef8f6a',
-  '文件系统': '#94a3b8',
-  '系统工具': '#71809a',
-  '空闲离座': '#4a5568',
-  '其他': '#7c879b'
-};
 
 export default {
   name: 'TimelineView',
@@ -168,7 +154,8 @@ export default {
     activities: { type: Array, default: () => [] },
     selectedDate: { type: String, required: true },
     datesWithData: { type: Set, default: () => new Set() },
-    focusTarget: { type: Object, default: null }
+    focusTarget: { type: Object, default: null },
+    theme: { type: String, default: 'dark' }
   },
   emits: ['update:selectedDate', 'shift', 'today', 'refresh',
     'manual-error', 'focus-consumed', 'focus-missed'],
@@ -284,7 +271,7 @@ export default {
     },
 
     colorOf(name) {
-      return CAT_COLORS[name] || '#6b7280';
+      return colorForCategory(this.theme, name);
     },
     softColor(name) {
       const hex = this.colorOf(name);

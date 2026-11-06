@@ -74,6 +74,7 @@ const focusManager = new FocusManager({
   },
   onEnd: (record) => {
     hideFocusWindow();
+    restoreMainWindow();
     broadcastFocus({ active: false, lastRecord: record });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('focus-ended', record);
@@ -111,7 +112,7 @@ function createFocusWindow() {
 
   const { screen } = require('electron');
   const workArea = screen.getPrimaryDisplay().workArea;
-  const width = 280;
+  const width = 340;
   const height = 48;
 
   focusWindow = new BrowserWindow({
@@ -124,9 +125,10 @@ function createFocusWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
-    movable: false,
+    // 计时小窗需要能拖动、能点按钮，所以放开 movable / focusable
+    movable: true,
     hasShadow: false,
-    focusable: false,
+    focusable: true,
     show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false }
   });
@@ -152,6 +154,14 @@ function createFocusWindow() {
 function hideFocusWindow() {
   if (focusWindow && !focusWindow.isDestroyed()) {
     focusWindow.hide();
+  }
+}
+
+/** 专注结束后把主窗口带回来（幂等，手动结束与自然结束都会调用） */
+function restoreMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
   }
 }
 
@@ -695,8 +705,10 @@ ipcMain.handle('save-config', (event, config) => {
     startMonitoring();
   }
 
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('config-updated', config);
+    // 窗口底色只在创建时设过一次，换肤时同步，避免浅色/深色切换闪一下
+    mainWindow.setBackgroundColor(config.ui?.theme === 'light' ? '#f7f8fa' : '#0b0c0e');
   }
 
   if (floatWindow) {
@@ -1045,8 +1057,21 @@ ipcMain.handle('focus-start', (event, payload) => {
   const { mode, focusText, overrides } = payload || {};
   const state = focusManager.start(mode || 'pomodoro', focusText, overrides);
   createFocusWindow();
+  // 专注开始后主窗口自动收起到托盘，只留可拖动的计时小窗
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
   broadcastFocus(state);
   return state;
+});
+
+/** 记杂念时把 HUD 临时加高一行输入框 */
+ipcMain.handle('focus-hud-expand', (event, expanded) => {
+  if (!focusWindow || focusWindow.isDestroyed()) return false;
+  const b = focusWindow.getBounds();
+  const height = expanded ? 86 : 48;
+  if (b.height !== height) {
+    focusWindow.setBounds({ x: b.x, y: b.y, width: b.width, height });
+  }
+  return true;
 });
 
 ipcMain.handle('focus-toggle-pause', () => {
@@ -1063,10 +1088,9 @@ ipcMain.handle('focus-skip', () => {
 
 ipcMain.handle('focus-end', () => {
   const record = focusManager.end();
-  if (!record) {
-    hideFocusWindow();
-    broadcastFocus({ active: false });
-  }
+  hideFocusWindow();
+  restoreMainWindow();
+  broadcastFocus({ active: false });
   return record;
 });
 

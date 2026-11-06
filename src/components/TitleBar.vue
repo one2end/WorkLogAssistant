@@ -25,6 +25,46 @@
     </div>
 
     <div class="tb-actions">
+      <div ref="themeWrap" class="tb-theme-wrap">
+        <button
+          class="tb-theme-btn"
+          :class="{ active: themeOpen }"
+          title="切换主题"
+          aria-label="切换主题"
+          @click.stop="themeOpen = !themeOpen"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 1.5a6.5 6.5 0 1 0 0 13c.9 0 1.5-.7 1.5-1.5 0-.4-.15-.75-.4-1.02-.25-.27-.4-.63-.4-1.02 0-.83.67-1.5 1.5-1.5h1.3A3 3 0 0 0 14.5 6.4C13.9 3.6 11.25 1.5 8 1.5Z"
+              fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+            <circle cx="5.1" cy="7.4" r="0.95" fill="currentColor" />
+            <circle cx="7.6" cy="4.9" r="0.95" fill="currentColor" />
+            <circle cx="10.5" cy="5.7" r="0.95" fill="currentColor" />
+            <circle cx="4.7" cy="10.4" r="0.95" fill="currentColor" />
+          </svg>
+          <span class="tb-theme-dot" :style="{ background: currentSwatch }"></span>
+        </button>
+
+        <transition name="theme-pop">
+          <div v-if="themeOpen" class="theme-pop" @click.stop>
+            <div class="theme-pop-title">外观主题</div>
+            <div class="theme-pop-grid">
+              <button
+                v-for="t in themeOptions"
+                :key="t.id"
+                class="theme-pop-item"
+                :class="{ active: theme === t.id }"
+                @click="pickTheme(t.id)"
+              >
+                <span class="theme-swatch" :style="{ background: t.preview }">
+                  <i :style="{ background: t.surface }"></i>
+                </span>
+                <span class="theme-swatch-label">{{ t.label }}</span>
+              </button>
+            </div>
+          </div>
+        </transition>
+      </div>
+
       <button
         class="status-pill"
         :class="{ on: monitoring }"
@@ -51,9 +91,33 @@
 export default {
   name: 'TitleBar',
   props: {
-    monitoring: { type: Boolean, default: false }
+    monitoring: { type: Boolean, default: false },
+    theme: { type: String, default: 'dark' },
+    themeOptions: { type: Array, default: () => [] }
   },
-  emits: ['minimize', 'close', 'toggle-monitoring']
+  emits: ['minimize', 'close', 'toggle-monitoring', 'theme-change'],
+  data() {
+    return { themeOpen: false };
+  },
+  computed: {
+    currentSwatch() {
+      const hit = this.themeOptions.find(t => t.id === this.theme);
+      return hit ? hit.preview : 'var(--accent)';
+    }
+  },
+  mounted() {
+    this._onDocClick = () => { this.themeOpen = false; };
+    document.addEventListener('click', this._onDocClick);
+  },
+  beforeUnmount() {
+    document.removeEventListener('click', this._onDocClick);
+  },
+  methods: {
+    pickTheme(id) {
+      this.themeOpen = false;
+      if (id !== this.theme) this.$emit('theme-change', id);
+    }
+  }
 };
 </script>
 
@@ -168,5 +232,126 @@ export default {
 .win-btn-close:hover {
   background: var(--danger);
   color: #fff;
+}
+
+/* ---------- 顶部换肤 ---------- */
+.tb-theme-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.tb-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+
+.tb-theme-btn:hover,
+.tb-theme-btn.active {
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+}
+
+.tb-theme-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border-default);
+  flex: 0 0 auto;
+}
+
+.theme-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 350;
+  width: 214px;
+  padding: var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+  transform-origin: top right;
+  -webkit-app-region: no-drag;
+}
+
+.theme-pop-title {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  color: var(--text-tertiary);
+  margin-bottom: var(--sp-2);
+}
+
+.theme-pop-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 5px;
+}
+
+.theme-pop-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
+}
+
+.theme-pop-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.theme-pop-item.active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.theme-swatch {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-default);
+  padding: 5px;
+}
+
+.theme-swatch i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.theme-swatch-label {
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.theme-pop-enter-active {
+  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+}
+
+.theme-pop-leave-active {
+  transition: opacity 140ms var(--ease), transform 140ms var(--ease);
+}
+
+.theme-pop-enter-from,
+.theme-pop-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.96);
 }
 </style>

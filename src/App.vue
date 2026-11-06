@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="'theme-' + theme">
+  <div class="app-root" :class="['theme-' + theme, { 'theme-switching': themeSwitching }]">
     <FocusOverlay
       :state="focusState"
       @end="endFocus"
@@ -47,13 +47,16 @@
 
     <TitleBar
       :monitoring="isMonitoring"
+      :theme="theme"
+      :theme-options="themeOptions"
       @minimize="minimizeWindow"
       @close="closeWindow"
       @toggle-monitoring="toggleMonitoring"
+      @theme-change="onThemeChange"
     />
 
     <div class="shell">
-      <NavRail v-model="view" @focus="showArhatStart" />
+      <NavRail v-model="view" />
 
       <main class="content">
         <TodayView
@@ -63,8 +66,19 @@
           :is-today="isToday"
           :heat-daily="heatDaily"
           :selected-date="selectedDate"
+          :dates-with-data="datesWithData"
+          :theme="theme"
+          :heat-from="heatFrom"
+          :heat-to="heatTo"
+          :heat-can-go-forward="heatCanGoForward"
           @jump-to-time="onJumpToTime"
           @select-date="selectHeatDate"
+          @shift-date="changeDate"
+          @go-today="goToToday"
+          @shift-range="shiftHeatRange"
+          @pick-month="pickHeatMonth"
+          @heat-today="heatGoToday"
+          @start-focus="showArhatStart"
         />
 
         <TimelineView
@@ -74,6 +88,7 @@
           :selected-date="selectedDate"
           :dates-with-data="datesWithData"
           :focus-target="timelineTarget"
+          :theme="theme"
           @update:selected-date="onSelectDate"
           @shift="changeDate"
           @today="goToToday"
@@ -173,13 +188,14 @@ function localDateStr(d) {
   return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
 }
 
-/** 热力图范围：周一开头，最后一列是本周，共 weeks*7 天 */
-function heatRange(weeks = 12) {
+/** 热力图范围：周一开头、共 weeks*7 天。
+ *  offsetWeeks = 0 表示最近 12 周（最后一列是本周），负数为向历史翻页。 */
+function heatRange(weeks = 12, offsetWeeks = 0) {
   const anchor = new Date();
   anchor.setHours(0, 0, 0, 0);
-  const offset = (anchor.getDay() + 6) % 7; // 周一=0 … 周日=6
+  const dow = (anchor.getDay() + 6) % 7; // 周一=0 … 周日=6
   const monday = new Date(anchor);
-  monday.setDate(anchor.getDate() - offset);
+  monday.setDate(anchor.getDate() - dow + offsetWeeks * 7);
   const from = new Date(monday);
   from.setDate(monday.getDate() - (weeks - 1) * 7);
   const to = new Date(monday);
@@ -221,6 +237,8 @@ export default {
       heatDaily: [],
       heatFrom: '',
       heatTo: '',
+      heatOffset: 0,
+      themeSwitching: false,
       timelineTarget: null,
       logs: [],
 
@@ -293,10 +311,14 @@ export default {
     this.removeEventListeners();
     if (this._statusTimer) clearInterval(this._statusTimer);
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    if (this._themeTimer) clearTimeout(this._themeTimer);
   },
   computed: {
     isToday() {
       return this.selectedDate === localDateStr();
+    },
+    heatCanGoForward() {
+      return this.heatOffset < 0;
     },
     focusPresetList() {
       const order = ['pomodoro', 'immersive', 'arhat'];
@@ -308,13 +330,13 @@ export default {
   methods: {
     // ============ 数据加载 ============
 
-    async reloadDate() {
+    async reloadDate(forceHeat = false) {
       await Promise.all([
         this.loadReport(),
         this.loadActivities(),
         this.loadSummaries(),
         this.loadDatesWithData(),
-        this.loadDailyTracked()
+        this.loadDailyTracked(forceHeat)
       ]);
     },
 
@@ -352,12 +374,12 @@ export default {
       } catch (error) { /* noop */ }
     },
 
-    /** 热力图范围锚定今天、与 selectedDate 无关，60s 冷却避免反复重算 */
+    /** 热力图范围与 selectedDate 无关，按 heatOffset 翻页；60s 冷却避免反复重算 */
     async loadDailyTracked(force = false) {
       const now = Date.now();
       if (!force && now - (this._lastHeatLoad || 0) < 60000) return;
       this._lastHeatLoad = now;
-      const { from, to } = heatRange(12);
+      const { from, to } = heatRange(12, this.heatOffset);
       try {
         const res = await ipcRenderer.invoke('get-daily-tracked', { from, to });
         this.heatDaily = (res && res.ok) ? res.days : [];
@@ -435,6 +457,13 @@ export default {
       this.theme = themeId;
       this.config.ui = this.config.ui || {};
       this.config.ui.theme = themeId;
+      // 触发一次淡入动效，避免换肤瞬间硬跳
+      this.themeSwitching = false;
+      this.$nextTick(() => {
+        this.themeSwitching = true;
+        if (this._themeTimer) clearTimeout(this._themeTimer);
+        this._themeTimer = setTimeout(() => { this.themeSwitching = false; }, 760);
+      });
       this.saveConfig();
     },
 
@@ -489,7 +518,9 @@ export default {
     onSelectDate(dateStr) {
       if (!dateStr || dateStr === this.selectedDate) return Promise.resolve();
       this.selectedDate = dateStr;
-      return this.reloadDate();
+      // 日期条换到历史日期时，热力图窗口一并移到包含该日的 12 周
+      const heatChanged = this.syncHeatRangeToDate(dateStr);
+      return this.reloadDate(heatChanged);
     },
 
     onDataChanged() {
@@ -511,6 +542,53 @@ export default {
     selectHeatDate(dateStr) {
       if (!dateStr || dateStr > localDateStr()) return;
       this.onSelectDate(dateStr);
+    },
+
+    /** 热力图向前/向后翻 12 周；0 = 最近 12 周，不允许翻到未来 */
+    shiftHeatRange(delta) {
+      const next = Math.min(0, this.heatOffset + delta);
+      if (next === this.heatOffset) return;
+      this.heatOffset = next;
+      return this.loadDailyTracked(true);
+    },
+
+    /** 某个日期应该落在哪一组 12 周窗口：返回相对本周的周偏移（<= 0） */
+    heatOffsetFor(dateStr) {
+      const target = new Date(dateStr + 'T00:00:00');
+      if (Number.isNaN(target.getTime())) return 0;
+      const mondayOf = (d) => {
+        const x = new Date(d);
+        x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+        return x;
+      };
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const back = Math.round((mondayOf(now) - mondayOf(target)) / (7 * 86400000));
+      // 窗口覆盖 [本周-11周, 本周]，超出就把末尾对齐到目标所在周
+      return back > 11 ? -(back - 11) : 0;
+    },
+
+    /** 日期条同步：只在窗口真的变了时返回 true，避免重复拉取 */
+    syncHeatRangeToDate(dateStr) {
+      const next = this.heatOffsetFor(dateStr);
+      if (next === this.heatOffset) return false;
+      this.heatOffset = next;
+      return true;
+    },
+
+    /** 热力图直接跳到指定月份 */
+    pickHeatMonth(ym) {
+      if (!/^\d{4}-\d{2}$/.test(ym || '')) return;
+      this.heatOffset = this.heatOffsetFor(ym + '-01');
+      return this.loadDailyTracked(true);
+    },
+
+    /** 热力图的「今天」：日期与 12 周窗口一起回到当前 */
+    heatGoToday() {
+      const changed = this.heatOffset !== 0;
+      this.heatOffset = 0;
+      if (changed) this.loadDailyTracked(true);
+      return this.goToToday();
     },
 
     onFocusMissed() {

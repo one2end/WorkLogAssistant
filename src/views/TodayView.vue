@@ -1,5 +1,19 @@
 <template>
   <div class="today">
+    <div class="today-head">
+      <DateNav
+        :selected-date="selectedDate"
+        :dates-with-data="datesWithData"
+        @update:selected-date="$emit('select-date', $event)"
+        @shift="$emit('shift-date', $event)"
+        @today="$emit('go-today')"
+      />
+      <button class="focus-launch" @click="$emit('start-focus')">
+        <Icon name="zen" :size="14" />
+        <span>开始专注</span>
+      </button>
+    </div>
+
     <!-- 首屏：核心数字 + 一天的时间带 -->
     <section class="hero card">
       <div class="hero-top">
@@ -73,13 +87,19 @@
     <!-- 近 12 周活跃度 -->
     <section class="card heat-card">
       <div class="card-head">
-        <span class="card-title">近 12 周活跃度</span>
-        <span class="head-note">{{ heatSummary }}</span>
+        <span class="card-title">活跃度 · 12 周</span>
+        <span class="head-note">{{ selectedDate }} · {{ heatSummary }}</span>
       </div>
       <ActivityHeatmap
         :days="heatDaily"
         :selected-date="selectedDate"
+        :range-from="heatFrom"
+        :range-to="heatTo"
+        :can-go-forward="heatCanGoForward"
         @select-date="$emit('select-date', $event)"
+        @shift-range="$emit('shift-range', $event)"
+        @pick-month="$emit('pick-month', $event)"
+        @heat-today="$emit('heat-today')"
       />
     </section>
 
@@ -142,12 +162,12 @@
     <section class="card">
       <div class="card-head">
         <span class="card-title">应用排行</span>
-        <span class="head-note">Top {{ Math.min(report.apps.length, 6) }}</span>
+        <span class="head-note">自动采集 · Top {{ rankedApps.length }}</span>
       </div>
 
-      <template v-if="report.apps.length">
+      <template v-if="rankedApps.length">
         <ul class="app-list">
-          <li v-for="(a, i) in report.apps.slice(0, 6)" :key="a.processName" class="app-row">
+          <li v-for="(a, i) in rankedApps" :key="a.processName" class="app-row">
             <span class="app-rank">{{ i + 1 }}</span>
             <span class="app-main">
               <span class="app-name-row">
@@ -168,6 +188,7 @@
             </span>
           </li>
         </ul>
+        <p v-if="manualCount" class="manual-note">{{ manualCount }} 条手工补记未计入应用排行，可在时间线查看</p>
       </template>
 
       <div v-else class="empty">
@@ -214,37 +235,28 @@
 
 <script>
 import Icon from '../components/Icon.vue';
+import DateNav from '../components/DateNav.vue';
 import ActivityHeatmap from '../components/ActivityHeatmap.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
-
-// 与 src/styles/tokens.css 的 --cat-* 保持一致：统一明度、中低饱和
-const CAT_COLORS = {
-  '沟通协作': '#6c8cf5',
-  'AI 助手': '#a98af0',
-  '开发编码': '#3fc1a9',
-  '文档写作': '#e9b25e',
-  '任务与效率': '#ed86af',
-  '浏览检索': '#58b7e8',
-  '影音娱乐': '#ef8f6a',
-  '文件系统': '#94a3b8',
-  '系统工具': '#71809a',
-  '空闲离座': '#4a5568',
-  '其他': '#7c879b'
-};
-
-const FALLBACK = ['#6c8cf5', '#a98af0', '#3fc1a9', '#e9b25e', '#ed86af', '#58b7e8'];
+import { colorForCategory } from '../styles/palette.js';
 
 export default {
   name: 'TodayView',
-  components: { Icon, ActivityHeatmap, EmptyIllustration },
+  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration },
   props: {
     report: { type: Object, required: true },
     recorder: { type: Object, default: null },
     isToday: { type: Boolean, default: true },
     heatDaily: { type: Array, default: () => [] },
-    selectedDate: { type: String, default: '' }
+    selectedDate: { type: String, default: '' },
+    datesWithData: { type: Set, default: () => new Set() },
+    theme: { type: String, default: 'dark' },
+    heatFrom: { type: String, default: '' },
+    heatTo: { type: String, default: '' },
+    heatCanGoForward: { type: Boolean, default: false }
   },
-  emits: ['jump-to-time', 'select-date'],
+  emits: ['jump-to-time', 'select-date', 'shift-date', 'go-today',
+    'shift-range', 'pick-month', 'heat-today', 'start-focus'],
   data() {
     return { tick: 0, timer: null };
   },
@@ -328,8 +340,15 @@ export default {
     idleText() {
       return this.fmt(this.report.stats.idleMs || 0);
     },
+    // 手工补记的「事项名」被写进 app 字段，它不是应用，不进应用排行
+    rankedApps() {
+      return (this.report.apps || []).filter(a => !a.manual).slice(0, 6);
+    },
+    manualCount() {
+      return (this.report.apps || []).filter(a => a.manual).length;
+    },
     maxAppMs() {
-      return this.report.apps.length ? this.report.apps[0].durationMs : 1;
+      return this.rankedApps.length ? this.rankedApps[0].durationMs : 1;
     },
     current() {
       if (!this.recorder || !this.recorder.running || !this.isToday) return null;
@@ -363,10 +382,7 @@ export default {
       });
     },
     colorOf(name) {
-      if (CAT_COLORS[name]) return CAT_COLORS[name];
-      let hash = 0;
-      for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 997;
-      return FALLBACK[hash % FALLBACK.length];
+      return colorForCategory(this.theme, name);
     },
     fmt(ms) {
       if (!ms || ms <= 0) return '0m';
@@ -392,12 +408,74 @@ export default {
 
 <style scoped>
 .today {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  align-items: start;
   gap: var(--sp-4);
   padding: var(--sp-5);
-  max-width: 1120px;
-  margin: 0 auto;
+  width: 100%;
+  /* 不再锁死 max-width：窗口拉宽时内容跟着重排，而不是两侧留白 */
+}
+
+.today > * {
+  min-width: 0;
+}
+
+/* 顶部条：日期导航 + 专注入口 */
+.today-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.focus-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition: background var(--dur-1) var(--ease), transform var(--dur-1) var(--ease),
+    box-shadow var(--dur-1) var(--ease);
+}
+
+.focus-launch:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 宽窗口：只有顶部条与主视觉跨满，其余所有区域一起并排 */
+@media (min-width: 900px) {
+  .today {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .today > .today-head,
+  .today > .hero {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 更宽时升到三列，热力图 / 时间构成 / 应用排行 / 会话 / 专注都能并排 */
+@media (min-width: 1320px) {
+  .today {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .today > .today-head,
+  .today > .hero {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Hero：首屏主视觉 */
@@ -565,7 +643,8 @@ export default {
   min-width: 0;
   height: 100%;
   cursor: pointer;
-  transition: opacity var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+  transition: opacity var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease),
+    background-color 420ms var(--ease);
 }
 
 .band-cell:hover {
@@ -696,7 +775,7 @@ export default {
 .stack-seg {
   height: 100%;
   border-radius: 2px;
-  transition: opacity var(--dur-1) var(--ease);
+  transition: opacity var(--dur-1) var(--ease), background-color 420ms var(--ease);
 }
 
 .stack-seg:hover {
@@ -725,6 +804,7 @@ export default {
   width: 7px;
   height: 7px;
   border-radius: 2px;
+  transition: background-color 420ms var(--ease);
 }
 
 .cat-name {
@@ -745,7 +825,7 @@ export default {
   display: block;
   height: 100%;
   border-radius: var(--r-full);
-  transition: width var(--dur-3) var(--ease);
+  transition: width var(--dur-3) var(--ease), background-color 420ms var(--ease);
 }
 
 .cat-time {
@@ -827,7 +907,7 @@ export default {
   display: block;
   height: 100%;
   border-radius: var(--r-full);
-  transition: width var(--dur-3) var(--ease);
+  transition: width var(--dur-3) var(--ease), background-color 420ms var(--ease);
 }
 
 .app-titles {
@@ -836,6 +916,15 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.manual-note {
+  margin: var(--sp-3) 0 0;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+  line-height: var(--lh-snug);
 }
 
 /* 数据说明 */

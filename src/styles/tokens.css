@@ -65,19 +65,8 @@
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas,
     "Liberation Mono", monospace;
 
-  /* 分类色（数据可视化，跨主题共用）
-     收敛到统一明度 / 中低饱和：前 6 个是主角，后 5 个退成中性背景色 */
-  --cat-沟通协作: #6c8cf5;
-  --cat-AI助手: #a98af0;
-  --cat-开发编码: #3fc1a9;
-  --cat-文档写作: #e9b25e;
-  --cat-任务与效率: #ed86af;
-  --cat-浏览检索: #58b7e8;
-  --cat-影音娱乐: #ef8f6a;
-  --cat-文件系统: #94a3b8;
-  --cat-系统工具: #71809a;
-  --cat-空闲离座: #4a5568;
-  --cat-其他: #7c879b;
+  /* 分类色已迁移到 src/styles/palette.js —— 每套主题一组，由 JS 按 theme
+     取色，切主题时所有图表一起换色。这里不再保留死变量。 */
 }
 
 /* ---------- 深色（默认） ---------- */

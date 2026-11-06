@@ -1,5 +1,32 @@
 <template>
   <div ref="wrap" class="hm-wrap">
+    <div class="hm-nav">
+      <button class="hm-nav-btn" title="往前 12 周" aria-label="往前 12 周" @click="$emit('shift-range', -1)">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M7.5 2.5 4 6l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </button>
+      <span class="hm-range">{{ rangeLabel }}</span>
+      <button
+        class="hm-nav-btn"
+        title="往后 12 周"
+        aria-label="往后 12 周"
+        :disabled="!canGoForward"
+        @click="$emit('shift-range', 1)"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </button>
+      <label class="hm-month" title="跳转到指定月份">
+        <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.6" y="2.4" width="8.8" height="8" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.1" /><path d="M1.6 4.8h8.8M4 1.4v2M8 1.4v2" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" /></svg>
+        <input
+          type="month"
+          :value="monthValue"
+          :max="maxMonth"
+          aria-label="跳转到指定月份"
+          @change="onMonthChange"
+        />
+      </label>
+      <button class="hm-today" :class="{ need: canGoForward }" title="日期与热力图一起回到今天" @click="$emit('heat-today')">今天</button>
+    </div>
+
     <template v-if="days.length">
       <div class="hm-body">
         <div class="hm-weekdays">
@@ -57,9 +84,12 @@ export default {
     // 84 项 dense 升序：周一开头、每 7 项一列，由 App 的 heatRange() 生成
     days: { type: Array, default: () => [] },
     selectedDate: { type: String, default: '' },
-    thresholds: { type: Array, default: () => [90, 210, 360] } // 分钟
+    thresholds: { type: Array, default: () => [90, 210, 360] }, // 分钟
+    rangeFrom: { type: String, default: '' },
+    rangeTo: { type: String, default: '' },
+    canGoForward: { type: Boolean, default: false }
   },
-  emits: ['select-date'],
+  emits: ['select-date', 'shift-range', 'pick-month', 'heat-today'],
   data() {
     return {
       hover: null,
@@ -67,6 +97,18 @@ export default {
     };
   },
   computed: {
+    rangeLabel() {
+      if (!this.rangeFrom || !this.rangeTo) return '最近 12 周';
+      const short = (s) => `${s.slice(2, 4)}/${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}`;
+      return `${short(this.rangeFrom)} – ${short(this.rangeTo)}`;
+    },
+    monthValue() {
+      return this.rangeTo ? this.rangeTo.slice(0, 7) : '';
+    },
+    maxMonth() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    },
     cells() {
       // 固定阈值 + 自适应兼底：数据充足时绝对可比，数据偏少时自动降档，
       // 避免整片最浅色；scale 下限 0.2 防止单日极短记录被放大成满格。
@@ -101,6 +143,9 @@ export default {
     pick(c) {
       if (!c.isFuture) this.$emit('select-date', c.date);
     },
+    onMonthChange(e) {
+      if (e.target.value) this.$emit('pick-month', e.target.value);
+    },
     onHover(e, c) {
       const rect = this.$refs.wrap.getBoundingClientRect();
       // focus 事件没有 clientX/clientY，退回用格子自身的位置
@@ -133,6 +178,103 @@ export default {
 <style scoped>
 .hm-wrap {
   position: relative;
+  --hm-cell: 12px;
+}
+
+/* 窗口拉宽后格子一起放大，保持正方形不变形 */
+@media (min-width: 900px) {
+  .hm-wrap { --hm-cell: 15px; }
+}
+
+.hm-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-3);
+}
+
+.hm-nav-btn {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+
+.hm-nav-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.hm-nav-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.hm-range {
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.hm-month {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+
+.hm-month:hover {
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+}
+
+.hm-month input {
+  width: 94px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  cursor: pointer;
+  color-scheme: inherit;
+}
+
+.hm-today {
+  margin-left: auto;
+  height: 20px;
+  padding: 0 9px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-10);
+  white-space: nowrap;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+
+.hm-today:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.hm-today.need {
+  color: var(--accent);
+  border-color: var(--accent-border);
 }
 
 .hm-body {
@@ -143,7 +285,7 @@ export default {
 
 .hm-weekdays {
   display: grid;
-  grid-template-rows: repeat(7, 12px);
+  grid-template-rows: repeat(7, var(--hm-cell));
   gap: 3px;
   flex: 0 0 auto;
 }
@@ -151,28 +293,29 @@ export default {
 .hm-weekdays span {
   width: 12px;
   font-size: 9px;
-  line-height: 12px;
+  line-height: var(--hm-cell);
   text-align: right;
   color: var(--text-tertiary);
 }
 
 .hm-grid {
   display: grid;
-  grid-template-rows: repeat(7, 12px);
-  grid-auto-columns: 12px;
+  grid-template-rows: repeat(7, var(--hm-cell));
+  grid-auto-columns: var(--hm-cell);
   gap: 3px;
 }
 
 .hm-cell {
   display: block;
-  width: 12px;
-  height: 12px;
+  width: var(--hm-cell);
+  height: var(--hm-cell);
   padding: 0;
   border-radius: 2px;
   border: 1px solid var(--border-subtle);
   background: var(--bg-inset);
   cursor: pointer;
-  transition: transform var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+  transition: transform var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease),
+    background-color 320ms var(--ease), border-color 320ms var(--ease);
 }
 
 .hm-cell[data-level="1"] { background: color-mix(in srgb, var(--accent) 22%, var(--bg-inset)); }
