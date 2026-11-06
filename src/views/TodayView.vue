@@ -20,7 +20,7 @@
         <div class="hero-main">
           <div class="hero-label">
             <span class="live-dot"></span>
-            有效使用时长
+            有效工作
             <span class="hero-date">{{ isToday ? '今天' : report.date }}</span>
           </div>
           <div class="hero-value">
@@ -47,7 +47,7 @@
           </div>
           <div class="mini-stat">
             <span class="mini-value">{{ idleText }}</span>
-            <span class="mini-label">离座</span>
+            <span class="mini-label">空档</span>
           </div>
         </div>
       </div>
@@ -84,6 +84,21 @@
       </div>
     </section>
 
+    <!-- AI：能力开启后才出现在这里；关闭时只是一行提示 -->
+    <div class="ai-row">
+    <AiPanel
+      :enabled="aiEnabled"
+      :ready="aiReady"
+      :summaries="summaries"
+      :generating="generatingSummary"
+      :selected-date="selectedDate"
+      :has-data="hasData"
+      :provider="aiProvider"
+      @generate="$emit('generate-summary')"
+      @open-settings="$emit('open-ai-settings')"
+    />
+    </div>
+
     <!-- 近 12 周活跃度 -->
     <section class="card heat-card">
       <div class="card-head">
@@ -116,7 +131,7 @@
         <div class="session-title">{{ current.idle ? '已有一段时间没有键鼠操作' : (current.title || '—') }}</div>
       </div>
       <span class="session-badge" :class="{ live: !current.idle }">
-        {{ current.idle ? '离座' : '进行中' }}
+        {{ current.idle ? '空档' : '进行中' }}
       </span>
     </section>
 
@@ -124,13 +139,13 @@
     <section class="card">
       <div class="card-head">
         <span class="card-title">时间构成</span>
-        <span class="head-note">{{ report.categories.length }} 类</span>
+        <span class="head-note">{{ catList.length }} 类</span>
       </div>
 
       <template v-if="hasData">
         <div class="stack">
           <div
-            v-for="c in report.categories"
+            v-for="c in catList"
             :key="c.name"
             class="stack-seg"
             :style="{ width: (c.percent * 100).toFixed(2) + '%', background: colorOf(c.name) }"
@@ -139,7 +154,7 @@
         </div>
 
         <ul class="cat-list">
-          <li v-for="c in report.categories" :key="c.name" class="cat-row">
+          <li v-for="c in catList" :key="c.name" class="cat-row">
             <span class="cat-dot" :style="{ background: colorOf(c.name) }"></span>
             <span class="cat-name">{{ c.name }}</span>
             <span class="cat-bar">
@@ -238,11 +253,12 @@ import Icon from '../components/Icon.vue';
 import DateNav from '../components/DateNav.vue';
 import ActivityHeatmap from '../components/ActivityHeatmap.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
+import AiPanel from '../components/AiPanel.vue';
 import { colorForCategory } from '../styles/palette.js';
 
 export default {
   name: 'TodayView',
-  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration },
+  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel },
   props: {
     report: { type: Object, required: true },
     recorder: { type: Object, default: null },
@@ -253,14 +269,26 @@ export default {
     theme: { type: String, default: 'dark' },
     heatFrom: { type: String, default: '' },
     heatTo: { type: String, default: '' },
-    heatCanGoForward: { type: Boolean, default: false }
+    heatCanGoForward: { type: Boolean, default: false },
+    // AI 是能力层：关闭时这里只显示一条提示，开启后才变成一张卡片
+    summaries: { type: Array, default: () => [] },
+    aiEnabled: { type: Boolean, default: false },
+    aiReady: { type: Boolean, default: false },
+    aiProvider: { type: String, default: '' },
+    generatingSummary: { type: Boolean, default: false }
   },
   emits: ['jump-to-time', 'select-date', 'shift-date', 'go-today',
-    'shift-range', 'pick-month', 'heat-today', 'start-focus'],
+    'shift-range', 'pick-month', 'heat-today', 'start-focus',
+    'generate-summary', 'open-ai-settings'],
   data() {
     return { tick: 0, timer: null };
   },
   computed: {
+    /** 时间构成用 7 个展示分组；后端没给分组时退回细分分类 */
+    catList() {
+      const r = this.report || {};
+      return (r.categoriesGrouped && r.categoriesGrouped.length ? r.categoriesGrouped : r.categories) || [];
+    },
     // 把 report.sessions 摊到 24h / 96 格（15 分钟一格），取每格的主导分类着色
     bandCells() {
       const cells = Array.from({ length: 96 }, () => ({ total: 0, byCat: {} }));
@@ -420,6 +448,11 @@ export default {
 
 .today > * {
   min-width: 0;
+}
+
+/* AI 面板横跨整行：它是一句结论，不该挤在某一列里 */
+.today > .ai-row {
+  grid-column: 1 / -1;
 }
 
 /* 顶部条：日期导航 + 专注入口 */

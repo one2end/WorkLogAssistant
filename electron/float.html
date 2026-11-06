@@ -226,10 +226,7 @@ document.addEventListener('mouseup', () => {
 // --accent / --text-primary / --text-tertiary；sheen ← --surface-sheen；shadow ← --shadow-md
 const themeMap = {
   dark:   { bg: 'rgba(18,20,24,0.9)',     border: 'rgba(255,255,255,0.1)',  hover: 'rgba(255,255,255,0.18)', bgHover: 'rgba(18,20,24,0.96)',   accent: '#5e8bff', text: '#eceef2', muted: '#6b7280', btn: 'rgba(255,255,255,0.08)', btnHover: 'rgba(255,255,255,0.16)', sheen: 'rgba(255,255,255,0.055)', success: '#34d399', shadow: '0 4px 16px rgba(0,0,0,0.36)' },
-  light:  { bg: 'rgba(255,255,255,0.94)', border: 'rgba(15,23,42,0.12)',   hover: 'rgba(15,23,42,0.24)',   bgHover: 'rgba(255,255,255,0.98)', accent: '#2563eb', text: '#0f172a', muted: '#8a929e', btn: 'rgba(15,23,42,0.06)',     btnHover: 'rgba(15,23,42,0.12)',   sheen: 'rgba(255,255,255,0.8)',   success: '#059669', shadow: '0 4px 16px rgba(15,23,42,0.10)' },
-  ocean:  { bg: 'rgba(13,33,48,0.9)',     border: 'rgba(125,211,252,0.18)', hover: 'rgba(125,211,252,0.34)', bgHover: 'rgba(13,33,48,0.96)',   accent: '#38bdf8', text: '#e4f2fb', muted: '#64829a', btn: 'rgba(125,211,252,0.1)',   btnHover: 'rgba(125,211,252,0.2)', sheen: 'rgba(125,211,252,0.06)', success: '#34d399', shadow: '0 4px 16px rgba(0,0,0,0.36)' },
-  forest: { bg: 'rgba(16,29,24,0.9)',     border: 'rgba(134,239,172,0.16)', hover: 'rgba(134,239,172,0.32)', bgHover: 'rgba(16,29,24,0.96)',   accent: '#34d399', text: '#e3f2e9', muted: '#678374', btn: 'rgba(134,239,172,0.1)',   btnHover: 'rgba(134,239,172,0.2)', sheen: 'rgba(134,239,172,0.06)', success: '#4ade80', shadow: '0 4px 16px rgba(0,0,0,0.36)' },
-  rose:   { bg: 'rgba(28,20,25,0.9)',     border: 'rgba(251,207,232,0.16)', hover: 'rgba(251,207,232,0.32)', bgHover: 'rgba(28,20,25,0.96)',   accent: '#f472b6', text: '#f6e9ef', muted: '#8a6b78', btn: 'rgba(251,207,232,0.1)',   btnHover: 'rgba(251,207,232,0.2)', sheen: 'rgba(251,207,232,0.06)', success: '#34d399', shadow: '0 4px 16px rgba(0,0,0,0.36)' }
+  light:  { bg: 'rgba(255,255,255,0.94)', border: 'rgba(15,23,42,0.12)',   hover: 'rgba(15,23,42,0.24)',   bgHover: 'rgba(255,255,255,0.98)', accent: '#2563eb', text: '#0f172a', muted: '#8a929e', btn: 'rgba(15,23,42,0.06)',     btnHover: 'rgba(15,23,42,0.12)',   sheen: 'rgba(255,255,255,0.8)',   success: '#059669', shadow: '0 4px 16px rgba(15,23,42,0.10)' }
 };
 
 function applyTheme(t) {
@@ -272,6 +269,9 @@ ipcRenderer.on('float-update', (e, data) => {
 });
 ipcRenderer.on('float-monitoring-status', (e, s) => { monitoring = s; updateUI(); });
 ipcRenderer.on('float-theme', (e, t) => applyTheme(t));
+ipcRenderer.on('float-accent', (e, c) => {
+  if (c) document.documentElement.style.setProperty('--float-accent', c);
+});
 
 applyTheme('dark');
 updateUI();

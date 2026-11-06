@@ -1,4 +1,16 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage } = require('electron');
+
+// 强调色在主窗口里由 CSS 变量生成；浮窗是独立 HTML，拿不到主文档变量，
+// 这里用同一组色相/饱和度再算一遍推过去，保证小窗和大窗同色。
+const ACCENT_HSL = {
+  blue: [222, 82], teal: [190, 78], green: [158, 58],
+  violet: [262, 76], rose: [344, 72], amber: [34, 88]
+};
+function accentCss(ui = {}) {
+  const [h, sat] = ACCENT_HSL[ui.accent] || ACCENT_HSL.blue;
+  const l = ui.mode === 'light' ? 42 : 52;
+  return `hsl(${h} ${sat}% ${l}%)`;
+}
 const path = require('path');
 const fs = require('fs');
 const WindowMonitor = require('./windowMonitor');
@@ -36,7 +48,7 @@ const DATA_APP_DIR = 'worklog-assistant';
 
 try {
   app.setAppUserModelId(APP_ID);
-  app.setName('WorkLog Assistant');
+  app.setName('LifeLog');
   app.setPath('userData', path.join(app.getPath('appData'), DATA_APP_DIR));
 } catch (e) { /* 非 Windows 平台忽略前两项 */ }
 
@@ -137,7 +149,7 @@ function createFocusWindow() {
   // 隐藏窗口的 ready-to-show 在部分 Electron 版本不触发，主题用 did-finish-load 兜底
   focusWindow.webContents.once('did-finish-load', () => {
     if (!focusWindow || focusWindow.isDestroyed()) return;
-    const theme = configManager.getConfig().ui?.theme || 'dark';
+    const theme = configManager.getConfig().ui?.mode || 'dark';
     focusWindow.webContents.send('focus-theme', theme);
   });
   focusWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -263,7 +275,7 @@ function createWindow() {
     show: false,
     frame: false,
     titleBarStyle: 'hidden',
-    backgroundColor: configManager.getConfig().ui?.theme === 'light' ? '#f7f8fa' : '#0b0c0e'
+    backgroundColor: configManager.getConfig().ui?.mode === 'light' ? '#f7f8fa' : '#0b0c0e'
   });
 
   const isDev = process.env.NODE_ENV === 'development';
@@ -376,7 +388,7 @@ function createTray() {
     { label: '退出', click: () => quitApp() }
   ]);
 
-  tray.setToolTip('WorkLog Assistant');
+  tray.setToolTip('LifeLog · 本地记录中');
   tray.setContextMenu(contextMenu);
   
   tray.on('double-click', () => showMainWindow());
@@ -425,8 +437,9 @@ function createFloatWindow() {
   floatWindow.setVisibleOnAllWorkspaces(true);
 
   floatWindow.webContents.once('did-finish-load', () => {
-    const theme = configManager.getConfig().ui?.theme || 'dark';
-    floatWindow.webContents.send('float-theme', theme);
+    const ui = configManager.getConfig().ui || {};
+    floatWindow.webContents.send('float-theme', ui.mode || 'dark');
+    floatWindow.webContents.send('float-accent', accentCss(ui));
     floatWindow.webContents.send('float-monitoring-status', isMonitoring);
   });
 
@@ -696,8 +709,28 @@ ipcMain.handle('get-provider-presets', () => {
 });
 
 ipcMain.handle('save-config', (event, config) => {
+  const prevPath = configManager.getConfig().storage?.customPath || '';
   configManager.saveConfig(config);
   summarizer.updateConfig(config);
+
+  // 存储路径变化时立即切换数据目录，无需重启。
+  // 三个管理器都是在启动时按 customPath 构造的，过去改路径只能重启才生效，
+  // 而重启又会因配置被覆写而失效 —— 这里直接在原实例上重设路径。
+  const nextPath = config.storage?.customPath || '';
+  let storageChanged = false;
+  let storageError = '';
+  if (nextPath !== prevPath) {
+    const result = storageManager.setDataDir(nextPath);
+    if (result.success) {
+      logManager.setDataDir(nextPath);
+      arhatManager.setDataDir(nextPath);
+      storageChanged = true;
+      logManager.addLog(`数据目录已切换为: ${nextPath || '默认路径'}`, 'info');
+    } else {
+      storageError = result.error || '目录不可用';
+      logManager.addLog(`数据目录切换失败: ${storageError}`, 'error');
+    }
+  }
 
   // 重启监控定时器以使新配置生效
   if (isMonitoring) {
@@ -708,19 +741,66 @@ ipcMain.handle('save-config', (event, config) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('config-updated', config);
     // 窗口底色只在创建时设过一次，换肤时同步，避免浅色/深色切换闪一下
-    mainWindow.setBackgroundColor(config.ui?.theme === 'light' ? '#f7f8fa' : '#0b0c0e');
+    mainWindow.setBackgroundColor(config.ui?.mode === 'light' ? '#f7f8fa' : '#0b0c0e');
+    if (storageChanged) {
+      mainWindow.webContents.send('storage-path-changed', storageManager.getDataDir());
+    }
   }
 
   if (floatWindow) {
-    floatWindow.webContents.send('float-theme', config.ui?.theme || 'dark');
+    floatWindow.webContents.send('float-theme', config.ui?.mode || 'dark');
+    floatWindow.webContents.send('float-accent', accentCss(config.ui || {}));
   }
 
   // 专注 HUD 是懒创建窗口：此刻可能还不存在，创建时会再推一次当前主题
   if (focusWindow && !focusWindow.isDestroyed()) {
-    focusWindow.webContents.send('focus-theme', config.ui?.theme || 'dark');
+    focusWindow.webContents.send('focus-theme', config.ui?.mode || 'dark');
   }
 
-  return true;
+  return { success: !storageError, error: storageError || undefined };
+});
+
+// ---------------------------------------------------------------------------
+// 展示层（人工标注层）可以改、可以删；记录层（自动录制）一律拒绝。
+// 这条边界由主进程把关，前端无论传什么都不会改到原始采样。
+// ---------------------------------------------------------------------------
+function notifyDataChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('summary-generated');
+  }
+}
+
+ipcMain.handle('update-display-record', (event, payload) => {
+  const { date, t, patch } = payload || {};
+  if (!date || !t) return { success: false, error: '参数不完整' };
+  const res = storageManager.updateDisplayRecord(date, t, patch || {});
+  if (res.success) notifyDataChanged();
+  return res;
+});
+
+ipcMain.handle('delete-display-record', (event, payload) => {
+  const { date, t } = payload || {};
+  if (!date || !t) return { success: false, error: '参数不完整' };
+  const res = storageManager.deleteDisplayRecord(date, t);
+  if (res.success) notifyDataChanged();
+  return res;
+});
+
+ipcMain.handle('delete-display-range', (event, payload) => {
+  const { date, start, end } = payload || {};
+  if (!date || !start || !end) return { success: false, error: '参数不完整' };
+  const res = storageManager.deleteDisplayRange(date, start, end);
+  if (res.success) notifyDataChanged();
+  return res;
+});
+
+// 专注属于标注层：本人发起、写错了要能删
+ipcMain.handle('delete-focus-session', (event, payload) => {
+  const { date, id } = payload || {};
+  if (!date || !id) return { success: false, error: '参数不完整' };
+  const res = arhatManager.deleteSession(date, id);
+  if (res.success) notifyDataChanged();
+  return res;
 });
 
 ipcMain.handle('get-activities', (event, date) => {
@@ -782,13 +862,19 @@ ipcMain.handle('add-manual-record', (event, payload) => {
     return { ok: false, error: '开始时间格式应为 HH:mm' };
   }
 
-  const durationMin = parseInt(p.durationMin, 10);
-  if (!durationMin || durationMin < 1 || durationMin > 24 * 60) {
-    return { ok: false, error: '时长需在 1–1440 分钟之间' };
+  const rawDuration = parseInt(p.durationMin, 10);
+  if (!rawDuration || rawDuration > 24 * 60) {
+    return { ok: false, error: '时长需在 15–1440 分钟之间' };
   }
 
+  // 全系统统一以 15 分钟为一个块：不足 15 分钟按 15 分钟算，
+  // 超过则向上取整到 15 的倍数，避免出现「3 分钟」「7 分钟」这种块。
+  const durationMin = Math.max(15, Math.round(rawDuration / 15) * 15);
+
   const pad = (n) => String(n).padStart(2, '0');
-  const start = new Date(`${dateStr}T${pad(m[1])}:${m[2]}:00`);
+  // 开始时间也对齐到 15 分钟格（10:07 → 10:00），让块边界始终落在刻度上
+  const snappedMinute = Math.floor(parseInt(m[2], 10) / 15) * 15;
+  const start = new Date(`${dateStr}T${pad(m[1])}:${pad(snappedMinute)}:00`);
   if (Number.isNaN(start.getTime())) {
     return { ok: false, error: '时间无法解析' };
   }
@@ -840,6 +926,34 @@ ipcMain.handle('toggle-monitoring', () => {
 
 ipcMain.handle('get-monitoring-status', () => {
   return isMonitoring;
+});
+
+// 贴边窗格：把主窗口压成屏幕一侧的竖条，方便一边看记录一边干活。
+// 再点一次恢复原来的位置和大小。
+let snappedBounds = null;
+let snapWasMaximized = false;
+
+ipcMain.handle('toggle-snap', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { success: false };
+  const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea;
+  if (snappedBounds) {
+    mainWindow.setBounds(snappedBounds);
+    snappedBounds = null;
+    if (snapWasMaximized) { mainWindow.maximize(); snapWasMaximized = false; }
+    return { success: true, snapped: false };
+  }
+  // 最大化状态下 setBounds 会被忽略，必须先还原成普通窗口
+  snapWasMaximized = mainWindow.isMaximized();
+  if (snapWasMaximized) mainWindow.unmaximize();
+  snappedBounds = mainWindow.getBounds();
+  const width = Math.max(360, Math.min(560, Math.round(area.width * 0.26)));
+  mainWindow.setBounds({
+    x: area.x + area.width - width,
+    y: area.y,
+    width,
+    height: area.height
+  });
+  return { success: true, snapped: true };
 });
 
 ipcMain.handle('minimize-window', () => {
@@ -967,14 +1081,55 @@ ipcMain.handle('export-full-data', async (event, format) => {
 ipcMain.handle('import-data', async (event, mode) => {
   const { dialog } = require('electron');
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择导入文件',
+    title: '选择导入文件（JSON）或数据目录',
     filters: [{ name: 'JSON', extensions: ['json'] }],
-    properties: ['openFile']
+    properties: ['openFile', 'openDirectory']
   });
   if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
 
+  const selected = result.filePaths[0];
+
   try {
-    const content = fs.readFileSync(result.filePaths[0], 'utf8');
+    // 选中的是「原生数据目录」（例如另一台机器同步到 iCloud 的 Data）：
+    // 它本来就是应用自己的格式（activities/2026-02-15.json 等），
+    // 直接切换过去即可，不需要逐条解析，也不会覆盖或清空任何现有数据。
+    if (fs.existsSync(selected) && fs.statSync(selected).isDirectory()) {
+      const activitiesDir = path.join(selected, 'activities');
+      const dateFileRe = /^\d{4}-\d{2}-\d{2}\.(json|jsonl)$/;
+      const looksLikeDataDir = fs.existsSync(activitiesDir) ||
+        fs.readdirSync(selected).some(f => dateFileRe.test(f));
+      if (!looksLikeDataDir) {
+        return {
+          success: false,
+          error: '所选目录不是有效的数据目录（未找到 activities/ 或按日期命名的活动文件）'
+        };
+      }
+
+      const config = configManager.getConfig();
+      config.storage = { ...(config.storage || {}), customPath: selected };
+      configManager.saveConfig(config);
+      summarizer.updateConfig(config);
+
+      const switched = storageManager.setDataDir(selected);
+      if (!switched.success) {
+        return { success: false, error: switched.error };
+      }
+      logManager.setDataDir(selected);
+      arhatManager.setDataDir(selected);
+      logManager.addLog(`已切换到数据目录: ${selected}`, 'info');
+
+      const scanDir = fs.existsSync(activitiesDir) ? activitiesDir : selected;
+      const fileCount = fs.readdirSync(scanDir).filter(f => dateFileRe.test(f)).length;
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('config-updated', config);
+        mainWindow.webContents.send('storage-path-changed', selected);
+      }
+      return { success: true, importedCount: fileCount, mode: 'directory' };
+    }
+
+    // 单个 JSON 文件：原有的「完整导出」格式
+    const content = fs.readFileSync(selected, 'utf8');
     const data = JSON.parse(content);
 
     if (!data.activities && !data.summaries) {

@@ -1,8 +1,20 @@
-# WorkLog Assistant - 工作日志助手
+# LifeLog — 本地优先的人生记录器
 
-基于 Electron + Vue 的智能工作日志助手。自动监控工作活动，AI 生成结构化摘要，内置"专注模式"帮助你保持专注觉察。
+基于 Electron + Vue。自动记录你在电脑上做了什么，把热度留给「解释」而不是「记录」：
+一天 96 个 15 分钟格，每格只需要你点一下确认；剩下的交给机器。
 
-**官网 / 下载：https://one2end.github.io/WorkLogAssistant/** · **最新版本：[v0.8.0](https://github.com/one2end/WorkLogAssistant/releases/latest)**
+> **它不是一个更好的时间记录器，而是「换了多少软件，东西还在」的那一层。**
+> 数据只在本机，随时能全部带走。
+
+**官网 / 下载：https://one2end.github.io/WorkLogAssistant/** · **最新发布：[Releases](https://github.com/one2end/WorkLogAssistant/releases)**
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [未来发展方向](docs/ROADMAP.md) | 为什么做这个产品、四层架构、下一步优先级、明确不做什么 |
+| [架构说明](docs/ARCHITECTURE.md) | 数据分层、分析管线、IPC、导入脚本、已知限制 |
+| [变更记录](CHANGELOG.md) | 每个版本改了什么 |
 
 ## 它能解决什么问题？
 
@@ -13,17 +25,17 @@
 
 ## 当前版本
 
-**v0.8.0** — 日时间带 / 12 周热力图 / 响应式多列布局 / 主题色板联动 / 空状态插画 / 浮窗与计时小窗主题同步
+**v0.9.0（开发中）** — 数据分层（记录层只读 / 标注层可改）/ 15 分钟统一原子 / 日历重做（每小时 54px、拖拽带预览）/ AI 降级为能力开关 / 主题拆成「明暗 × 强调色」
 
-本版同时整合了 v0.7.0 之后的采集内核重写、AI 数据接口（MCP / 本地 HTTP）、应用图标重绘与整套界面视觉重构。Windows 安装包（NSIS + 便携版）由 `npm run build:win` 产出。
+已导入 2017–2026 共 **1082 天**历史数据（滴答清单 + UpTimer）。Windows 安装包由 `npm run electron:build` 产出。
 
 ## 功能特性
 
 ### 核心功能
 - **常驻采样**：Windows 下用常驻 PowerShell 进程采样前台窗口，1 秒精度，Add-Type 只编译一次
 - **真实工时**：每个片段自带精确时长，不再用"记录条数 × 采样间隔"估算
-- **空闲检测**：读取系统最后输入时间，连续无操作超过阈值即判定离座，自动从有效工时中剔除
-- **分类统计**：按沟通协作 / 文档写作 / AI 助手 / 开发编码等归类，规则可配置
+- **空档检测**：读取系统最后输入时间，连续无操作超过阈值记为「空档」，不计入有效工时
+- **分类统计**：展示层只有 7 组（工作/学习/生活/娱乐/睡眠/专注/其他），细分分类由规则自动推断
 - **AI 摘要**：多模型支持（DeepSeek / Claude / OpenAI / Gemini / 自定义），输入是带真实时长的会话时间线
 - **专注助手**：番茄钟 / 沉浸 / 罗汉三种节奏，桌面悬浮小窗实时显示当前状态
 - **手工补记**：录制漏掉的时段可手动补上（开始时间 + 时长 + 分类），计入当日工时
@@ -244,9 +256,12 @@ npm run electron:build
 ## 数据存储
 
 数据默认存储在系统用户数据目录：
-- Windows: `%APPDATA%/WorkLog Assistant/Data/`
-- macOS: `~/Library/Application Support/WorkLog Assistant/Data/`
-- Linux: `~/.config/WorkLog Assistant/Data/`
+- Windows: `%APPDATA%/worklog-assistant/Data/`
+- macOS: `~/Library/Application Support/worklog-assistant/Data/`
+- Linux: `~/.config/worklog-assistant/Data/`
+
+> 目录名是代码里钉死的 `worklog-assistant`（不是显示名 LifeLog）。
+> 想让多台机器同步，把 `Data/` 指到 iCloud / OneDrive 目录即可，设置里改完即时生效。
 
 目录结构：
 ```

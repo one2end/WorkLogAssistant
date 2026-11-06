@@ -14,7 +14,7 @@
         <div class="row">
           <span class="row-label">
             空闲判定阈值
-            <span class="row-desc">连续无键鼠操作超过此时长记为离座，不计入有效工时</span>
+            <span class="row-desc">连续无键鼠操作超过此时长记为空档，不计入有效工时</span>
           </span>
           <div class="row-control sm">
             <input
@@ -131,9 +131,34 @@
     <section class="sec">
       <div class="sec-head">
         <Icon name="zap" :size="13" />
-        <span>AI 模型</span>
+        <span>AI 能力</span>
+        <span class="sec-badge" :class="{ on: aiOn }">{{ aiOn ? '已启用' : '未启用' }}</span>
       </div>
       <div class="sec-body">
+        <div class="ai-hero" :class="{ on: aiOn }">
+          <div class="ai-hero-main">
+            <strong class="ai-hero-title">
+              <Icon name="zap" :size="12" />
+              让记录越用越聪明
+            </strong>
+            <p class="ai-hero-desc">
+              <template v-if="aiOn">已开启：会把每天整理成「做了什么 / 时间去哪了 / 值得注意」，并可按设定时段自动生成。</template>
+              <template v-else>未开启：应用只在本机记录窗口活动、统计时长，不联网、不调用模型。</template>
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="aiOn"
+              @change="set('ai.enabled', $event.target.checked)"
+            >
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
+
+        <p v-if="!aiOn" class="ai-model-hint">下面的模型配置可以先填好，开启后立即生效。</p>
+
+        <div class="ai-model" :class="{ 'is-off': !aiOn }">
         <div class="row">
           <span class="row-label">服务商</span>
           <div class="row-control">
@@ -183,6 +208,7 @@
               @change="set('api.modelName', $event.target.value)"
             >
           </div>
+        </div>
         </div>
       </div>
     </section>
@@ -278,21 +304,43 @@
       </div>
       <div class="sec-body">
         <div class="row-block">
-          <span class="row-label">主题</span>
-          <div class="theme-grid">
+          <span class="row-label">
+            明暗
+            <span class="row-desc">决定背景与文字是深底还是浅底</span>
+          </span>
+          <div class="mode-row">
             <button
-              v-for="t in themeOptions"
-              :key="t.id"
-              class="theme-cell"
-              :class="{ active: theme === t.id }"
-              :title="t.label"
-              @click="$emit('theme-change', t.id)"
+              v-for="m in modes"
+              :key="m.id"
+              class="mode-cell"
+              :class="[m.id, { active: theme === m.id }]"
+              @click="$emit('theme-change', m.id)"
             >
-              <span class="theme-swatch" :style="{ background: t.preview }">
-                <span class="theme-swatch-inner" :style="{ background: t.surface }"></span>
+              <span class="mode-preview"><span class="mp-bar"></span><span class="mp-line"></span></span>
+              <span class="mode-name">{{ m.label }}</span>
+              <Icon v-if="theme === m.id" name="check" :size="11" class="mode-check" />
+            </button>
+          </div>
+        </div>
+
+        <div class="row-block">
+          <span class="row-label">
+            强调色
+            <span class="row-desc">只改按钮、选中态与高亮的颜色，界面其余部分保持中性灰</span>
+          </span>
+          <div class="accent-row">
+            <button
+              v-for="a in accentOptions"
+              :key="a.id"
+              class="accent-cell"
+              :class="{ active: accent === a.id }"
+              :title="a.label"
+              @click="$emit('accent-change', a.id)"
+            >
+              <span class="accent-dot" :style="{ background: accentColor(a.id) }">
+                <Icon v-if="accent === a.id" name="check" :size="10" />
               </span>
-              <span class="theme-name">{{ t.label }}</span>
-              <Icon v-if="theme === t.id" name="check" :size="12" class="theme-check" />
+              <span class="accent-name">{{ a.label }}</span>
             </button>
           </div>
         </div>
@@ -433,7 +481,7 @@
               @click="$emit('reset-storage')"
             >恢复默认</button>
           </div>
-          <p class="hint">指向 iCloud / OneDrive / 坚果云 目录可实现跨设备同步。</p>
+          <p class="hint">指向 iCloud / OneDrive / 坚果云 目录可实现跨设备同步；更改后立即生效，无需重启。</p>
         </div>
 
         <div class="row-block">
@@ -461,7 +509,7 @@
               <Icon name="upload" :size="12" /> 覆盖
             </button>
           </div>
-          <p class="hint">「覆盖」会先清空现有活动记录，操作不可撤销。</p>
+          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」（含 activities/ 的文件夹，如 iCloud 同步目录）。选目录会直接切换过去并立即生效，不覆盖已有数据；「覆盖」仅对单文件导入生效。</p>
         </div>
       </div>
     </section>
@@ -535,6 +583,7 @@
 
 <script>
 import Icon from '../components/Icon.vue';
+import { accentSwatch, ACCENTS, MODES } from '../styles/accents.js';
 
 export default {
   name: 'SettingsView',
@@ -542,7 +591,9 @@ export default {
   props: {
     config: { type: Object, required: true },
     theme: { type: String, default: 'dark' },
-    themeOptions: { type: Array, default: () => [] },
+    accent: { type: String, default: 'blue' },
+    accentOptions: { type: Array, default: () => ACCENTS },
+    activeSection: { type: String, default: 'record' },
     providerPresets: { type: Object, default: () => ({}) },
     bridge: { type: Object, default: null },
     bridgeLoading: { type: Boolean, default: false },
@@ -559,7 +610,7 @@ export default {
     costEstimate: { type: Object, default: () => ({}) }
   },
   emits: [
-    'save', 'provider-change', 'toggle-auto-launch', 'theme-change',
+    'save', 'provider-change', 'toggle-auto-launch', 'theme-change', 'accent-change',
     'select-storage', 'reset-storage',
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
@@ -568,10 +619,12 @@ export default {
   ],
   data() {
     return {
-      activeSection: 'record',
+      // 由父组件定位（例如从「AI 未启用」提示条跳过来时直接打开 AI 分区）
+      activeSection: this.activeSection || 'record',
+      modes: MODES,
       sections: [
         { id: 'record', label: '记录', icon: 'activity' },
-        { id: 'ai', label: 'AI', icon: 'zap' },
+        { id: 'ai', label: 'AI 能力', icon: 'zap' },
         { id: 'appearance', label: '外观', icon: 'palette' },
         { id: 'bridge', label: '接口', icon: 'plug' },
         { id: 'data', label: '数据', icon: 'database' },
@@ -580,7 +633,15 @@ export default {
       schedules: []
     };
   },
+  watch: {
+    activeSection(val) {
+      if (val) this.activeSection = val;
+    }
+  },
   computed: {
+    aiOn() {
+      return !!(this.config.ai && this.config.ai.enabled);
+    },
     monitoring() {
       return this.config.monitoring || {};
     },
@@ -627,6 +688,9 @@ export default {
     },
     copy(text, tag) {
       this.$emit('bridge-copy', text, tag);
+    },
+    accentColor(id) {
+      return accentSwatch(id, this.theme);
     }
   }
 };
@@ -801,57 +865,237 @@ export default {
   color: var(--success);
 }
 
-/* 主题选择 */
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: var(--sp-2);
+/* AI 能力总开关 */
+.ai-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-3);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+  transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 
-.theme-cell {
+.ai-hero.on {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--bg-inset));
+}
+
+.ai-hero-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-hero-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+
+.ai-hero.on .ai-hero-title :deep(svg) {
+  color: var(--accent);
+}
+
+.ai-hero-desc {
+  margin: 4px 0 0;
+  font-size: var(--fs-11);
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+/* 开关 */
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  width: 40px;
+  height: 22px;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--r-full);
+  background: var(--bg-active);
+  border: 1px solid var(--border-default);
+  transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+
+.switch-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: var(--text-tertiary);
+  transition: transform var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
+}
+
+.switch input:checked + .switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch input:checked + .switch-track .switch-thumb {
+  transform: translateX(18px);
+  background: var(--on-accent);
+}
+
+.ai-model-hint {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+
+/* 未开启时模型配置淡化，但不禁止填写——用户可以先把 Key 备好 */
+.ai-model.is-off {
+  opacity: 0.6;
+  transition: opacity var(--dur-2) var(--ease);
+}
+
+.ai-model.is-off:hover {
+  opacity: 1;
+}
+
+/* 明暗：两张缩略预览卡 */
+.mode-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-2);
+  max-width: 320px;
+}
+
+.mode-cell {
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 7px 4px 6px;
+  gap: var(--sp-2);
+  padding: 8px 10px;
   border-radius: var(--r-sm);
   border: 1px solid var(--border-subtle);
   background: var(--bg-inset);
   transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
 }
 
-.theme-cell:hover {
+.mode-cell:hover {
   border-color: var(--border-strong);
 }
 
-.theme-cell.active {
+.mode-cell.active {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.theme-swatch {
+/* 小预览：一块底色 + 一条标题条 + 一条正文条 */
+.mode-preview {
   width: 26px;
-  height: 18px;
-  border-radius: var(--r-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  height: 20px;
+  flex: none;
+  border-radius: 4px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-default);
 }
 
-.theme-swatch-inner {
-  width: 14px;
-  height: 8px;
+.mode-cell.dark .mode-preview { background: #0b0c0e; }
+.mode-cell.light .mode-preview { background: #f7f8fa; }
+
+.mp-bar {
+  display: block;
+  height: 3px;
+  width: 60%;
   border-radius: 2px;
 }
 
-.theme-name {
+.mode-cell.dark .mp-bar { background: #eceef2; }
+.mode-cell.light .mp-bar { background: #0f172a; }
+
+.mp-line {
+  display: block;
+  height: 2px;
+  width: 90%;
+  border-radius: 2px;
+}
+
+.mode-cell.dark .mp-line { background: rgba(236, 238, 242, 0.3); }
+.mode-cell.light .mp-line { background: rgba(15, 23, 42, 0.25); }
+
+.mode-name {
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+}
+
+.mode-cell.active .mode-name {
+  color: var(--text-primary);
+}
+
+.mode-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* 强调色：一排圆点 */
+.accent-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.accent-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+
+.accent-cell:hover {
+  background: var(--bg-hover);
+}
+
+.accent-cell.active {
+  border-color: var(--border-strong);
+  background: var(--bg-inset);
+}
+
+.accent-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.accent-name {
   font-size: var(--fs-10);
   color: var(--text-secondary);
 }
 
-.theme-cell.active .theme-name {
+.accent-cell.active .accent-name {
   color: var(--text-primary);
 }
 

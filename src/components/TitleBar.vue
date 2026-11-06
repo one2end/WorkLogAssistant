@@ -20,7 +20,7 @@
             </linearGradient>
           </defs>
         </svg>
-        <span class="brand-name">WorkLog</span>
+        <span class="brand-name">LifeLog</span>
       </span>
     </div>
 
@@ -46,21 +46,39 @@
 
         <transition name="theme-pop">
           <div v-if="themeOpen" class="theme-pop" @click.stop>
-            <div class="theme-pop-title">外观主题</div>
-            <div class="theme-pop-grid">
+            <div class="theme-pop-title">明暗</div>
+            <div class="mode-seg">
               <button
-                v-for="t in themeOptions"
-                :key="t.id"
-                class="theme-pop-item"
-                :class="{ active: theme === t.id }"
-                @click="pickTheme(t.id)"
+                v-for="m in modes"
+                :key="m.id"
+                class="mode-btn"
+                :class="{ active: theme === m.id }"
+                @click="pickMode(m.id)"
               >
-                <span class="theme-swatch" :style="{ background: t.preview }">
-                  <i :style="{ background: t.surface }"></i>
-                </span>
-                <span class="theme-swatch-label">{{ t.label }}</span>
+                {{ m.label }}
               </button>
             </div>
+
+            <div class="theme-pop-title">强调色</div>
+            <div class="accent-grid">
+              <button
+                v-for="a in accentOptions"
+                :key="a.id"
+                class="accent-item"
+                :class="{ active: accent === a.id }"
+                @click="pickAccent(a.id)"
+              >
+                <span class="accent-dot" :style="{ background: swatch(a.id) }">
+                  <svg v-if="accent === a.id" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+                    <path d="M1.8 5.2 4 7.4l4.2-4.6" fill="none" stroke="#fff" stroke-width="1.6"
+                      stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </span>
+                <span class="accent-label">{{ a.label }}</span>
+              </button>
+            </div>
+
+            <p class="theme-pop-hint">只有按钮与高亮跟随强调色，背景和文字始终是中性灰</p>
           </div>
         </transition>
       </div>
@@ -73,6 +91,13 @@
       >
         <span class="status-dot" :class="{ pulse: monitoring }"></span>
         <span class="status-text">{{ monitoring ? '记录中' : '已暂停' }}</span>
+      </button>
+
+      <button class="win-btn" title="贴边成竖窗格 / 还原" @click="$emit('snap')">
+        <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
+          <rect x="1.2" y="1.6" width="9.6" height="8.8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.1" />
+          <rect x="6.8" y="1.6" width="4" height="8.8" rx="1.2" fill="currentColor" opacity="0.5" />
+        </svg>
       </button>
 
       <div class="win-controls">
@@ -88,21 +113,26 @@
 </template>
 
 <script>
+import { accentSwatch, MODES } from '../styles/accents.js';
+
 export default {
   name: 'TitleBar',
   props: {
     monitoring: { type: Boolean, default: false },
     theme: { type: String, default: 'dark' },
-    themeOptions: { type: Array, default: () => [] }
+    accent: { type: String, default: 'blue' },
+    accentOptions: { type: Array, default: () => [] }
   },
-  emits: ['minimize', 'close', 'toggle-monitoring', 'theme-change'],
+  emits: ['minimize', 'close', 'toggle-monitoring', 'theme-change', 'accent-change', 'snap'],
   data() {
-    return { themeOpen: false };
+    return {
+      themeOpen: false,
+      modes: MODES
+    };
   },
   computed: {
     currentSwatch() {
-      const hit = this.themeOptions.find(t => t.id === this.theme);
-      return hit ? hit.preview : 'var(--accent)';
+      return this.swatch(this.accent);
     }
   },
   mounted() {
@@ -113,9 +143,14 @@ export default {
     document.removeEventListener('click', this._onDocClick);
   },
   methods: {
-    pickTheme(id) {
-      this.themeOpen = false;
+    swatch(id) {
+      return accentSwatch(id, this.theme);
+    },
+    pickMode(id) {
       if (id !== this.theme) this.$emit('theme-change', id);
+    },
+    pickAccent(id) {
+      if (id !== this.accent) this.$emit('accent-change', id);
     }
   }
 };
@@ -291,54 +326,90 @@ export default {
   margin-bottom: var(--sp-2);
 }
 
-.theme-pop-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 5px;
+.theme-pop-title + .theme-pop-title,
+.mode-seg + .theme-pop-title {
+  margin-top: var(--sp-3);
 }
 
-.theme-pop-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+/* 明暗：两段式开关 */
+.mode-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+}
+
+.mode-btn {
+  padding: 5px 0;
+  border-radius: var(--r-xs);
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+
+.mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 强调色：一排圆点 */
+.accent-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
-  padding: 5px 2px;
+}
+
+.accent-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
   border-radius: var(--r-sm);
   border: 1px solid transparent;
   color: var(--text-tertiary);
-  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
-    background var(--dur-1) var(--ease);
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
 }
 
-.theme-pop-item:hover {
+.accent-item:hover {
   background: var(--bg-hover);
   color: var(--text-secondary);
 }
 
-.theme-pop-item.active {
-  border-color: var(--accent);
+.accent-item.active {
+  border-color: var(--border-strong);
   color: var(--text-primary);
 }
 
-.theme-swatch {
-  display: block;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r-xs);
-  border: 1px solid var(--border-default);
-  padding: 5px;
+.accent-dot {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: var(--r-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
-.theme-swatch i {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 2px;
-}
-
-.theme-swatch-label {
+.accent-label {
   font-size: 9px;
   white-space: nowrap;
+}
+
+.theme-pop-hint {
+  margin: var(--sp-3) 0 0;
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
 }
 
 .theme-pop-enter-active {

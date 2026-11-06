@@ -16,6 +16,24 @@ class ArhatManager {
     this.currentSession = null;
   }
 
+  /** 运行时切换数据根目录（配合设置页改存储路径后立即生效） */
+  setDataDir(newPath) {
+    const userDataPath = app.getPath('userData');
+    const base = newPath && newPath.trim()
+      ? newPath.trim()
+      : path.join(userDataPath, 'Data');
+    try {
+      this.arhatDir = path.join(base, 'arhat');
+      this.sessionsDir = path.join(this.arhatDir, 'sessions');
+      this.notesDir = path.join(this.arhatDir, 'notes');
+      this._ensureDirs();
+      return true;
+    } catch (error) {
+      console.error('切换专注数据目录失败:', error.message);
+      return false;
+    }
+  }
+
   _ensureDirs() {
     [this.arhatDir, this.sessionsDir, this.notesDir].forEach(dir => {
       if (!fs.existsSync(dir)) {
@@ -89,6 +107,21 @@ class ArhatManager {
     const ended = { ...this.currentSession };
     this.currentSession = null;
     return ended;
+  }
+
+  /**
+   * 删除一条专注会话。
+   * 专注是本人发起的记录（人工标注层），写错了、误开了都要能删；
+   * 它和记录层的原始采样不是一回事，删掉不影响「那段时间电脑在干什么」。
+   */
+  deleteSession(dateStr, sessionId) {
+    const filePath = path.join(this.sessionsDir, `${dateStr}.json`);
+    const sessions = this._readJson(filePath);
+    const idx = sessions.findIndex(s => String(s.id) === String(sessionId));
+    if (idx < 0) return { success: false, error: '没找到这条专注记录' };
+    const [removed] = sessions.splice(idx, 1);
+    this._writeJson(filePath, sessions);
+    return { success: true, removed: { id: removed.id, startTime: removed.startTime } };
   }
 
   getActiveSession() {

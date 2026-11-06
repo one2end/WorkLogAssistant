@@ -1,13 +1,13 @@
 {
   "name": "worklog-assistant",
-  "version": "0.8.0",
-  "description": "WorkLog Assistant - Electron + Vue version",
+  "version": "0.9.0",
+  "description": "LifeLog — 本地优先的人生记录器",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "electron": "electron .",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && npm run electron\"",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "npm run build && electron-builder && node scripts/patch-exe-icon.js dist-electron",
     "build:win": "npm run build && electron-builder --win && node scripts/patch-exe-icon.js dist-electron",
     "icon:exe": "node scripts/patch-exe-icon.js --template",
@@ -22,6 +22,7 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
     "concurrently": "^8.2.0",
+    "cross-env": "^10.1.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.0",
     "eslint": "^8.55.0",
@@ -31,7 +32,7 @@
   },
   "build": {
     "appId": "com.worklog.assistant",
-    "productName": "WorkLog Assistant",
+    "productName": "LifeLog",
     "directories": {
       "output": "dist-electron"
     },
@@ -46,9 +47,18 @@
       "electron/analytics.js"
     ],
     "extraResources": [
-      { "from": "build/icon.png", "to": "icon.png" },
-      { "from": "build/icon.ico", "to": "icon.ico" },
-      { "from": "build/tray.png", "to": "tray.png" }
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "build/tray.png",
+        "to": "tray.png"
+      }
     ],
     "win": {
       "target": [

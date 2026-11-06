@@ -1,0 +1,372 @@
+<template>
+  <div class="ai-wrap">
+    <!-- 状态一：AI 关闭。这里只是一条提示，不占页面、不进导航 -->
+    <section v-if="!enabled" class="ai-off">
+      <span class="ai-off-icon"><Icon name="zap" :size="13" /></span>
+      <div class="ai-off-text">
+        <strong>AI 未启用</strong>
+        <span>现在只做本地记录与统计。开启后会把每天整理成回顾，指出时间去向和异常。</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" @click="$emit('open-settings')">了解并开启</button>
+    </section>
+
+    <!-- 状态二：开了但模型没配好 -->
+    <section v-else-if="!ready" class="ai-off is-warn">
+      <span class="ai-off-icon"><Icon name="alert" :size="13" /></span>
+      <div class="ai-off-text">
+        <strong>AI 已开启，但还不能用</strong>
+        <span>缺少模型 API Key，填好之后这张卡片才会开始工作。</span>
+      </div>
+      <button class="btn btn-primary btn-sm" @click="$emit('open-settings')">去配置模型</button>
+    </section>
+
+    <!-- 状态三：AI 可用 -->
+    <section v-else class="card ai-card">
+      <header class="ai-head">
+        <span class="ai-title">
+          <Icon name="zap" :size="13" />
+          AI 回顾
+          <span class="ai-chip">{{ providerLabel }}</span>
+        </span>
+        <button
+          class="btn btn-ghost btn-sm"
+          :disabled="generating || !hasData"
+          :title="hasData ? '把这一天整理成结构化回顾' : '这一天还没有可总结的记录'"
+          @click="$emit('generate')"
+        >
+          <Icon :name="generating ? 'refresh' : 'zap'" :size="12" :class="{ spin: generating }" />
+          {{ generating ? '生成中' : (latest ? '重新生成' : '生成回顾') }}
+        </button>
+      </header>
+
+      <template v-if="latest">
+        <div class="ai-body" :class="{ 'is-clamped': clamped && !expanded }">
+          <div class="md" v-html="html"></div>
+        </div>
+        <div class="ai-foot">
+          <span class="ai-meta">
+            <Icon name="clock" :size="10" />
+            {{ timeRange(latest) }}
+            <template v-if="latest.activityCount"> · {{ latest.activityCount }} 个片段</template>
+          </span>
+          <button v-if="clamped" class="ai-more" @click="expanded = !expanded">
+            {{ expanded ? '收起' : '展开全文' }}
+          </button>
+          <button v-if="others.length" class="ai-more" @click="showAll = !showAll">
+            {{ showAll ? '只看最新' : `更早 ${others.length} 条` }}
+          </button>
+        </div>
+
+        <div v-if="showAll" class="ai-history">
+          <article v-for="s in others" :key="s.id" class="ai-history-item">
+            <div class="ai-meta">
+              <Icon name="clock" :size="10" />
+              {{ timeRange(s) }}
+            </div>
+            <div class="md" v-html="render(s.summary)"></div>
+          </article>
+        </div>
+      </template>
+
+      <p v-else class="ai-empty">
+        {{ hasData
+          ? '这一天还没有回顾。点右上角生成，AI 会把它整理成「做了什么、卡在哪、接下来做什么」。'
+          : '这一天没有记录，暂时没有可回顾的内容。' }}
+      </p>
+    </section>
+  </div>
+</template>
+
+<script>
+import { marked } from 'marked';
+import Icon from './Icon.vue';
+
+const PROVIDER_NAMES = {
+  deepseek: 'DeepSeek',
+  openai: 'OpenAI',
+  moonshot: 'Moonshot',
+  zhipu: '智谱',
+  qwen: '通义千问',
+  ollama: '本地 Ollama'
+};
+
+export default {
+  name: 'AiPanel',
+  components: { Icon },
+  props: {
+    enabled: { type: Boolean, default: false },
+    ready: { type: Boolean, default: false },
+    summaries: { type: Array, default: () => [] },
+    generating: { type: Boolean, default: false },
+    selectedDate: { type: String, default: '' },
+    hasData: { type: Boolean, default: false },
+    provider: { type: String, default: '' }
+  },
+  emits: ['generate', 'open-settings'],
+  data() {
+    return { expanded: false, showAll: false };
+  },
+  computed: {
+    latest() {
+      return this.summaries[0] || null;
+    },
+    others() {
+      return this.summaries.slice(1);
+    },
+    html() {
+      return this.render(this.latest && this.latest.summary);
+    },
+    /** 超过一定长度才折叠，短回顾不该出现「展开全文」 */
+    clamped() {
+      const text = (this.latest && this.latest.summary) || '';
+      return text.length > 260 || text.split('\n').length > 8;
+    },
+    providerLabel() {
+      return PROVIDER_NAMES[this.provider] || this.provider || 'AI';
+    }
+  },
+  watch: {
+    selectedDate() {
+      this.expanded = false;
+      this.showAll = false;
+    }
+  },
+  methods: {
+    render(md) {
+      try {
+        return marked.parse(md || '', { breaks: true });
+      } catch (e) {
+        return String(md || '');
+      }
+    },
+    timeRange(s) {
+      const a = new Date(s.startTime || s.timestamp);
+      const b = new Date(s.endTime || s.timestamp);
+      const f = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      if (Number.isNaN(a.getTime())) return '';
+      return `${f(a)} – ${f(b)}`;
+    }
+  }
+};
+</script>
+
+<style scoped>
+.ai-wrap {
+  display: block;
+}
+
+/* ---------- 关闭态：一条细提示，不伪装成功能卡片 ---------- */
+.ai-off {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  border: 1px dashed var(--border-default);
+  background: transparent;
+}
+
+.ai-off.is-warn {
+  border-style: solid;
+  border-color: var(--warning-soft);
+  background: color-mix(in srgb, var(--warning-soft) 55%, transparent);
+}
+
+.ai-off-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+
+.ai-off.is-warn .ai-off-icon {
+  color: var(--warning);
+}
+
+.ai-off-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ai-off-text strong {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+
+.ai-off-text span {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+/* ---------- 可用态 ---------- */
+.ai-card {
+  border-color: var(--accent-border);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent-soft) 55%, var(--bg-surface)),
+      var(--bg-surface) 46%);
+}
+
+.ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.ai-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+
+.ai-title :deep(svg) {
+  color: var(--accent);
+}
+
+.ai-chip {
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-normal);
+  color: var(--text-tertiary);
+}
+
+.ai-body {
+  position: relative;
+}
+
+.ai-body.is-clamped {
+  max-height: 190px;
+  overflow: hidden;
+  mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
+}
+
+.ai-body .md {
+  font-size: var(--fs-13);
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.ai-body .md :deep(h1),
+.ai-body .md :deep(h2),
+.ai-body .md :deep(h3) {
+  margin: var(--sp-3) 0 var(--sp-1);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+
+.ai-body .md :deep(h1:first-child),
+.ai-body .md :deep(h2:first-child),
+.ai-body .md :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.ai-body .md :deep(p) {
+  margin: 0 0 var(--sp-2);
+}
+
+.ai-body .md :deep(ul),
+.ai-body .md :deep(ol) {
+  margin: 0 0 var(--sp-2);
+  padding-left: 18px;
+}
+
+.ai-body .md :deep(li) {
+  margin-bottom: 2px;
+}
+
+.ai-body .md :deep(strong) {
+  color: var(--text-primary);
+  font-weight: var(--fw-medium);
+}
+
+.ai-body .md :deep(code) {
+  padding: 1px 4px;
+  border-radius: var(--r-xs);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+
+.ai-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ai-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+
+.ai-more {
+  margin-left: auto;
+  font-size: var(--fs-11);
+  color: var(--accent);
+}
+
+.ai-more + .ai-more {
+  margin-left: 0;
+}
+
+.ai-more:hover {
+  color: var(--accent-hover);
+}
+
+.ai-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px dashed var(--border-subtle);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.ai-history-item .md {
+  margin-top: 4px;
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+.ai-empty {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+.spin {
+  animation: ai-spin 900ms linear infinite;
+}
+
+@keyframes ai-spin {
+  to { transform: rotate(360deg); }
+}
+</style>

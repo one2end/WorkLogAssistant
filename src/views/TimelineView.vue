@@ -1,5 +1,6 @@
 <template>
   <div class="timeline">
+    <!-- 日期导航 -->
     <div class="tl-toolbar">
       <DateNav
         :selected-date="selectedDate"
@@ -8,31 +9,60 @@
         @shift="$emit('shift', $event)"
         @today="$emit('today')"
       />
+    </div>
 
-      <div class="seg">
-        <button
-          class="seg-btn"
-          :class="{ active: mode === 'sessions' }"
-          @click="mode = 'sessions'"
-        >会话</button>
-        <button
-          class="seg-btn"
-          :class="{ active: mode === 'raw' }"
-          @click="mode = 'raw'"
-        >明细</button>
+    <!-- 四格统计（UpTimer 风格） -->
+    <div class="stat-strip">
+      <div class="stat-cell">
+        <b>{{ fmtCN(trackedMs) }}</b>
+        <span><Icon name="timer" :size="11" /> 有效</span>
+      </div>
+      <i class="stat-div" />
+      <div class="stat-cell">
+        <b>{{ fmtCN(gapTotalMs) }}</b>
+        <span><Icon name="moon" :size="11" /> 空闲</span>
+      </div>
+      <i class="stat-div" />
+      <div class="stat-cell">
+        <b>{{ sessionCount }}</b>
+        <span><Icon name="activity" :size="11" /> 段数</span>
+      </div>
+      <i class="stat-div" />
+      <div class="stat-cell">
+        <b>{{ coveragePct }}%</b>
+        <span><Icon name="chart" :size="11" /> 覆盖</span>
       </div>
     </div>
 
-    <div v-if="report.stats" class="tl-summary">
-      <span class="tl-stat"><b>{{ fmt(report.stats.trackedMs) }}</b> 有效</span>
-      <span class="tl-sep">·</span>
-      <span class="tl-stat"><b>{{ report.stats.sessionCount }}</b> 段</span>
-      <span class="tl-sep">·</span>
-      <span class="tl-stat"><b>{{ report.stats.uniqueApps }}</b> 应用</span>
-
-      <button class="manual-toggle" :class="{ active: manualOpen }" @click="toggleManual">
-        <Icon name="plus" :size="11" />
-        补记
+    <!-- 视图切换 + 日期分组标题 -->
+    <div class="view-head">
+      <div class="view-switch" @click.stop>
+        <button class="view-trigger" @click="menuOpen = !menuOpen">
+          {{ viewLabel }}
+          <Icon name="chevronDown" :size="13" />
+        </button>
+        <div v-if="menuOpen" class="view-menu">
+          <button
+            v-for="opt in viewOptions"
+            :key="opt.id"
+            :class="{ active: mode === opt.id }"
+            @click="setMode(opt.id)"
+          >{{ opt.label }}</button>
+        </div>
+      </div>
+      <div class="layer-switch">
+        <button :class="{ active: layerMode === 'display' }" @click="layerMode = 'display'">展示层</button>
+        <button :class="{ active: layerMode === 'record' }" @click="layerMode = 'record'">记录层</button>
+      </div>
+      <span class="view-date">{{ dateLabel }}</span>
+      <button
+        v-if="mode === 'timeline'"
+        class="order-btn"
+        :title="sortDesc ? '切换为从早到晚' : '切换为最新在上'"
+        @click="sortDesc = !sortDesc"
+      >
+        <Icon name="filter" :size="12" />
+        {{ sortDesc ? '最新在上' : '从早到晚' }}
       </button>
     </div>
 
@@ -41,11 +71,11 @@
       <div class="manual-fields">
         <label class="mf">
           <span>开始</span>
-          <input v-model="manualTime" type="time">
+          <input v-model="manualTime" type="time" step="900">
         </label>
         <label class="mf narrow">
-          <span>时长</span>
-          <input v-model.number="manualDuration" type="number" min="1" max="1440">
+          <span>时长(分)</span>
+          <input v-model.number="manualDuration" type="number" min="15" step="15" max="1440">
         </label>
         <label class="mf grow">
           <span>分类</span>
@@ -63,7 +93,7 @@
         <input v-model="manualTitle" type="text" placeholder="这段没被记录的时间具体在做什么（可选）">
       </label>
       <div class="manual-actions">
-        <span class="manual-hint">用于填补录制缺失的时段，会计入当日工时</span>
+        <span class="manual-hint">最小 15 分钟，按 15 分钟一档对齐，会计入当日工时</span>
         <button class="btn btn-ghost btn-sm" @click="manualOpen = false">取消</button>
         <button class="btn btn-primary btn-sm" :disabled="savingManual" @click="submitManual">
           {{ savingManual ? '保存中' : '保存' }}
@@ -71,70 +101,208 @@
       </div>
     </div>
 
-    <!-- 会话视图 -->
-    <div v-if="mode === 'sessions'" class="tl-list">
-      <template v-if="sessions.length">
-        <div
-          v-for="(s, i) in sessions"
-          :key="i"
-          class="tl-row"
-          :class="{ 'is-focus': highlightIndex === i }"
-          :data-idx="i"
-        >
-          <div class="tl-time">
-            <span class="tl-start">{{ hm(s.start) }}</span>
-            <span class="tl-end">{{ hm(s.end) }}</span>
-          </div>
-          <div class="tl-axis">
-            <span class="tl-node" :style="{ background: colorOf(s.category) }"></span>
-            <span v-if="i < sessions.length - 1" class="tl-line"></span>
-          </div>
-          <div class="tl-body">
-            <div class="tl-head">
-              <span class="tl-app">{{ s.app }}</span>
-              <span class="tl-dur">{{ fmt(s.durationMs) }}</span>
-            </div>
-            <div class="tl-meta">
-              <span class="cat-chip" :style="{ color: colorOf(s.category), background: softColor(s.category) }">
-                {{ s.category }}
-              </span>
-              <span v-if="s.manual" class="tl-manual">手工</span>
-              <span v-if="s.uncertain" class="tl-warn" title="该段存在数据空档，时长可能不准">
-                <Icon name="alert" :size="10" /> 不确定
-              </span>
-            </div>
-            <div v-if="s.titles && s.titles.length" class="tl-titles">
-              {{ s.titles.join(' · ') }}
-            </div>
-          </div>
+    <!-- 记录层：原始采样，只读 -->
+    <div v-if="layerMode === 'record'" class="record-layer">
+      <div class="rl-head">
+        <Icon name="shield" :size="12" />
+        <span>记录层 · {{ rawRows.length }} 条原始采样</span>
+        <em>只读：这是事实，能看不能改</em>
+      </div>
+      <div v-if="!rawRows.length" class="empty">
+        <span class="empty-title">这一天没有自动录制</span>
+        <span class="empty-desc">只有你补记或导入的标注，切回展示层查看</span>
+      </div>
+      <div v-else class="rl-list">
+        <div v-for="(r, i) in rawRows" :key="i" class="rl-row">
+          <span class="rl-time">{{ clock(minOfDay(r.timestamp)) }}</span>
+          <span class="rl-app">{{ r.processName || r.app || '—' }}</span>
+          <span class="rl-title" :title="r.windowTitle || r.title">{{ r.windowTitle || r.title || '(无标题)' }}</span>
+          <span class="rl-dur">{{ r.durationMs ? fmtCN(r.durationMs) : '—' }}</span>
         </div>
-      </template>
-
-      <div v-else class="empty">
-        <span class="empty-icon"><EmptyIllustration variant="timeline" :size="88" /></span>
-        <span class="empty-title">这一天还没有记录</span>
-        <span class="empty-desc">切换到有数据的日期，或保持后台记录</span>
       </div>
     </div>
 
-    <!-- 明细视图 -->
-    <div v-else class="tl-list raw">
-      <template v-if="records.length">
-        <div v-for="(r, i) in records" :key="r.id || i" class="raw-row">
-          <span class="raw-time">{{ hm(r.timestamp) }}</span>
-          <span class="raw-app">
-            {{ r.processName }}
-            <span v-if="r.source === 'manual'" class="raw-badge">手工</span>
-          </span>
-          <span class="raw-title" :title="r.windowTitle">{{ r.windowTitle || '—' }}</span>
-          <span class="raw-dur">{{ r.durationMs ? fmt(r.durationMs) : '' }}</span>
+    <template v-else>
+      <!-- 时间轴：卡片流，空闲时段显式成块 -->
+      <div v-if="mode === 'timeline'" class="tl-flow">
+        <template v-if="displayBlocks.length">
+          <div
+            v-for="(b, i) in displayBlocks"
+            :key="`${b.type}-${b.startMin}-${i}`"
+            class="tl-row"
+            :class="{ 'is-focus': highlightMin === b.startMin }"
+            :data-min="b.startMin.toFixed(2)"
+          >
+            <div class="tl-time">
+              <span class="tl-start">{{ clock(b.startMin) }}</span>
+              <span class="tl-end">{{ clock(b.endMin) }}</span>
+            </div>
+            <div class="tl-axis">
+              <span class="tl-node" :style="{ background: b.type === 'activity' ? colorOf(b.category) : 'var(--text-tertiary)' }" />
+              <span class="tl-line" />
+            </div>
+
+            <!-- 活动卡片 -->
+            <div
+              v-if="b.type === 'activity'"
+              class="tl-card"
+              :style="{ borderLeftColor: colorOf(b.category), background: cardBg(b.category) }"
+              @click="openSegment(b, $event)"
+            >
+              <div class="card-top">
+                <span class="card-badge" :style="{ color: colorOf(b.category), background: softColor(b.category, 0.22) }">
+                  <Icon :name="iconOf(b.category)" :size="13" />
+                </span>
+                <span class="card-app" :title="cardTitle(b)">{{ cardTitle(b) }}</span>
+                <span class="card-dur"><Icon name="clock" :size="11" /> {{ fmtCN(b.durationMs) }}</span>
+                <button class="card-more" title="编辑这一段" @click.stop="openSegment(b, $event)">⋯</button>
+              </div>
+              <div v-if="cardNote(b)" class="card-note" :title="cardNote(b)">{{ cardNote(b) }}</div>
+              <div class="card-meta">
+                <span class="cat-chip" :style="{ color: colorOf(b.category), background: softColor(b.category) }">
+                  {{ b.category || '其他' }}
+                </span>
+                <span v-if="b.tag" class="mini-tag focus">{{ b.tag }}</span>
+                <span v-else-if="b.manual" class="mini-tag">标注</span>
+                <span v-if="b.uncertain" class="mini-tag warn" title="该段存在数据空档，时长可能不准">
+                  <Icon name="alert" :size="10" /> 不确定
+                </span>
+              </div>
+            </div>
+
+            <!-- 空闲卡片 -->
+            <div v-else class="tl-card is-gap">
+              <span class="gap-mark">?</span>
+              <span class="gap-label">空闲：{{ fmtCN(b.durationMin * 60000) }}</span>
+              <span class="gap-hint">未记录</span>
+              <button class="gap-add" title="补记这段时间在做什么" @click="openManualFor(b)">
+                <Icon name="plus" :size="13" />
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <div v-else class="empty">
+          <span class="empty-icon"><EmptyIllustration variant="timeline" :size="88" /></span>
+          <span class="empty-title">这一天还没有记录</span>
+          <span class="empty-desc">切换到有数据的日期，或点击右下角 + 手工补记</span>
         </div>
-      </template>
-      <div v-else class="empty">
-        <span class="empty-icon"><EmptyIllustration variant="search" :size="88" /></span>
-        <span class="empty-title">没有明细</span>
       </div>
-    </div>
+
+      <!-- 日历：列数随窗口宽度自适应（窄=1 天 / 中=3 天 / 宽=7 天） -->
+      <div v-else class="cal-view">
+        <div class="cal-head">
+          <span>{{ calLabel }}</span>
+          <em v-if="calLoading">加载中…</em>
+          <span class="cal-span">{{ calSpan }} 天视图</span>
+          <span class="cal-tip">空白处按住拖 = 划一段时间；点色块 = 编辑；右键 = 更多</span>
+        </div>
+
+        <div class="cal-scroll" ref="calScroll">
+        <div class="cal-grid" :style="{ '--cols': calDays.length }">
+          <!-- 左侧统一的时间刻度 -->
+          <div class="cal-ruler">
+            <span
+              v-for="h in 25"
+              :key="'r' + h"
+              class="cal-tick"
+              :style="{ top: ((h - 1) / 24 * 100) + '%' }"
+            >{{ pad(h - 1) }}</span>
+          </div>
+
+          <div
+            v-for="d in calDays"
+            :key="d.date"
+            class="cal-col"
+            :class="{ 'is-current': d.date === selectedDate }"
+          >
+            <button class="cal-day" @click="$emit('update:selectedDate', d.date)">
+              <b>{{ d.label }}</b>
+              <span>{{ d.num }}</span>
+              <em v-if="d.total">{{ d.total }}h</em>
+            </button>
+
+            <div
+              class="cal-track"
+              :data-date="d.date"
+              @pointerdown.self="startDraft($event, d.date)"
+              @contextmenu.prevent
+            >
+              <div
+                v-for="(b, i) in d.blocks"
+                :key="i"
+                class="cal-block"
+                :class="{
+                  'is-selected': selectedBlock && selectedBlock.key === b.key,
+                  'is-manual': b.manual,
+                  'is-dim': dragState && dragState.block && dragState.block.key === b.key && dragState.moved,
+                  'is-thin': b.height < 1.8
+                }"
+                :style="{ top: b.top + '%', height: `calc(${b.height}% - 3px)`, background: colorOf(b.category) }"
+                :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${b.category}${b.manual ? ' · 标注' : ''}`"
+                @pointerdown.stop="startBlockDrag($event, d.date, b)"
+                @contextmenu.prevent.stop="openCtx($event, d.date, b)"
+              >
+                <span class="cal-block-title">{{ blockLabel(b) }}</span>
+                <span v-if="blockSub(b) && b.height >= 6" class="cal-block-note">{{ blockSub(b) }}</span>
+                <span class="cal-resize" @pointerdown.stop="startResize($event, d.date, b)" />
+              </div>
+
+              <!-- 拖拽/新建时的预览块：位置、时长都看得见 -->
+              <div
+                v-if="ghost && ghost.date === d.date"
+                class="cal-ghost"
+                :class="{ 'is-new': ghost.isNew }"
+                :style="{ top: ghost.top + '%', height: ghost.height + '%' }"
+              >
+                <span class="ghost-label">{{ ghost.label }}</span>
+              </div>
+
+              <div v-if="d.date === todayStr" class="cal-now" :style="{ top: nowPercent + '%' }" />
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 悬浮补记按钮 -->
+    <button class="fab" title="手工补记" @click="toggleManual">
+      <Icon name="plus" :size="20" />
+    </button>
+
+    <!-- 右键菜单 -->
+    <transition name="ctx-fade">
+      <div
+        v-if="ctxMenu"
+        class="ctx-menu"
+        :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+        @pointerdown.stop
+      >
+        <button @click="ctxDo('edit')">编辑</button>
+        <button @click="ctxDo('copy')">复制这一段时间</button>
+        <button
+          v-if="ctxMenu.block.manual"
+          class="danger"
+          @click="ctxDo('delete')"
+        >删除这一段</button>
+        <i class="ctx-sep" />
+        <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ ctxMenu.block.category }}</span>
+      </div>
+    </transition>
+
+    <!-- 统一的分段编辑器：贴着被点的那个块弹出 -->
+    <SegmentEditor
+      :open="editorOpen"
+      :anchor="editorAnchor"
+      :initial="editorForm"
+      :categories="categories"
+      :deletable="editorDeletable"
+      :saving="editSaving"
+      @save="saveSegment"
+      @delete="deleteSegment"
+      @close="closeSegment"
+    />
   </div>
 </template>
 
@@ -142,13 +310,43 @@
 import Icon from '../components/Icon.vue';
 import DateNav from '../components/DateNav.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
+import SegmentEditor from '../components/SegmentEditor.vue';
 import { colorForCategory } from '../styles/palette.js';
 
 const { ipcRenderer } = require('electron');
 
+/** 小于这个分钟数的缝隙不单独画空闲块，避免碎片刷屏 */
+const GAP_MIN = 5;
+const HOUR_PX = 44;
+const PX_PER_MIN = HOUR_PX / 60;
+
+const CAT_ICONS = {
+  // 展示分组（日历/时间轴用）
+  '工作': 'grid',
+  '学习': 'chart',
+  '生活': 'home',
+  '娱乐': 'play',
+  '睡眠': 'moon',
+  '专注': 'target',
+  '其他': 'search',
+  '沟通协作': 'plug',
+  'AI 助手': 'cpu',
+  '开发编码': 'terminal',
+  '文档写作': 'grid',
+  '任务与效率': 'target',
+  '浏览检索': 'search',
+  '影音娱乐': 'play',
+  '文件系统': 'folder',
+  '系统工具': 'settings',
+  '生活事务': 'home',
+  '睡眠': 'moon',
+  '空档': 'pause',
+  '其他': 'activity'
+};
+
 export default {
   name: 'TimelineView',
-  components: { Icon, DateNav, EmptyIllustration },
+  components: { Icon, DateNav, EmptyIllustration, SegmentEditor },
   props: {
     report: { type: Object, required: true },
     activities: { type: Array, default: () => [] },
@@ -161,8 +359,36 @@ export default {
     'manual-error', 'focus-consumed', 'focus-missed'],
   data() {
     return {
-      highlightIndex: -1,
-      mode: 'sessions',
+      HOUR_PX,
+      PX_PER_MIN,
+      mode: 'timeline',
+      // 时间轴分两层：展示层（会话/标注，可改可删）/ 记录层（原始采样，只读）
+      layerMode: 'display',
+      menuOpen: false,
+      sortDesc: true,
+      viewOptions: [
+        { id: 'timeline', label: '时间轴' },
+        { id: 'calendar', label: '日历' }
+      ],
+      // 日历显示几天，由窗口宽度决定：窄窗口看一天，拉宽看三天，全屏看一周
+      windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
+      calDays: [],
+      calLoading: false,
+      selectedBlock: null,
+      clipBlock: null,
+      // 拖动/新建过程中的预览块
+      ghost: null,
+      dragState: null,
+      // 右键菜单
+      ctxMenu: null,
+      // 统一的分段编辑器（贴近被点的块弹出）
+      editorOpen: false,
+      editorAnchor: null,
+      editorDeletable: false,
+      editorTarget: null,
+      editorForm: { range: '', startTime: '00:00', durationMin: 15, app: '', category: '其他', note: '' },
+      editSaving: false,
+      highlightMin: null,
       manualOpen: false,
       manualTime: '09:00',
       manualDuration: 30,
@@ -170,65 +396,832 @@ export default {
       manualTitle: '',
       manualCategory: '沟通协作',
       savingManual: false,
-      categories: ['沟通协作', '文档写作', '开发编码', 'AI 助手', '任务与效率', '浏览检索', '影音娱乐', '文件系统', '其他']
+      // 记录只需要一眼选中的 7 个分组（细分分类仍由后端自动推断）
+      categories: ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'],
+      tick: 0,
+      timer: null
     };
   },
+  watch: {
+    mode(val) {
+      if (val === 'calendar') this.loadCalendar();
+    },
+    selectedDate() {
+      if (this.mode === 'calendar') this.loadCalendar();
+    },
+    // 拉宽/收窄窗口时自动切换 日 / 三日 / 周
+    windowWidth() {
+      if (this.mode === 'calendar') this.loadCalendar();
+    }
+  },
   computed: {
-    sessions() {
-      return (this.report && this.report.sessions) || [];
+    todayStr() {
+      const n = new Date();
+      return `${n.getFullYear()}-${this.pad(n.getMonth() + 1)}-${this.pad(n.getDate())}`;
+    },
+    /** 当前时刻在一天里的百分比（日历里的红线） */
+    nowPercent() {
+      void this.tick;
+      const n = new Date();
+      return ((n.getHours() * 60 + n.getMinutes()) / 1440) * 100;
+    },
+    /** 日历列数：窗口越宽看得越远 */
+    calSpan() {
+      const w = this.windowWidth;
+      // 阈值按「每列至少 320px」推：再窄就少显示几天，保证块里的字读得清
+      if (w < 700) return 1;
+      if (w < 1420) return 3;
+      return 7;
+    },
+    calLabel() {
+      if (this.calSpan === 1) return this.dateLabel;
+      if (!this.calDays.length) return '';
+      const a = this.calDays[0];
+      const b = this.calDays[this.calDays.length - 1];
+      return `${a.date.slice(5)} ~ ${b.date.slice(5)}`;
+    },
+    /** 记录层原始采样：只含自动录制的部分，不含补记与导入的标注 */
+    rawRows() {
+      const list = (this.activities || []).filter(a => a && a.timestamp);
+      return list
+        .filter(a => a.source === 'auto')
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    },
+    viewLabel() {
+      const hit = this.viewOptions.find(o => o.id === this.mode);
+      return hit ? hit.label : '时间轴';
+    },
+    stats() {
+      return (this.report && this.report.stats) || {};
+    },
+    trackedMs() {
+      return this.stats.trackedMs || 0;
+    },
+    /** 段数 = 展示层合并后的段数，不是原始采样条数（否则会显示几十上百段） */
+    sessionCount() {
+      return this.blocks.filter(b => b.type === 'activity').length;
     },
     records() {
       return this.activities || [];
+    },
+    dayStartMs() {
+      const [y, m, d] = this.selectedDate.split('-').map(Number);
+      return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0).getTime();
+    },
+    /**
+     * 把 sessions 摊到 0–1440 分钟，并在中间插入「空闲」块。
+     * 这是全部视图共用的唯一数据源：既保证卡片流和日视图一致，
+     * 也让「空白的时候」第一次成为可见、可补记的实体。
+     */
+    dayEndMin() {
+      return this.isToday ? Math.max(1, Math.min(1440, this.nowMin)) : 1440;
+    },
+    /**
+     * 展示层的时间轴：以 15 分钟格为最小单位。
+     *
+     * 记录层里一分钟可能切了三次窗口，直接画会得到一堆 0～3 分钟的碎片
+     * （11-07 就是 71 段，看起来像「全是空的」）。展示层按 15 分钟归并：
+     * 相邻同分类、同应用的格合成一段，一段就是「这段时间主要在做什么」。
+     */
+    /**
+     * 展示层的时间轴：以 15 分钟格为最小单位。
+     *
+     * 记录层里一分钟可能切了三次窗口，直接画会得到一堆 0～3 分钟的碎片。
+     * 展示层按 15 分钟归并：相邻同分类的格合成一段，一段就是「这段时间主要在做什么」。
+     * 专注也走同一条路——它已经作为一条原子事件参与过优先级消解，落进 slot 里，
+     * 所以这里不再单独插块，避免和自动录制重复。
+     */
+    blocks() {
+      const slots = (this.report && this.report.slots) || [];
+      if (!slots.length) return [];
+
+      const acts = [];
+      for (const slot of slots) {
+        if (!slot.filledMin || !slot.category) continue;
+        const startMin = slot.startMin;
+        const endMin = Math.min(1440, startMin + 15);
+        const last = acts[acts.length - 1];
+        if (last && last.category === slot.category && last.endMin === startMin) {
+          if ((slot.filledMin || 0) > (last.appMin || 0)) {
+            last.app = slot.app || last.app;
+            last.appMin = slot.filledMin || 0;
+          }
+          if (slot.note && !last.titles.includes(slot.note)) last.titles.push(slot.note);
+          if (slot.focusId && !last.focusId) last.focusId = slot.focusId;
+          last.endMin = endMin;
+          last.durationMin = endMin - last.startMin;
+          last.durationMs = (last.endMin - last.startMin) * 60000;
+          last.slotCount += 1;
+          last.purity = Math.min(last.purity, slot.purity);
+          continue;
+        }
+        acts.push({
+          type: 'activity',
+          key: `${startMin}-${slot.category}`,
+          startMin,
+          endMin,
+          durationMin: endMin - startMin,
+          durationMs: (endMin - startMin) * 60000,
+          app: slot.app || slot.category,
+          category: slot.category,
+          titles: slot.note ? [slot.note] : [],
+          manual: slot.layer === 'manual' || slot.layer === 'imported',
+          uncertain: slot.purity > 0 && slot.purity < 0.6,
+          purity: slot.purity,
+          slotCount: 1,
+          appMin: slot.filledMin || 0,
+          focusId: slot.layer === 'focus' ? (slot.focusId || null) : null,
+          tag: slot.layer === 'focus' ? '专注' : null
+        });
+      }
+
+      if (!acts.length) return [];
+      acts.sort((x, y) => x.startMin - y.startMin || y.durationMs - x.durationMs);
+
+      const dayEndMin = this.dayEndMin;
+      const out = [];
+      let cursor = 0;
+      for (const a of acts) {
+        if (a.startMin - cursor >= GAP_MIN) {
+          out.push({ type: 'gap', startMin: cursor, endMin: a.startMin,
+            durationMin: a.startMin - cursor });
+        }
+        out.push(a);
+        cursor = Math.max(cursor, a.endMin);
+      }
+      if (dayEndMin - cursor >= GAP_MIN) {
+        out.push({ type: 'gap', startMin: cursor, endMin: dayEndMin,
+          durationMin: dayEndMin - cursor });
+      }
+      return out;
+    },
+
+    displayBlocks() {
+      return this.sortDesc ? [...this.blocks].reverse() : this.blocks;
+    },
+    gapTotalMs() {
+      return this.blocks
+        .filter(b => b.type === 'gap')
+        .reduce((sum, b) => sum + b.durationMin * 60000, 0);
+    },
+    coveragePct() {
+      // 用 trackedMs（已排除生活事务）除以已过去的时间，避免把吃饭睡觉算进覆盖率
+      return Math.min(100, Math.round(this.trackedMs / Math.max(1, this.dayEndMin * 60000) * 100));
+    },
+    dateLabel() {
+      const [y, m, d] = this.selectedDate.split('-').map(Number);
+      const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      const day = new Date(y, (m || 1) - 1, d || 1).getDay();
+      return `${this.pad(m)}月${this.pad(d)}日 ${wd[day]}`;
+    },
+    isToday() {
+      const now = new Date();
+      const s = `${now.getFullYear()}-${this.pad(now.getMonth() + 1)}-${this.pad(now.getDate())}`;
+      return s === this.selectedDate;
+    },
+    nowMin() {
+      void this.tick;
+      const d = new Date();
+      return d.getHours() * 60 + d.getMinutes();
+    },
+    futureStyle() {
+      return {
+        top: (this.dayEndMin * PX_PER_MIN) + 'px',
+        height: Math.max(0, (1440 - this.dayEndMin) * PX_PER_MIN) + 'px'
+      };
     }
   },
-  // 四个视图用 v-if 渲染且无 keep-alive，切进来必然是新实例，挂载后定位即可
   mounted() {
+    this.timer = setInterval(() => { this.tick += 1; }, 60000);
+    document.addEventListener('click', this.closeMenu);
+    this._onResize = () => { this.windowWidth = window.innerWidth; };
+    this._onDocDown = () => { if (this.ctxMenu) this.ctxMenu = null; };
+    document.addEventListener('pointerdown', this._onDocDown, true);
+    this._onKey = (e) => {
+      if (e.key === 'Escape' && this.ctxMenu) { this.ctxMenu = null; return; }
+      if (!this.selectedBlock) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === 'c') {
+        this.clipBlock = { ...this.selectedBlock };
+        this.$emit('manual-error', '已复制这一段，切到目标日期后 Ctrl+V 粘贴');
+      } else if (e.key === 'v') {
+        this.pasteBlock();
+      }
+    };
+    window.addEventListener('resize', this._onResize);
+    window.addEventListener('keydown', this._onKey);
     this.$nextTick(() => this.consumeFocus());
   },
   beforeUnmount() {
+    document.removeEventListener('click', this.closeMenu);
+    window.removeEventListener('resize', this._onResize);
+    if (this._onDocDown) document.removeEventListener('pointerdown', this._onDocDown, true);
+    window.removeEventListener('keydown', this._onKey);
+    if (this.timer) clearInterval(this.timer);
     if (this._focusTimer) clearTimeout(this._focusTimer);
   },
   methods: {
-    consumeFocus() {
-      const t = this.focusTarget;
-      // 先让 App 清空目标，否则之后从导航进入时间线会重复滚动
-      this.$emit('focus-consumed');
-      if (!t) return;
+    pad(n) {
+      return String(n).padStart(2, '0');
+    },
+    toMin(iso) {
+      if (!iso) return 0;
+      const ms = new Date(iso).getTime();
+      if (Number.isNaN(ms)) return 0;
+      return Math.max(0, Math.min(1440, (ms - this.dayStartMs) / 60000));
+    },
+    /**
+     * 点开一段进行修改。
+     *
+     * 展示层的修改不是去动记录层，而是新写一条「标注」，覆盖这一段时间。
+     * 标注优先级高于自动录制，所以保存后这一段就变成你写的样子；
+     * 原始采样原封不动留在记录层。
+     */
+    /** 删除 = 删掉这段的标注；没有标注说明它来自记录层，会明确拒绝 */
+    async removeBlock(b) {
+      if (!b || b.type !== 'activity') return;
+      const date = b.date || this.selectedDate;
 
-      const sessions = this.sessions;
-      if (!sessions.length) {
-        this.scrollTop();
-        this.$emit('focus-missed');
+      if (b.isNew) { this.closeSegment(); return; }   // 还没落库，不用删
+
+      // 专注不是活动记录，它在 arhat/sessions 里，得用另一个接口删
+      if (b.focusId) {
+        const res = await ipcRenderer.invoke('delete-focus-session', { date, id: b.focusId });
+        if (!res || !res.success) {
+          this.$emit('manual-error', (res && res.error) || '删除专注失败');
+          return;
+        }
+        this.$emit('refresh');
+        if (this.mode === 'calendar') await this.loadCalendar();
         return;
       }
+
+      const toIso = (min) => {
+        const d = new Date(`${date}T00:00:00`);
+        d.setMinutes(min);
+        return d.toISOString();
+      };
+      const res = await ipcRenderer.invoke('delete-display-range', {
+        date,
+        start: toIso(b.startMin),
+        end: toIso(b.endMin)
+      });
+      if (!res || !res.success) {
+        this.$emit('manual-error', (res && res.error) || '这一段没有可删的标注');
+        return;
+      }
+      this.$emit('refresh');
+    },
+    /** 日历：按当前窗口宽度拉 1 / 3 / 7 天 */
+    async loadCalendar() {
+      this.calLoading = true;
+      try {
+        const span = this.calSpan;
+        const base = new Date(`${this.selectedDate}T00:00:00`);
+        const start = new Date(base);
+        if (span === 3) start.setDate(base.getDate() - 1);
+        if (span === 7) start.setDate(base.getDate() - ((base.getDay() + 6) % 7));
+
+        const rows = [];
+        for (let i = 0; i < span; i += 1) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          const date = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`;
+          let report = null;
+          try {
+            const res = await ipcRenderer.invoke('get-day-analytics', date);
+            report = res && res.ok ? res.report : null;
+          } catch (e) { /* 单天失败不影响整体 */ }
+          rows.push(this.buildCalDay(date, d, report));
+        }
+        this.calDays = rows;
+        await this.$nextTick();
+        this.scrollCalTo();
+      } finally {
+        this.calLoading = false;
+      }
+    },
+
+    /** 打开日历时滚到「有意义的位置」：今天滚到当前时刻，其它天滚到早上 */
+    scrollCalTo() {
+      const el = this.$refs.calScroll;
+      if (!el) return;
+      const hourH = 54;
+      const isToday = this.calDays.some(d => d.date === this.todayStr);
+      const focusHour = isToday ? new Date().getHours() : 8;
+      el.scrollTop = Math.max(0, (focusHour - 1) * hourH);
+    },
+    buildCalDay(date, d, report) {
+      const slots = (report && report.slots) || [];
+      const merged = [];
+      for (const slot of slots) {
+        if (!slot.filledMin || !slot.category) continue;
+        const last = merged[merged.length - 1];
+        if (last && last.category === slot.category && last.endMin === slot.startMin) {
+          last.endMin = slot.startMin + 15;
+          last.minutes += slot.filledMin;
+          if (slot.note && !last.notes.includes(slot.note)) last.notes.push(slot.note);
+          if (slot.focusId && !last.focusId) last.focusId = slot.focusId;
+        } else {
+          merged.push({
+            category: slot.category,
+            app: slot.app,
+            startMin: slot.startMin,
+            endMin: slot.startMin + 15,
+            minutes: slot.filledMin,
+            notes: slot.note ? [slot.note] : [],
+            focusId: slot.focusId || null,
+            manual: slot.layer !== 'auto'
+          });
+        }
+      }
+      const wd = ['日', '一', '二', '三', '四', '五', '六'];
+      const blocks = merged.map(m => ({
+        key: `${date}#${m.startMin}`,
+        date,
+        startMin: m.startMin,
+        endMin: m.endMin,
+        app: m.app,
+        category: m.category,
+        note: (m.notes || []).join(' · ').slice(0, 80),
+        focusId: m.focusId || null,
+        manual: m.manual,
+        top: +((m.startMin / 1440) * 100).toFixed(2),
+        height: +Math.max(0.7, ((m.endMin - m.startMin) / 1440) * 100).toFixed(2)
+      }));
+      const total = merged.reduce((n, m) => n + m.minutes, 0) / 60;
+      return {
+        date,
+        label: `周${wd[d.getDay()]}`,
+        num: d.getDate(),
+        blocks,
+        total: Math.round(total * 10) / 10
+      };
+    },
+
+    /** 时间轴卡片标题：优先应用名，应用名无意义时退回「做了什么」 */
+    cardTitle(b) {
+      const app = (b.app || '').trim();
+      const note = this.cleanNote(this.noteOf(b));
+      if (app && !['记录', '标注', '手工记录', 'unknown'].includes(app)) return app;
+      return note || b.category || '其他';
+    },
+    cardNote(b) {
+      const app = (b.app || '').trim();
+      const note = this.cleanNote(this.noteOf(b));
+      // 标题已经用了 note 时，不再重复显示一行
+      if (!app || ['记录', '标注', '手工记录', 'unknown'].includes(app)) return '';
+      return note;
+    },
+
+    /**
+     * 块上的主标题：优先「做了什么」，其次才是应用/来源。
+     * 导入记录常带「工作-上班 …」这种前缀，显示前把与分类重复的开头去掉。
+     */
+    blockLabel(b) {
+      const note = this.cleanNote(b.note);
+      if (note) return note;
+      const app = (b.app || '').trim();
+      if (app && !['记录', '标注', '手工记录', 'unknown'].includes(app)) return app;
+      return b.category || '其他';
+    },
+    blockSub(b) {
+      // 一天/三天视图里才显示来源，七天视图太窄
+      if (this.calSpan > 3) return '';
+      const app = (b.app || '').trim();
+      if (!app || ['记录', '标注', '手工记录'].includes(app)) return '';
+      // 导入记录常是「运动-跑步」，标题里已经去掉前缀，这里再显示就重复了
+      if ((b.note || '').startsWith(`${app}-`)) return '';
+      if (['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'].includes(app)) return '';
+      return app;
+    },
+    cleanNote(note) {
+      if (!note) return '';
+      // 「工作-上班 做下计划」→「上班 做下计划」（前缀已由颜色表达）
+      return String(note).replace(/^[^-]{1,4}-\s*/, '').trim();
+    },
+
+    /** 把鼠标位置换算成 15 分钟刻度 */
+    minuteAt(trackEl, clientY) {
+      const rect = trackEl.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      return Math.max(0, Math.min(1440, Math.round((ratio * 1440) / 15) * 15));
+    },
+    /** 预览块的几何信息（top/height 用百分比，和真实块同一套坐标） */
+    ghostOf(date, startMin, endMin, isNew) {
+      const a = Math.max(0, Math.min(startMin, endMin));
+      const b = Math.min(1440, Math.max(startMin, endMin));
+      return {
+        date,
+        startMin: a,
+        endMin: b,
+        top: (a / 1440) * 100,
+        height: Math.max(0.5, ((b - a) / 1440) * 100),
+        label: `${this.clock(a)} – ${this.clock(b)} · ${b - a} 分钟`,
+        isNew
+      };
+    },
+
+    /**
+     * 空白处按住拖动 = 划一段时间，松开后打开编辑器让你填内容。
+     * 只单击不拖动不会创建任何东西——新建必须先经过编辑器确认。
+     */
+    startDraft(e, date) {
+      if (e.button !== 0) return;
+      const track = e.currentTarget;
+      const trackRect = track.getBoundingClientRect();
+      const anchor = this.minuteAt(track, e.clientY);
+      let current = anchor;
+      let moved = false;
+      this.closeCtx();
+      this.selectedBlock = null;
+
+      const onMove = (ev) => {
+        current = this.minuteAt(track, ev.clientY);
+        if (Math.abs(current - anchor) >= 15) moved = true;
+        if (!moved) return;
+        const a = Math.min(anchor, current);
+        const b = Math.max(anchor, current);
+        this.ghost = this.ghostOf(date, a, Math.max(b, a + 15), true);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        const g = this.ghost;
+        this.ghost = null;
+        if (!moved || !g) return;      // 只是点了一下：什么都不做
+        // 用「刚划出来的那一段」作为锚点，浮层就会贴在那儿
+        const anchorRect = {
+          top: trackRect.top + (g.startMin / 1440) * trackRect.height,
+          left: trackRect.left,
+          width: trackRect.width,
+          height: Math.max(16, ((g.endMin - g.startMin) / 1440) * trackRect.height)
+        };
+        anchorRect.bottom = anchorRect.top + anchorRect.height;
+        this.openSegment({
+          type: 'activity',
+          key: `new-${date}-${g.startMin}`,
+          date,
+          isNew: true,
+          startMin: g.startMin,
+          endMin: g.endMin,
+          durationMin: g.endMin - g.startMin,
+          durationMs: (g.endMin - g.startMin) * 60000,
+          app: '',
+          category: '工作',
+          titles: [],
+          manual: true,
+          focusId: null
+        }, { currentTarget: null, _rect: anchorRect });
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+
+    /**
+     * 拖动色块。
+     * 走动时给出预览块（位置 + 时长都可见），松手才落库；
+     * 只在原地松手（没动）才算「点击 = 编辑」。
+     */
+    startBlockDrag(e, date, b) {
+      if (e.button !== 0) return;
+      const el = e.currentTarget;
+      const track = el.parentElement;
+      const grabY = e.clientY;
+      const originStart = b.startMin;
+      const dur = Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15);
+      let moved = false;
+      let targetStart = originStart;
+      this.closeCtx();
+
+      this.selectedBlock = {
+        key: b.key, date, app: b.app, category: b.category,
+        startMin: b.startMin, durationMin: dur,
+        range: `${this.clock(b.startMin)}-${this.clock(b.endMin)}`
+      };
+
+      const onMove = (ev) => {
+        if (!moved && Math.abs(ev.clientY - grabY) < 4) return;
+        moved = true;
+        const minute = this.minuteAt(track, ev.clientY);
+        const delta = Math.round((minute - originStart) / 15) * 15;
+        targetStart = Math.max(0, Math.min(1440 - dur, originStart + delta));
+        this.dragState = { block: b, moved: true };
+        this.ghost = this.ghostOf(date, targetStart, targetStart + dur, false);
+      };
+      const onUp = async () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        this.dragState = null;
+        this.ghost = null;
+        if (!moved) {
+          this.openSegment(this.blockOf(date, b), { currentTarget: el });
+          return;
+        }
+        if (targetStart === originStart) return;
+        if (!b.manual) {
+          this.$emit('manual-error', '这一段来自记录层，不能直接搬：点它改一次生成标注后就能拖动');
+          return;
+        }
+        await this.moveBlock(date, b, targetStart, dur);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+
+    async moveBlock(date, b, newStart, dur) {
+      const toIso = (min) => {
+        const d = new Date(`${date}T00:00:00`);
+        d.setMinutes(min);
+        return d.toISOString();
+      };
+      await ipcRenderer.invoke('delete-display-range', {
+        date, start: toIso(b.startMin), end: toIso(b.endMin)
+      });
+      await this.writeAnnotation(date, newStart, dur, b);
+    },
+
+    /** 右键菜单：和系统日历一致，编辑 / 复制 / 删除 */
+    openCtx(e, date, b) {
+      this.editorOpen = false;
+      this.ghost = null;
+      this.ctxMenu = {
+        x: Math.min(e.clientX, window.innerWidth - 168),
+        y: Math.min(e.clientY, window.innerHeight - 132),
+        date,
+        block: b
+      };
+    },
+    closeCtx() {
+      this.ctxMenu = null;
+    },
+    ctxDo(action) {
+      const menu = this.ctxMenu;
+      this.closeCtx();
+      if (!menu) return;
+      const block = this.blockOf(menu.date, menu.block);
+      if (action === 'edit') {
+        this.openSegment(block, null);
+      } else if (action === 'copy') {
+        this.copyBlock(block);
+      } else if (action === 'delete') {
+        this.removeBlock(block);
+      }
+    },
+
+    /** 把日历块转成编辑器用的对象（时间轴块与日历块字段不同） */
+    blockOf(date, b) {
+      const startMin = b.startMin;
+      const endMin = b.endMin;
+      return {
+        type: 'activity',
+        key: b.key || `${date}-${startMin}`,
+        date,
+        isNew: !!b.isNew,
+        startMin,
+        endMin,
+        durationMin: endMin - startMin,
+        durationMs: Math.max(15, endMin - startMin) * 60000,
+        app: b.app || b.category || '',
+        category: b.category || '其他',
+        titles: b.note ? [b.note] : [],
+        manual: !!b.manual,
+        focusId: b.focusId || null
+      };
+    },
+    /** 打开编辑器：浮层贴在触发块旁边，而不是整页居中弹窗 */
+    openSegment(b, ev) {
+      if (!b || b.type !== 'activity') return;
+      // 优先用整张卡片/整个色块作为锚点：贴着「这一块」弹出，而不是贴着那个小按钮
+      const el = ev && ev.currentTarget
+        ? (ev.currentTarget.closest('.tl-card, .cal-block') || ev.currentTarget)
+        : null;
+      const rect = (ev && ev._rect) || (el ? el.getBoundingClientRect() : null);
+      this.editorTarget = b;
+      this.editorAnchor = rect
+        ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom }
+        : null;
+      // 新建的块还不能删；其余能删的前提是它来自标注层/专注
+      this.editorDeletable = !b.isNew && !!(b.manual || b.focusId);
+      this.editorTarget = { ...b, date: b.date || this.selectedDate };
+      this.editorForm = {
+        range: `${this.clock(b.startMin)} – ${this.clock(b.endMin)}`,
+        startTime: this.clock(b.startMin),
+        durationMin: Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15),
+        app: b.app || '',
+        category: b.category || '工作',
+        note: this.noteOf(b) || ''
+      };
+      this.editorOpen = true;
+    },
+    closeSegment() {
+      this.editorOpen = false;
+      this.editorTarget = null;
+    },
+    /** 保存 = 写一条人工标注覆盖这段（优先级最高） */
+    async saveSegment(payload) {
+      if (this.editSaving) return;
+      this.editSaving = true;
+      try {
+        const b = this.editorTarget || {};
+        // 块属于哪一天就用哪一天：日历会同时显示好几天，不能用「当前选中日期」
+        const date = b.date || this.selectedDate;
+        // 编辑已有的一段：先把这段的旧标注清掉，否则会留下「同区间两条标注」，
+        // 一条改成新内容、另一条还挂着旧内容。
+        if (b.startMin !== undefined && b.manual && !b.isNew) {
+          const toIso = (min) => {
+            const d = new Date(`${date}T00:00:00`);
+            d.setMinutes(min);
+            return d.toISOString();
+          };
+          await ipcRenderer.invoke('delete-display-range', {
+            date,
+            start: toIso(b.startMin),
+            end: toIso(b.endMin)
+          });
+        }
+        const res = await ipcRenderer.invoke('add-manual-record', {
+          date,
+          startTime: payload.startTime,
+          durationMin: payload.durationMin,
+          app: payload.app,
+          title: payload.note,
+          category: payload.category
+        });
+        if (!res || !res.ok) {
+          this.$emit('manual-error', (res && res.error) || '保存失败');
+          return;
+        }
+        this.closeSegment();
+        this.$emit('refresh');
+        if (this.mode === 'calendar') await this.loadCalendar();
+        void b;
+      } finally {
+        this.editSaving = false;
+      }
+    },
+    async deleteSegment() {
+      const b = this.editorTarget;
+      this.closeSegment();
+      if (b) await this.removeBlock(b);
+    },
+    copyBlock(b) {
+      this.clipBlock = {
+        key: b.key,
+        date: b.date || this.selectedDate,
+        app: b.app,
+        category: b.category,
+        startMin: b.startMin,
+        durationMin: Math.max(1, Math.round(b.durationMs / 60000)),
+        range: `${this.clock(b.startMin)}-${this.clock(b.endMin)}`
+      };
+      this.$emit('manual-error', '已复制这一段，切到目标日期后按 Ctrl+V 粘贴');
+    },
+    /** 拖底边改时长：同样先出预览，松手才写 */
+    startResize(e, date, b) {
+      if (e.button !== 0) return;
+      const el = e.currentTarget.parentElement;
+      const track = el.parentElement;
+      const grabY = e.clientY;
+      const baseDur = Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15);
+      const maxDur = 1440 - b.startMin;
+      let newDur = baseDur;
+      let moved = false;
+      this.closeCtx();
+
+      const onMove = (ev) => {
+        if (!moved && Math.abs(ev.clientY - grabY) < 3) return;
+        moved = true;
+        const minute = this.minuteAt(track, ev.clientY);
+        newDur = Math.max(15, Math.min(maxDur, Math.round((minute - b.startMin) / 15) * 15));
+        this.dragState = { block: b, moved: true };
+        this.ghost = this.ghostOf(date, b.startMin, b.startMin + newDur, false);
+      };
+      const onUp = async () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        this.dragState = null;
+        this.ghost = null;
+        if (!moved || newDur === baseDur) return;
+        await this.writeAnnotation(date, b.startMin, newDur, b);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+
+    /** 写一条标注覆盖 [startMin, startMin+durationMin)，先清掉同区间的旧标注 */
+    async writeAnnotation(date, startMin, durationMin, b) {
+      const toIso = (min) => {
+        const d = new Date(`${date}T00:00:00`);
+        d.setMinutes(min);
+        return d.toISOString();
+      };
+      await ipcRenderer.invoke('delete-display-range', {
+        date, start: toIso(startMin), end: toIso(startMin + durationMin)
+      });
+      await ipcRenderer.invoke('add-manual-record', {
+        date,
+        startTime: this.clock(startMin),
+        durationMin,
+        app: b.app || '标注',
+        title: '',
+        category: b.category
+      });
+      this.$emit('refresh');
+      await this.loadCalendar();
+    },
+
+    async pasteBlock() {
+      if (!this.clipBlock) return;
+      const c = this.clipBlock;
+      await ipcRenderer.invoke('add-manual-record', {
+        date: this.selectedDate,
+        startTime: this.clock(c.startMin),
+        durationMin: c.durationMin,
+        app: c.app || '标注',
+        title: '',
+        category: c.category
+      });
+      this.$emit('refresh');
+      if (this.mode === 'calendar') this.loadCalendar();
+    },
+
+    minOfDay(ts) {
+      const d = new Date(ts);
+      return d.getHours() * 60 + d.getMinutes();
+    },
+    clock(min) {
+      const m = Math.max(0, Math.min(1440, Math.round(min)));
+      return `${this.pad(Math.floor(m / 60))}:${this.pad(m % 60)}`;
+    },
+    closeMenu() {
+      this.menuOpen = false;
+    },
+    setMode(id) {
+      this.mode = id;
+      this.menuOpen = false;
+    },
+    iconOf(cat) {
+      return CAT_ICONS[cat] || 'activity';
+    },
+    colorOf(name) {
+      return colorForCategory(this.theme, name);
+    },
+    softColor(name, alpha) {
+      const hex = this.colorOf(name);
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha || 0.14})`;
+    },
+    cardBg(cat) {
+      return this.softColor(cat, 0.07);
+    },
+    noteOf(b) {
+      if (b.titles && b.titles.length) return b.titles.join(' · ');
+      return b.category || '—';
+    },
+    segStyle(b) {
+      const style = {
+        top: (b.startMin * PX_PER_MIN) + 'px',
+        height: Math.max(3, b.durationMin * PX_PER_MIN) + 'px'
+      };
+      if (b.type === 'activity') {
+        style.background = this.softColor(b.category, 0.32);
+        style.borderLeft = `3px solid ${this.colorOf(b.category)}`;
+      }
+      return style;
+    },
+    consumeFocus() {
+      const t = this.focusTarget;
+      this.$emit('focus-consumed');
+      if (!t) return;
       if (t.minutes === null || t.minutes === undefined) {
         this.scrollTop();
         return;
       }
-
-      // 命中时间落在会话区间内优先，否则取区间端点距离最近的一条
-      let best = 0;
+      this.setMode('timeline');
+      const list = this.blocks;
+      if (!list.length) {
+        this.scrollTop();
+        this.$emit('focus-missed');
+        return;
+      }
+      let best = list[0].startMin;
       let bestDist = Infinity;
-      sessions.forEach((s, i) => {
-        const a = new Date(s.start);
-        const b = new Date(s.end);
-        const sm = a.getHours() * 60 + a.getMinutes();
-        let em = b.getHours() * 60 + b.getMinutes();
-        if (em <= sm) em = sm + Math.max(1, Math.round((s.durationMs || 0) / 60000));
-        const dist = (t.minutes >= sm && t.minutes < em)
+      list.forEach(b => {
+        const dist = (t.minutes >= b.startMin && t.minutes < b.endMin)
           ? 0
-          : Math.min(Math.abs(t.minutes - sm), Math.abs(t.minutes - em));
-        if (dist < bestDist) { bestDist = dist; best = i; }
+          : Math.min(Math.abs(t.minutes - b.startMin), Math.abs(t.minutes - b.endMin));
+        if (dist < bestDist) { bestDist = dist; best = b.startMin; }
       });
-
-      this.highlightIndex = best;
-      const row = this.$el.querySelector(`.tl-row[data-idx="${best}"]`);
+      this.highlightMin = best;
+      const row = this.$el.querySelector(`.tl-row[data-min="${best.toFixed(2)}"]`);
       const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (row) row.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
       else this.scrollTop();
-
       if (this._focusTimer) clearTimeout(this._focusTimer);
-      this._focusTimer = setTimeout(() => { this.highlightIndex = -1; }, 2400);
+      this._focusTimer = setTimeout(() => { this.highlightMin = null; }, 2400);
     },
     scrollTop() {
       const sc = this.$el.closest('.content') || document.querySelector('.content');
@@ -237,13 +1230,19 @@ export default {
     toggleManual() {
       this.manualOpen = !this.manualOpen;
       if (this.manualOpen) {
-        // 默认填当前时间，向上取整到 5 分钟
         const now = new Date();
         const m = Math.floor(now.getMinutes() / 5) * 5;
-        this.manualTime = `${String(now.getHours()).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        this.manualTime = `${this.pad(now.getHours())}:${this.pad(m)}`;
+        this.$nextTick(() => this.scrollTop());
       }
     },
-
+    /** 点空闲块的 + ：把该空白段的起止时间直接带进补记表单 */
+    openManualFor(b) {
+      this.manualTime = this.clock(Math.min(1439, b.startMin));
+      this.manualDuration = Math.max(1, Math.min(1440, Math.round(b.durationMin)));
+      this.manualOpen = true;
+      this.$nextTick(() => this.scrollTop());
+    },
     async submitManual() {
       const payload = {
         date: this.selectedDate,
@@ -269,16 +1268,15 @@ export default {
         this.savingManual = false;
       }
     },
-
-    colorOf(name) {
-      return colorForCategory(this.theme, name);
-    },
-    softColor(name) {
-      const hex = this.colorOf(name);
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
-      return `rgba(${r}, ${g}, ${b}, 0.14)`;
+    fmtCN(ms) {
+      if (!ms || ms <= 0) return '0分';
+      const total = Math.round(ms / 1000);
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return m > 0 ? `${h}时${m}分` : `${h}时`;
+      if (m > 0) return s > 0 ? `${m}分${s}秒` : `${m}分`;
+      return `${s}秒`;
     },
     fmt(ms) {
       if (!ms || ms <= 0) return '0m';
@@ -293,7 +1291,7 @@ export default {
     hm(iso) {
       if (!iso) return '--:--';
       const d = new Date(iso);
-      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      return `${this.pad(d.getHours())}:${this.pad(d.getMinutes())}`;
     }
   }
 };
@@ -301,339 +1299,791 @@ export default {
 
 <style scoped>
 .timeline {
+  position: relative;
   display: flex;
   flex-direction: column;
-  padding: var(--sp-4);
   gap: var(--sp-3);
+  padding-bottom: 72px;
 }
 
 .tl-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2);
 }
 
-/* 分段控件 */
-.seg {
+/* ---------- 四格统计 ---------- */
+.stat-strip {
+  display: flex;
+  align-items: center;
+  padding: var(--sp-3) var(--sp-2);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+.stat-cell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.stat-cell b {
+  font-size: var(--fs-20);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stat-cell span {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+.stat-div {
+  width: 1px;
+  height: 28px;
+  background: var(--border-default);
+  flex: none;
+}
+
+/* ---------- 视图切换 ---------- */
+.view-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-1) 0;
+}
+.view-switch {
+  position: relative;
+  flex: none;
+}
+.view-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.view-trigger:hover { background: var(--accent-soft); }
+.view-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 168px;
+  padding: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+}
+.view-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.view-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.view-menu button.active { color: var(--accent); background: var(--accent-soft); }
+.view-date {
+  flex: 1;
+  text-align: center;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--text-tertiary);
+  letter-spacing: .02em;
+}
+.order-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 5px 9px;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+.order-btn:hover { color: var(--text-primary); border-color: var(--border-default); }
+
+/* ---------- 补记面板 ---------- */
+.manual-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-md);
+}
+.manual-fields { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.mf { display: flex; flex-direction: column; gap: 4px; min-width: 110px; }
+.mf.narrow { min-width: 88px; }
+.mf.grow { flex: 1; }
+.mf.full { width: 100%; }
+.mf > span { font-size: var(--fs-11); color: var(--text-tertiary); }
+.manual-actions { display: flex; align-items: center; gap: var(--sp-2); justify-content: flex-end; }
+.manual-hint { flex: 1; font-size: var(--fs-11); color: var(--text-tertiary); }
+
+/* ---------- 时间轴卡片流 ---------- */
+.tl-flow { display: flex; flex-direction: column; }
+.tl-row {
+  display: grid;
+  grid-template-columns: 46px 16px 1fr;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-3);
+  border-radius: var(--r-md);
+  transition: background var(--dur-2) var(--ease);
+}
+.tl-row.is-focus { background: var(--accent-soft); }
+.tl-time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  padding-top: 9px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tl-start { font-size: var(--fs-14); color: var(--text-secondary); font-weight: var(--fw-semibold); }
+.tl-end { font-size: var(--fs-11); color: var(--text-tertiary); }
+.tl-axis { display: flex; flex-direction: column; align-items: center; }
+.tl-node {
+  width: 9px;
+  height: 9px;
+  margin-top: 13px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: 0 0 0 3px var(--bg-canvas);
+}
+.tl-line { flex: 1; width: 2px; background: var(--border-default); margin-top: 4px; }
+
+.tl-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+}
+.card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.card-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  flex: none;
+}
+.card-app {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+.card-dur {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.card-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+  color: var(--text-tertiary);
+}
+.card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cat-chip, .mini-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-10);
+}
+.mini-tag { color: var(--text-tertiary); background: var(--bg-active); }
+.mini-tag.warn { color: var(--warning); background: var(--warning-soft); }
+
+/* 空闲块：与活动卡片并列，但用虚线 + 问号区分 */
+.tl-card.is-gap {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--bg-inset);
+  border: 1px dashed var(--border-default);
+  border-left: 1px dashed var(--border-default);
+}
+.gap-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  background: var(--bg-active);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+}
+.gap-label { flex: 1; font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text-secondary); }
+.gap-hint { font-size: var(--fs-11); color: var(--text-tertiary); }
+.gap-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--accent);
+  cursor: pointer;
+  transition: transform var(--dur-1) var(--ease);
+}
+.gap-add:hover { transform: scale(1.08); background: var(--accent-hover); }
+
+/* ---------- 日视图 ---------- */
+/* 记录层 / 展示层切换 */
+.layer-switch {
+  display: inline-flex;
+  gap: 2px;
   padding: 2px;
   border-radius: var(--r-sm);
   background: var(--bg-inset);
   border: 1px solid var(--border-subtle);
 }
 
-.seg-btn {
-  height: 22px;
-  padding: 0 10px;
+.layer-switch button {
+  padding: 3px 9px;
   border-radius: var(--r-xs);
   font-size: var(--fs-11);
-  font-weight: var(--fw-medium);
   color: var(--text-tertiary);
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
 }
 
-.seg-btn:hover {
-  color: var(--text-secondary);
-}
-
-.seg-btn.active {
+.layer-switch button.active {
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
 }
 
-.tl-summary {
+/* ============ 日历 ============ */
+.cal-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.cal-head {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 8px;
   font-size: var(--fs-11);
   color: var(--text-tertiary);
 }
 
-.tl-stat b {
-  color: var(--text-primary);
-  font-weight: var(--fw-semibold);
-  font-variant-numeric: tabular-nums;
-}
+.cal-head em { font-style: normal; opacity: 0.7; }
+.cal-span { margin-left: auto; }
 
-.tl-sep {
-  opacity: 0.5;
-}
-
-/* 补记 */
-.manual-toggle {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 9px;
-  border-radius: var(--r-full);
+.cal-tip {
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: var(--bg-inset);
   border: 1px solid var(--border-subtle);
   font-size: var(--fs-10);
-  color: var(--text-tertiary);
-  transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
 
-.manual-toggle:hover {
-  color: var(--text-primary);
-  border-color: var(--border-strong);
-}
-
-.manual-toggle.active {
-  background: var(--accent-soft);
-  border-color: transparent;
-  color: var(--accent);
-}
-
-.manual-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  border-radius: var(--r-md);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-}
-
-.manual-fields {
-  display: flex;
-  gap: var(--sp-2);
-}
-
-.mf {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.mf > span {
-  font-size: var(--fs-10);
-  color: var(--text-tertiary);
-}
-
-.mf input {
-  height: 28px;
-  padding: 0 8px;
-  font-size: var(--fs-11);
-}
-
-.mf select {
-  height: 28px;
-  padding: 0 24px 0 8px;
-  font-size: var(--fs-11);
-}
-
-.mf.narrow {
-  width: 66px;
-  flex: 0 0 auto;
-}
-
-.mf.grow {
-  flex: 1;
-}
-
-.mf.full {
-  width: 100%;
-}
-
-.manual-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.manual-hint {
-  flex: 1;
-  font-size: var(--fs-10);
-  color: var(--text-tertiary);
-}
-
-.tl-manual,
-.raw-badge {
-  padding: 0 6px;
-  border-radius: var(--r-full);
-  background: var(--warning-soft);
-  color: var(--warning);
-  font-size: var(--fs-10);
-  font-weight: var(--fw-medium);
-}
-
-.raw-badge {
-  margin-left: 4px;
-  font-size: 9px;
-}
-
-.tl-list {
-  display: flex;
-  flex-direction: column;
-}
-
-/* 会话行 */
-.tl-row {
-  display: grid;
-  grid-template-columns: 40px 14px 1fr;
-  gap: var(--sp-2);
-  padding-bottom: var(--sp-3);
-}
-
-.tl-row.is-focus {
-  background: var(--accent-soft);
+/* 日历本体：按「小时高度」排版并纵向滚动，15 分钟才有足够空间 */
+.cal-scroll {
+  --hour-h: 54px;
+  max-height: calc(100vh - 286px);
+  overflow-y: auto;
+  overflow-x: hidden;
   border-radius: var(--r-sm);
-  box-shadow: inset 0 0 0 1px var(--accent-border);
-  animation: tl-focus-in var(--dur-2) var(--ease);
+  scrollbar-width: thin;
 }
 
-@keyframes tl-focus-in {
-  from { opacity: 0.35; }
-  to { opacity: 1; }
+.cal-grid {
+  display: grid;
+  grid-template-columns: 40px repeat(var(--cols, 1), minmax(0, 1fr));
+  gap: var(--sp-2);
+  align-items: start;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tl-row.is-focus { animation: none; }
+/* 左侧时间刻度：只给参考，不抢注意力 */
+.cal-ruler {
+  position: relative;
+  height: calc(var(--hour-h) * 24);
+  margin-top: 26px;
+  border-right: 1px solid var(--border-subtle);
 }
 
-.tl-time {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-  padding-top: 1px;
-}
-
-.tl-start {
-  font-size: var(--fs-11);
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.tl-end {
+.cal-tick {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
   font-size: var(--fs-10);
-  font-family: var(--font-mono);
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
-.tl-axis {
-  position: relative;
+.cal-col {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding-top: 4px;
-}
-
-.tl-node {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  box-shadow: 0 0 0 2px var(--bg-canvas);
-}
-
-.tl-line {
-  flex: 1;
-  width: 1px;
-  background: var(--border-default);
-  margin-top: 3px;
-}
-
-.tl-body {
+  gap: 4px;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
 }
 
-.tl-head {
+.cal-day {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-2);
-}
-
-.tl-app {
-  font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tl-dur {
-  flex: 0 0 auto;
-  font-size: var(--fs-11);
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.tl-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.cat-chip {
-  padding: 1px 7px;
-  border-radius: var(--r-full);
-  font-size: var(--fs-10);
-  font-weight: var(--fw-medium);
-}
-
-.tl-warn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: var(--fs-10);
-  color: var(--warning);
-}
-
-.tl-titles {
-  font-size: var(--fs-11);
+  justify-content: center;
+  gap: 6px;
+  height: 22px;
+  background: none;
+  font-size: var(--fs-12);
   color: var(--text-tertiary);
-  line-height: var(--lh-snug);
+}
+
+.cal-day b { font-weight: var(--fw-medium); }
+
+.cal-day em {
+  font-style: normal;
+  font-size: var(--fs-10);
+  opacity: 0.75;
+}
+
+.cal-col.is-current .cal-day { color: var(--accent); }
+
+.cal-track {
+  position: relative;
+  height: calc(var(--hour-h) * 24);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  /* 每两小时一条浅刻度，块之间才有「时间感」 */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--border-subtle) 0 1px,
+    transparent 1px calc(100% / 12)
+  );
+  cursor: crosshair;
   overflow: hidden;
+}
+
+.cal-block {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 7px;
+  box-sizing: border-box;
+  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  cursor: grab;
+  transition: box-shadow 120ms var(--ease), transform 120ms var(--ease), opacity 120ms var(--ease);
+}
+
+.cal-block:hover {
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+  z-index: 3;
+}
+
+.cal-block:active { cursor: grabbing; }
+
+.cal-block.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 拖动中把原块压暗，视线跟着预览块走 */
+.cal-block.is-dim { opacity: 0.35; }
+
+/* 半小时以内的块：只留一条色带，文字放不下就不放 */
+.cal-block.is-thin { padding: 0 5px; border-radius: 4px; }
+.cal-block.is-thin .cal-block-title { display: none; }
+
+/* 标注过的段用左边一条实线区分，比斜纹安静 */
+.cal-block.is-manual { border-left: 3px solid rgba(255, 255, 255, 0.85); }
+
+.cal-block-title {
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  line-height: 1.35;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  /* 允许两行：一行往往只能看到三五个字，等于什么都没写 */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
-/* 明细 */
+.cal-block-note {
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.88);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 底部 8px 是拉伸手柄，hover 才显形 */
+.cal-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.cal-resize:hover { background: rgba(255, 255, 255, 0.35); }
+
+/* 预览块：清晰告诉你「会落在哪、有多长」 */
+.cal-ghost {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  z-index: 6;
+  border-radius: 5px;
+  border: 2px dashed var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  padding: 2px 6px;
+  overflow: hidden;
+}
+
+.cal-ghost.is-new { background: rgba(255, 255, 255, 0.12); }
+
+.ghost-label {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  color: var(--accent);
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: 10px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+}
+
+.cal-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--danger);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* 右键菜单 */
+.ctx-menu {
+  position: fixed;
+  z-index: 2100;
+  min-width: 152px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+}
+
+.ctx-menu button {
+  text-align: left;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  background: none;
+}
+
+.ctx-menu button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ctx-menu button.danger:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ctx-sep {
+  display: block;
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--border-subtle);
+}
+
+.ctx-hint {
+  padding: 2px 9px 4px;
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+
+.ctx-fade-enter-active,
+.ctx-fade-leave-active {
+  transition: opacity 110ms var(--ease), transform 130ms var(--ease);
+}
+
+.ctx-fade-enter-from,
+.ctx-fade-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+.mini-tag.focus {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 记录层：只读原始采样 */
+.record-layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.rl-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+
+.rl-head em {
+  margin-left: auto;
+  font-style: normal;
+  opacity: 0.75;
+}
+
+.rl-list {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.rl-row {
+  display: grid;
+  grid-template-columns: 52px 92px 1fr 60px;
+  gap: var(--sp-2);
+  padding: 5px var(--sp-3);
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rl-row:last-child { border-bottom: none; }
+.rl-row:nth-child(odd) { background: var(--bg-inset); }
+.rl-time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.rl-app { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-dur { text-align: right; color: var(--text-tertiary); }
+
+.day-view {
+  position: relative;
+  padding: var(--sp-2) 0 0;
+  overflow-x: auto;
+}
+.day-grid { display: flex; align-items: flex-start; min-width: 320px; }
+.day-ruler {
+  position: relative;
+  width: 52px;
+  flex: none;
+}
+.hour-tick {
+  position: absolute;
+  left: 0;
+  width: 52px;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+  text-align: right;
+  padding-right: 8px;
+}
+.hour-tick.is-last { transform: translateY(-100%); }
+.day-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+}
+.hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+.day-seg {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: default;
+}
+.seg-label {
+  display: block;
+  padding: 3px 7px;
+  font-size: var(--fs-10);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.day-gap {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: 3px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-10);
+  background: repeating-linear-gradient(
+    -45deg, transparent, transparent 6px, var(--bg-hover) 6px, var(--bg-hover) 12px
+  );
+  cursor: pointer;
+}
+.day-gap:hover { border-color: var(--accent); color: var(--accent); }
+.future-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-overlay);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  color: var(--text-tertiary);
+  font-size: var(--fs-11);
+  pointer-events: none;
+}
+.now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--danger);
+  z-index: 5;
+  pointer-events: none;
+}
+.now-line span {
+  position: absolute;
+  right: 4px;
+  top: -16px;
+  font-size: var(--fs-10);
+  color: var(--danger);
+}
+.day-legend {
+  display: flex;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  margin: var(--sp-3) 0 0 52px;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+.day-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lg-dot { width: 10px; height: 10px; border-radius: 2px; background: var(--accent); opacity: .6; }
+.lg-gap { width: 10px; height: 10px; border-radius: 2px; border: 1px dashed var(--border-strong); }
+
+/* ---------- 明细 ---------- */
+.tl-list.raw { display: flex; flex-direction: column; }
 .raw-row {
   display: grid;
-  grid-template-columns: 40px 78px 1fr auto;
+  grid-template-columns: 46px 100px 1fr auto;
   gap: var(--sp-2);
-  align-items: baseline;
-  padding: 5px 0;
+  align-items: center;
+  padding: 7px 4px;
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-11);
 }
+.raw-time { font-family: var(--font-mono); color: var(--text-tertiary); }
+.raw-app { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.raw-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
+.raw-dur { font-family: var(--font-mono); color: var(--text-tertiary); }
+.raw-badge { margin-left: 4px; color: var(--warning); }
 
-.raw-time {
-  font-family: var(--font-mono);
+/* ---------- 悬浮按钮 ---------- */
+.fab {
+  position: fixed;
+  right: 28px;
+  bottom: 26px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  transition: transform var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.fab:hover { transform: scale(1.06); background: var(--accent-hover); }
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-8) 0;
   color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
 }
-
-.raw-app {
-  color: var(--text-primary);
-  font-weight: var(--fw-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.raw-title {
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.raw-dur {
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
+.empty-title { font-size: var(--fs-14); color: var(--text-secondary); }
+.empty-desc { font-size: var(--fs-11); }
 </style>

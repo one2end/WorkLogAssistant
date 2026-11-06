@@ -65,11 +65,22 @@
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas,
     "Liberation Mono", monospace;
 
-  /* 分类色已迁移到 src/styles/palette.js —— 每套主题一组，由 JS 按 theme
-     取色，切主题时所有图表一起换色。这里不再保留死变量。 */
+  /* 分类色在 src/styles/palette.js —— 只有 dark / light 两组，
+     分类是语义，不随强调色变化。 */
 }
 
-/* ---------- 深色（默认） ---------- */
+/* ==========================================================================
+   外观 = 明暗模式 × 强调色（两个正交维度）
+   --------------------------------------------------------------------------
+   1) 明暗模式 .theme-dark / .theme-light 决定全部中性色：背景、表面、文字、
+      边框、阴影。这两套始终是中性灰，不掺任何主题色。
+   2) 强调色 .accent-* 只改一组 --accent 变量：主按钮、选中态、链接、高亮。
+      选了绿色主题，界面依然是黑白灰，只有强调元素是绿的——而不是整屏发绿。
+   3) 旧版 ocean / forest / rose（整屏染色）已废弃，配置读取时会自动迁移成
+      「暗色 + 对应强调色」。
+   ========================================================================== */
+
+/* ---------- 深色（中性灰） ---------- */
 .theme-dark {
   color-scheme: dark;
 
@@ -90,11 +101,7 @@
   --border-default: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.18);
 
-  --accent: #5e8bff;
-  --accent-hover: #7ba1ff;
-  --accent-soft: rgba(94, 139, 255, 0.14);
-  --accent-border: rgba(94, 139, 255, 0.34);
-  --on-accent: #ffffff;
+  --surface-sheen: rgba(255, 255, 255, 0.055);
 
   --success: #34d399;
   --success-soft: rgba(52, 211, 153, 0.14);
@@ -106,9 +113,16 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  /* 强调色的明度基准（每种强调色只提供色相与饱和度） */
+  --accent-l: 52%;
+  --accent-hover-delta: 8%;
+  --accent-soft-a: 0.18;
+  --accent-border-a: 0.42;
+  --on-accent: #ffffff;
 }
 
-/* ---------- 浅色 ---------- */
+/* ---------- 浅色（中性灰） ---------- */
 .theme-light {
   color-scheme: light;
 
@@ -129,11 +143,7 @@
   --border-default: rgba(15, 23, 42, 0.12);
   --border-strong: rgba(15, 23, 42, 0.2);
 
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-soft: rgba(37, 99, 235, 0.09);
-  --accent-border: rgba(37, 99, 235, 0.28);
-  --on-accent: #ffffff;
+  --surface-sheen: rgba(255, 255, 255, 0.9);
 
   --success: #059669;
   --success-soft: rgba(5, 150, 105, 0.1);
@@ -145,121 +155,30 @@
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
   --shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.14);
+
+  --accent-l: 42%;
+  --accent-hover-delta: -7%;
+  --accent-soft-a: 0.1;
+  --accent-border-a: 0.3;
+  --on-accent: #ffffff;
 }
 
-/* ---------- 海洋 ---------- */
-.theme-ocean {
-  color-scheme: dark;
+/* ---------- 强调色：只给色相/饱和度，明度由明暗模式决定 ---------- */
+.accent-blue   { --accent-h: 222; --accent-sat: 82%; }
+.accent-violet { --accent-h: 262; --accent-sat: 76%; }
+.accent-rose   { --accent-h: 344; --accent-sat: 72%; }
 
-  --bg-canvas: #071620;
-  --bg-surface: #0d2130;
-  --bg-elevated: #123044;
-  --bg-inset: #091a26;
-  --bg-hover: rgba(125, 211, 252, 0.07);
-  --bg-active: rgba(125, 211, 252, 0.12);
-  --bg-overlay: rgba(3, 10, 16, 0.74);
+/* 绿/青/琥珀偏亮，白字读不清，改用深色文字 */
+.accent-green  { --accent-h: 158; --accent-sat: 58%; --on-accent: #05120c; }
+.accent-teal   { --accent-h: 190; --accent-sat: 78%; --on-accent: #04141a; }
+.accent-amber  { --accent-h: 34;  --accent-sat: 88%; --accent-l: 50%; --on-accent: #1a1206; }
 
-  --text-primary: #e4f2fb;
-  --text-secondary: #8fb2c7;
-  --text-tertiary: #64829a;
-  --text-inverse: #071620;
-
-  --border-subtle: rgba(125, 211, 252, 0.1);
-  --border-default: rgba(125, 211, 252, 0.18);
-  --border-strong: rgba(125, 211, 252, 0.3);
-
-  --accent: #38bdf8;
-  --accent-hover: #67cdfa;
-  --accent-soft: rgba(56, 189, 248, 0.14);
-  --accent-border: rgba(56, 189, 248, 0.36);
-  --on-accent: #04212f;
-
-  --success: #34d399;
-  --success-soft: rgba(52, 211, 153, 0.14);
-  --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.14);
-  --danger: #fb7185;
-  --danger-soft: rgba(251, 113, 133, 0.14);
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+/* ---------- 强调色派生变量（必须在上面两组之后声明） ---------- */
+.theme-dark, .theme-light {
+  --accent: hsl(var(--accent-h) var(--accent-sat) var(--accent-l));
+  --accent-hover: hsl(var(--accent-h) var(--accent-sat) calc(var(--accent-l) + var(--accent-hover-delta)));
+  --accent-soft: hsl(var(--accent-h) var(--accent-sat) var(--accent-l) / var(--accent-soft-a));
+  --accent-border: hsl(var(--accent-h) var(--accent-sat) var(--accent-l) / var(--accent-border-a));
+  --accent-ring: hsl(var(--accent-h) var(--accent-sat) var(--accent-l) / 0.45);
 }
 
-/* ---------- 森林 ---------- */
-.theme-forest {
-  color-scheme: dark;
-
-  --bg-canvas: #0a1310;
-  --bg-surface: #101d18;
-  --bg-elevated: #16281f;
-  --bg-inset: #0c1712;
-  --bg-hover: rgba(134, 239, 172, 0.06);
-  --bg-active: rgba(134, 239, 172, 0.11);
-  --bg-overlay: rgba(5, 12, 9, 0.74);
-
-  --text-primary: #e3f2e9;
-  --text-secondary: #94b3a3;
-  --text-tertiary: #678374;
-  --text-inverse: #0a1310;
-
-  --border-subtle: rgba(134, 239, 172, 0.09);
-  --border-default: rgba(134, 239, 172, 0.16);
-  --border-strong: rgba(134, 239, 172, 0.28);
-
-  --accent: #34d399;
-  --accent-hover: #5fdfad;
-  --accent-soft: rgba(52, 211, 153, 0.13);
-  --accent-border: rgba(52, 211, 153, 0.34);
-  --on-accent: #06231a;
-
-  --success: #4ade80;
-  --success-soft: rgba(74, 222, 128, 0.14);
-  --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.14);
-  --danger: #f87171;
-  --danger-soft: rgba(248, 113, 113, 0.14);
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
-}
-
-/* ---------- 玫瑰 ---------- */
-.theme-rose {
-  color-scheme: dark;
-
-  --bg-canvas: #120d10;
-  --bg-surface: #1c1419;
-  --bg-elevated: #271b22;
-  --bg-inset: #150f12;
-  --bg-hover: rgba(251, 207, 232, 0.06);
-  --bg-active: rgba(251, 207, 232, 0.11);
-  --bg-overlay: rgba(12, 7, 10, 0.74);
-
-  --text-primary: #f6e9ef;
-  --text-secondary: #b899a6;
-  --text-tertiary: #8a6b78;
-  --text-inverse: #120d10;
-
-  --border-subtle: rgba(251, 207, 232, 0.09);
-  --border-default: rgba(251, 207, 232, 0.16);
-  --border-strong: rgba(251, 207, 232, 0.28);
-
-  --accent: #f472b6;
-  --accent-hover: #f890c9;
-  --accent-soft: rgba(244, 114, 182, 0.14);
-  --accent-border: rgba(244, 114, 182, 0.34);
-  --on-accent: #2a0d1a;
-
-  --success: #34d399;
-  --success-soft: rgba(52, 211, 153, 0.14);
-  --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.14);
-  --danger: #fb7185;
-  --danger-soft: rgba(251, 113, 133, 0.14);
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
-}

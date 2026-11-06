@@ -26,6 +26,22 @@ class LogManager {
     this.maxLogEntries = 1000;
   }
 
+  /** 运行时切换数据根目录（配合设置页改存储路径后立即生效） */
+  setDataDir(newPath) {
+    const userDataPath = app.getPath('userData');
+    const base = newPath && newPath.trim()
+      ? newPath.trim()
+      : path.join(userDataPath, 'Data');
+    try {
+      this.logsDir = path.join(base, 'logs');
+      this.ensureLogsDir();
+      return true;
+    } catch (error) {
+      console.error('切换日志目录失败:', error.message);
+      return false;
+    }
+  }
+
   ensureLogsDir() {
     if (!fs.existsSync(this.logsDir)) {
       fs.mkdirSync(this.logsDir, { recursive: true });

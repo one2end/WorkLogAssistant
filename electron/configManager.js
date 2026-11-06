@@ -12,18 +12,34 @@ class ConfigManager {
 
   loadConfig() {
     try {
-      // Load base config
-      let baseConfig = this.createDefaultConfig();
+      // 注意：createDefaultConfig() 必须是纯函数，绝不能在加载时写盘。
+      // 历史上它内部调用 saveConfig()，导致每次启动都把用户配置覆写成默认值
+      // （customPath / API Key 等全部丢失），表现为「改了设置重启后又变回去」。
+      const defaults = this.createDefaultConfig();
+      let baseConfig = defaults;
+
       if (fs.existsSync(this.configPath)) {
-        const configData = fs.readFileSync(this.configPath, 'utf8');
-        baseConfig = JSON.parse(configData);
+        try {
+          const configData = fs.readFileSync(this.configPath, 'utf8');
+          // 与默认值合并，兼容旧版本配置缺少新增字段的情况
+          baseConfig = this.mergeDeep(defaults, this.migrateLegacyAppearance(JSON.parse(configData)));
+        } catch (e) {
+          console.error('解析 config.json 失败，回退到默认配置:', e);
+        }
+      } else {
+        // 仅首次运行时落盘一份默认配置
+        this.saveConfig(defaults);
       }
 
-      // Merge with local config (contains API key and user overrides)
+      // 本地覆盖配置（含 API Key）优先级最高
       if (fs.existsSync(this.localConfigPath)) {
-        const localData = fs.readFileSync(this.localConfigPath, 'utf8');
-        const localConfig = JSON.parse(localData);
-        return this.mergeDeep(baseConfig, localConfig);
+        try {
+          const localData = fs.readFileSync(this.localConfigPath, 'utf8');
+          const localConfig = this.migrateLegacyAppearance(JSON.parse(localData));
+          return this.mergeDeep(baseConfig, localConfig);
+        } catch (e) {
+          console.error('解析 config.local.json 失败:', e);
+        }
       }
 
       return baseConfig;
@@ -31,6 +47,31 @@ class ConfigManager {
       console.error('加载配置失败:', error);
       return this.createDefaultConfig();
     }
+  }
+
+  /**
+   * 旧版本用 ui.theme 表示整套配色（ocean/forest/rose 会把整个界面染色）。
+   * 新模型拆成「明暗模式 + 强调色」两个正交维度，这里做一次性映射：
+   *   dark → 暗色/蓝　light → 浅色/蓝　ocean → 暗色/青
+   *   forest → 暗色/绿　rose → 暗色/玫红
+   * 只在明显是旧配置（有 theme、无 mode）时迁移，不覆盖用户已设置的新字段。
+   */
+  migrateLegacyAppearance(raw) {
+    const MAP = {
+      dark: ['dark', 'blue'],
+      light: ['light', 'blue'],
+      ocean: ['dark', 'teal'],
+      forest: ['dark', 'green'],
+      rose: ['dark', 'rose']
+    };
+    if (!raw || typeof raw !== 'object') return raw;
+    const ui = raw.ui;
+    if (!ui || typeof ui !== 'object' || ui.mode) return raw;
+    const mapped = MAP[ui.theme];
+    if (!mapped) return raw;
+    ui.mode = mapped[0];
+    ui.accent = mapped[1];
+    return raw;
   }
 
   createDefaultConfig() {
@@ -70,26 +111,36 @@ class ConfigManager {
       analysis: {
         categoryRules: null
       },
+      // AI 是能力开关，不是一个独立页面：关闭时应用只做本地记录与统计，
+      // 数据不出本机；开启后才会自动归类、生成回顾、主动提示。
+      ai: {
+        enabled: false
+      },
       ui: {
-        theme: 'dark',
+        // 外观 = 明暗模式 × 强调色（theme 字段仅保留用于旧配置迁移）
+        mode: 'dark',
+        accent: 'blue',
         fontSize: 14,
         showTimestamps: true,
         floatWindow: true
       }
     };
 
-    this.saveConfig(defaultConfig);
     return defaultConfig;
   }
 
   saveConfig(config) {
     try {
-      // Save sensitive/user-specific data to local config
-      const localConfig = {
-        api: {
-          apiKey: config.api?.apiKey || ''
-        }
-      };
+      // 保留本地配置里已有的其它覆盖项，只更新 API Key，避免误清空
+      let localConfig = {};
+      if (fs.existsSync(this.localConfigPath)) {
+        try {
+          localConfig = JSON.parse(fs.readFileSync(this.localConfigPath, 'utf8')) || {};
+        } catch (_) { /* 损坏则重建 */ }
+      }
+      localConfig = this.mergeDeep(localConfig, {
+        api: { apiKey: config.api?.apiKey || '' }
+      });
       fs.writeFileSync(this.localConfigPath, JSON.stringify(localConfig, null, 2), 'utf8');
 
       // Save non-sensitive data to main config

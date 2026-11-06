@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="['theme-' + theme, { 'theme-switching': themeSwitching }]">
+  <div class="app-root" :class="['theme-' + theme, 'accent-' + accent, { 'theme-switching': themeSwitching }]">
     <FocusOverlay
       :state="focusState"
       @end="endFocus"
@@ -48,11 +48,14 @@
     <TitleBar
       :monitoring="isMonitoring"
       :theme="theme"
-      :theme-options="themeOptions"
+      :accent="accent"
+      :accent-options="accentOptions"
       @minimize="minimizeWindow"
       @close="closeWindow"
       @toggle-monitoring="toggleMonitoring"
       @theme-change="onThemeChange"
+      @accent-change="onAccentChange"
+      @snap="toggleSnap"
     />
 
     <div class="shell">
@@ -71,6 +74,13 @@
           :heat-from="heatFrom"
           :heat-to="heatTo"
           :heat-can-go-forward="heatCanGoForward"
+          :summaries="summaries"
+          :ai-enabled="aiEnabled"
+          :ai-ready="aiReady"
+          :ai-provider="config.api && config.api.provider"
+          :generating-summary="isGeneratingSummary"
+          @generate-summary="generateSummary"
+          @open-ai-settings="openAiSettings"
           @jump-to-time="onJumpToTime"
           @select-date="selectHeatDate"
           @shift-date="changeDate"
@@ -98,28 +108,13 @@
           @focus-missed="onFocusMissed"
         />
 
-        <SummaryView
-          v-else-if="view === 'summary'"
-          :summaries="summaries"
-          :selected-date="selectedDate"
-          :dates-with-data="datesWithData"
-          :generating="isGeneratingSummary"
-          :range-start="summaryStartTime"
-          :range-end="summaryEndTime"
-          @generate="generateSummary"
-          @generate-range="generateSummaryForRange"
-          @update:selected-date="onSelectDate"
-          @shift="changeDate"
-          @today="goToToday"
-          @update:range-start="summaryStartTime = $event"
-          @update:range-end="summaryEndTime = $event"
-        />
-
         <SettingsView
           v-else
           :config="config"
           :theme="theme"
-          :theme-options="themeOptions"
+          :accent="accent"
+          :accent-options="accentOptions"
+          :active-section="settingsSection"
           :provider-presets="providerPresets"
           :bridge="bridge"
           :bridge-loading="bridgeLoading"
@@ -137,6 +132,7 @@
           @provider-change="onProviderChange"
           @toggle-auto-launch="toggleAutoLaunch"
           @theme-change="onThemeChange"
+          @accent-change="onAccentChange"
           @select-storage="selectStoragePath"
           @reset-storage="resetStoragePath"
           @export-day="exportData"
@@ -176,8 +172,8 @@ import NavRail from './components/NavRail.vue';
 import FocusOverlay from './components/FocusOverlay.vue';
 import TodayView from './views/TodayView.vue';
 import TimelineView from './views/TimelineView.vue';
-import SummaryView from './views/SummaryView.vue';
 import SettingsView from './views/SettingsView.vue';
+import { ACCENTS } from './styles/accents.js';
 
 function pad(n) {
   return String(n).padStart(2, '0');
@@ -222,7 +218,7 @@ function emptyReport(date) {
 
 export default {
   name: 'App',
-  components: { Icon, TitleBar, NavRail, FocusOverlay, TodayView, TimelineView, SummaryView, SettingsView },
+  components: { Icon, TitleBar, NavRail, FocusOverlay, TodayView, TimelineView, SettingsView },
   data() {
     return {
       view: 'today',
@@ -255,13 +251,10 @@ export default {
       },
       providerPresets: {},
       theme: 'dark',
-      themeOptions: [
-        { id: 'dark', label: '深色', preview: '#0b0c0e', surface: '#191c21' },
-        { id: 'light', label: '浅色', preview: '#f7f8fa', surface: '#ffffff' },
-        { id: 'ocean', label: '海洋', preview: '#071620', surface: '#123044' },
-        { id: 'forest', label: '森林', preview: '#0a1310', surface: '#16281f' },
-        { id: 'rose', label: '玫瑰', preview: '#120d10', surface: '#271b22' }
-      ],
+      accent: 'blue',
+      // 外观 = 明暗模式 × 强调色。不再有「整套染成草绿色」这类主题。
+      accentOptions: ACCENTS,
+      settingsSection: 'record',
       autoLaunch: false,
       storagePath: '',
 
@@ -316,6 +309,17 @@ export default {
   computed: {
     isToday() {
       return this.selectedDate === localDateStr();
+    },
+    /**
+     * AI 是一层能力，不是一个页面：
+     * - aiEnabled 未开：应用只做本地记录与统计，不联网、不调模型
+     * - aiEnabled 已开但没配 Key：视为「半开」，提示去配置，而不是静默失败
+     */
+    aiEnabled() {
+      return !!(this.config.ai && this.config.ai.enabled);
+    },
+    aiReady() {
+      return this.aiEnabled && !!(this.config.api && this.config.api.apiKey);
     },
     heatCanGoForward() {
       return this.heatOffset < 0;
@@ -418,7 +422,8 @@ export default {
             immersive: { workMin: 15, breakMin: 15, rounds: 0 }
           };
         }
-        this.theme = this.config.ui?.theme || 'dark';
+        this.theme = this.config.ui?.mode === 'light' ? 'light' : 'dark';
+        this.accent = this.config.ui?.accent || 'blue';
         this.storagePath = await ipcRenderer.invoke('get-storage-path');
       } catch (error) {
         this.addLog('读取配置失败: ' + error.message, 'error');
@@ -435,7 +440,11 @@ export default {
 
     async saveConfig() {
       try {
-        await ipcRenderer.invoke('save-config', JSON.parse(JSON.stringify(this.config)));
+        const res = await ipcRenderer.invoke('save-config', JSON.parse(JSON.stringify(this.config)));
+        if (res && res.success === false) {
+          this.showToast('保存失败: ' + (res.error || '未知错误'), 'error');
+          return false;
+        }
         return true;
       } catch (error) {
         this.showToast('保存失败: ' + error.message, 'error');
@@ -453,18 +462,36 @@ export default {
       this.saveConfig();
     },
 
-    onThemeChange(themeId) {
-      this.theme = themeId;
+    onThemeChange(mode) {
+      this.theme = mode === 'light' ? 'light' : 'dark';
       this.config.ui = this.config.ui || {};
-      this.config.ui.theme = themeId;
-      // 触发一次淡入动效，避免换肤瞬间硬跳
+      this.config.ui.mode = this.theme;
+      this.flashThemeSwitch();
+      this.saveConfig();
+    },
+
+    onAccentChange(accent) {
+      this.accent = accent;
+      this.config.ui = this.config.ui || {};
+      this.config.ui.accent = accent;
+      this.flashThemeSwitch();
+      this.saveConfig();
+    },
+
+    /** 换肤时给一个很轻的淡入，避免颜色硬跳；不当作「大动效」使用 */
+    flashThemeSwitch() {
       this.themeSwitching = false;
       this.$nextTick(() => {
         this.themeSwitching = true;
         if (this._themeTimer) clearTimeout(this._themeTimer);
         this._themeTimer = setTimeout(() => { this.themeSwitching = false; }, 760);
       });
-      this.saveConfig();
+    },
+
+    /** 从「AI 未启用」的提示条跳去设置页，并直接定位到 AI 分区 */
+    openAiSettings() {
+      this.settingsSection = 'ai';
+      this.view = 'settings';
     },
 
     async toggleAutoLaunch(enabled) {
@@ -494,10 +521,16 @@ export default {
         if (!chosen) return;
         const res = await ipcRenderer.invoke('migrate-storage', chosen);
         if (res && res.success) {
-          this.config.storage = { customPath: chosen };
-          await this.saveConfig();
-          this.storagePath = chosen;
-          this.showToast(`已迁移 ${res.fileCount} 个文件，重启后生效`, 'success');
+          this.config.storage = { ...(this.config.storage || {}), customPath: chosen };
+          const ok = await this.saveConfig();
+          // 无论保存结果如何，都以主进程实际生效的目录为准
+          this.storagePath = await ipcRenderer.invoke('get-storage-path');
+          if (ok) {
+            this.showToast(`已切换到该目录，立即生效（合并 ${res.fileCount} 个新文件，未覆盖已有数据）`, 'success');
+            await this.reloadDate();
+            await this.loadDailyTracked(true);
+            this.loadSummaries();
+          }
         } else {
           this.showToast('迁移失败: ' + (res && res.error), 'error');
         }
@@ -510,7 +543,10 @@ export default {
       this.config.storage = { customPath: '' };
       await this.saveConfig();
       this.storagePath = await ipcRenderer.invoke('get-storage-path');
-      this.showToast('已恢复默认路径，重启后生效', 'success');
+      this.showToast('已恢复默认路径，立即生效', 'success');
+      await this.reloadDate();
+      await this.loadDailyTracked(true);
+      this.loadSummaries();
     },
 
     // ============ 日期 ============
@@ -853,9 +889,15 @@ export default {
       try {
         const res = await ipcRenderer.invoke('import-data', mode);
         if (res && res.success) {
-          this.showToast(`已导入 ${res.importedCount} 条记录`, 'success');
+          if (res.mode === 'directory') {
+            this.showToast(`已切换到数据目录，立即生效（发现 ${res.importedCount} 个日期数据文件）`, 'success');
+            this.storagePath = await ipcRenderer.invoke('get-storage-path');
+          } else {
+            this.showToast(`已导入 ${res.importedCount} 条记录`, 'success');
+          }
           await this.reloadDate();
           await this.loadDailyTracked(true);
+          await this.loadSummaries();
         } else if (res && !res.canceled) {
           this.showToast('导入失败: ' + res.error, 'error');
         }
@@ -868,6 +910,11 @@ export default {
 
     minimizeWindow() {
       ipcRenderer.invoke('minimize-window');
+    },
+
+    /** 贴边成竖窗格：再点一次还原 */
+    toggleSnap() {
+      ipcRenderer.invoke('toggle-snap');
     },
 
     closeWindow() {
@@ -947,6 +994,13 @@ export default {
         },
         'config-updated': (event, cfg) => {
           this.config = { ...this.config, ...cfg };
+        },
+        'storage-path-changed': (event, dataDir) => {
+          // 主进程已即时切换数据目录，重新拉取当前日期/热力图/摘要
+          this.storagePath = dataDir || '';
+          this.reloadDate();
+          this.loadDailyTracked(true);
+          this.loadSummaries();
         },
         'log-message': (event, message) => this.addLog(message),
         'error-message': (event, message) => {

@@ -22,9 +22,9 @@ const path = require('path');
 const DEFAULT_OPTIONS = {
   // 采样间隔（毫秒）。仅用于给「当日最后一条」这类无后继记录兜底
   sampleGapMs: 60 * 1000,
-  // 单段停留时长封顶。超过则视为离座/未采集，避免一晚挂机刷出 10 小时
+  // 单段停留时长封顶。超过则视为空档/未采集，避免一晚挂机刷出 10 小时
   maxSegmentMs: 20 * 60 * 1000,
-  // 相邻记录间隔超过此值，判定为数据空档（离座、休眠、应用未运行）
+  // 相邻记录间隔超过此值，判定为数据空档（休眠、应用未运行等）
   idleGapMs: 10 * 60 * 1000,
   // 时间线中默认隐藏的短会话阈值
   minSessionMs: 60 * 1000,
@@ -38,8 +38,8 @@ const DEFAULT_OPTIONS = {
  */
 const DEFAULT_CATEGORY_RULES = [
   {
-    // 锁屏 / 登录界面：计入「离座」，但不计入有效工时
-    name: '空闲离座',
+    // 锁屏 / 登录界面：算「空档」，不计入有效工时
+    name: '空档',
     excludeFromTotal: true,
     apps: ['lockapp', 'logonui', 'screensaver', 'windowsdefaultlock', 'loginscreen'],
     titles: ['默认锁屏界面', '锁屏界面', '登录界面']
@@ -106,6 +106,50 @@ const DEFAULT_CATEGORY_RULES = [
 ];
 
 const FALLBACK_CATEGORY = '其他';
+
+/** 生活事务：时间线可见，但不计入有效工时（见 classify.isLife） */
+const LIFE_CATEGORY = '生活事务';
+/**
+ * 睡眠：一天里占比最大的一块，必须能看见，但它既不是工作也不是「空档」。
+ * 单独成类，才能让「空档」回到它本来的意思（没被任何一层记录覆盖的时间）。
+ */
+const SLEEP_CATEGORY = '睡眠';
+/**
+ * 展示分组：13 个细分分类太碎，日历上既难认也难记。
+ * 参照「时间块」这类应用的做法收敛成 7 类——选起来只要一眼，
+ * 而细分分类仍然保留在会话里，用于统计与后续的自动归类。
+ *
+ * 注意：这只是投影层。原始分类不动，随时可以调整映射重算。
+ */
+const SIMPLE_GROUPS = [
+  ['工作', ['沟通协作', '文档写作', '开发编码', '任务与效率', 'AI 助手', '文件系统', '系统工具', '浏览检索']],
+  ['学习', ['学习', '阅读']],
+  ['生活', ['生活事务']],
+  ['娱乐', ['影音娱乐']],
+  ['睡眠', ['睡眠']],
+  ['专注', ['专注']],
+  ['其他', ['其他', '空档']]
+];
+
+const CAT_TO_GROUP = (() => {
+  const map = {};
+  for (const [group, names] of SIMPLE_GROUPS) {
+    map[group] = group;
+    for (const n of names) map[n] = group;
+  }
+  return map;
+})();
+
+const SIMPLE_GROUP_NAMES = SIMPLE_GROUPS.map(g => g[0]);
+
+/** 细分分类 → 展示分组（幂等：已经是分组名就原样返回） */
+function simpleCategory(cat) {
+  if (!cat) return '其他';
+  return CAT_TO_GROUP[cat] || '其他';
+}
+
+/** 不算工作产出的分类：生活事务、影音娱乐、睡眠。时间照实显示，但不进有效工时。 */
+const LIFE_CATEGORIES = new Set([LIFE_CATEGORY, '影音娱乐', SLEEP_CATEGORY]);
 
 /**
  * 记录器自身不应该被统计进去（开发模式进程名是 electron，打包后是 WorkLog Assistant）。
@@ -230,7 +274,11 @@ function readDayRaw(dataDir, dateStr) {
             platform: rec.platform,
             durationMs: typeof rec.dur === 'number' ? rec.dur : undefined,
             kind: rec.kind === 'idle' ? 'idle' : 'active',
-            source: rec.source === 'manual' ? 'manual' : 'auto',
+            // 三层来源：manual=本人补记，imported=从别的软件导入的人工标注，
+            // auto=本机自动录制。三者的可信度不同，不能简单相加。
+            source: rec.source === 'manual' ? 'manual'
+              : (rec.source === 'dida' || rec.source === 'uptimer') ? 'imported'
+              : 'auto',
             category: rec.cat || undefined
           });
         } catch (e) { /* 单行损坏跳过 */ }
@@ -306,6 +354,13 @@ function buildClassifier(rules) {
   }
 
   classify.isExcluded = (category) => excluded.has(category);
+  /**
+   * 「生活事务」类：吃饭、家务、通勤、陪家人、睡觉之外的日常。
+   * 它们要出现在时间线上（一天是完整的），但不能算进有效工作工时，
+   * 否则手工补记的全天记录会把"有效工时"顶到 18 小时。
+   */
+  classify.isLife = (category) => LIFE_CATEGORIES.has(category);
+  classify.isSleep = (category) => category === SLEEP_CATEGORY;
   return classify;
 }
 
@@ -339,7 +394,11 @@ function normalizeRaw(rawItems, classify, ignoreSet) {
       title,
       category: item.category || classify(app, title),
       kind: item.kind === 'idle' ? 'idle' : 'active',
-      source: item.source === 'manual' ? 'manual' : 'auto',
+      // 三层来源要原样保留：优先级消解靠它区分
+      // manual（本人补记）> imported（导入的标注）> focus（专注）> auto（录制）
+      source: item.source === 'manual' ? 'manual'
+        : (item.source === 'dida' || item.source === 'uptimer' || item.source === 'imported') ? 'imported'
+        : 'auto',
       // 录制器写入的片段自带精确时长；旧数据这里为 undefined，走时间差推断
       durationMs: hasExplicitDur ? item.durationMs : undefined,
       durationExact: hasExplicitDur
@@ -413,6 +472,122 @@ function inferDurations(atoms, options) {
  * 按「同一应用 + 相邻」折叠会话。标题变化不打断会话，只累积标题集合。
  * 这样一天 300 条裸记录通常能折叠到 40~80 段，token 成本降一个数量级。
  */
+/**
+ * 记录层 / 展示层冲突消解。
+ *
+ * 同一段时间可能同时存在三种来源：自动录制（真实但无语义）、导入的人工标注
+ * （有语义但可能粗）、本人补记（最准）。它们不是可以相加的三份数据，
+ * 而是对同一段时间的三种描述——所以按时长优先级覆盖，不是求和。
+ *
+ * 优先级：manual(4) > imported(3) > focus(2) > auto(1)
+ * 低优先级被覆盖的部分会被裁掉，高优先级的时间块保持完整。
+ *
+ * 专注排在「自动录制」之上但低于任何人工标注：它是本人主动声明的意图，
+ * 比「窗口看着像在工作」更可信；但手工改过的那一段仍然最权威。
+ */
+const SOURCE_PRIORITY = { manual: 4, imported: 3, focus: 2, auto: 1 };
+
+function cutInterval(intervals, cutStart, cutEnd) {
+  const out = [];
+  for (const [s, e] of intervals) {
+    if (cutEnd <= s || cutStart >= e) { out.push([s, e]); continue; }
+    if (cutStart > s) out.push([s, cutStart]);
+    if (cutEnd < e) out.push([cutEnd, e]);
+  }
+  return out;
+}
+
+function resolveByPriority(atoms) {
+  const ranked = atoms
+    .filter(a => a.kind !== 'idle')
+    .slice()
+    .sort((a, b) => (SOURCE_PRIORITY[b.source] || 0) - (SOURCE_PRIORITY[a.source] || 0) || a.ms - b.ms);
+
+  const taken = [];
+  const out = [];
+  for (const a of ranked) {
+    const dur = Number.isFinite(a.durationMs) ? a.durationMs : 0;
+    if (dur <= 0) { out.push(a); continue; }
+    let pieces = [[a.ms, a.ms + dur]];
+    for (const [ts, te] of taken) pieces = cutInterval(pieces, ts, te);
+    for (const [s, e] of pieces) {
+      out.push({ ...a, ms: s, durationMs: e - s });
+      taken.push([s, e]);
+    }
+  }
+  return out.sort((a, b) => a.ms - b.ms);
+}
+
+/**
+ * 把一天的记录折成 15 分钟一格，每格只留一个「主要事件」。
+ *
+ * 这是展示层的口径：15 分钟里可能切了十几次窗口，但只要 9 分钟在 Word 上，
+ * 这一格就是「写材料」，而不是十条碎片。人工标注与导入的标注因为优先级更高，
+ * 会自然成为该格的主要事件。
+ */
+function buildSlots(atoms, dateStr, options = {}) {
+  const slotMin = options.slotMin || 15;
+  const slotMs = slotMin * 60000;
+  const dayStart = new Date(`${dateStr}T00:00:00`).getTime();
+  if (Number.isNaN(dayStart)) return [];
+
+  const slots = [];
+  for (let i = 0; i < Math.ceil(1440 / slotMin); i += 1) {
+    slots.push({
+      index: i, startMin: i * slotMin, ms: 0,
+      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, focusMs: {}
+    });
+  }
+
+  for (const a of atoms) {
+    if (a.kind === 'idle') continue;
+    const dur = Number.isFinite(a.durationMs) ? a.durationMs : 0;
+    if (dur <= 0) continue;
+    const from = Math.max(a.ms, dayStart);
+    const to = Math.min(a.ms + dur, dayStart + 86400000);
+    if (to <= from) continue;
+    let cur = from;
+    while (cur < to) {
+      const idx = Math.min(slots.length - 1, Math.floor((cur - dayStart) / slotMs));
+      const segEnd = Math.min(to, dayStart + (idx + 1) * slotMs);
+      const mins = (segEnd - cur) / 60000;
+      const slot = slots[idx];
+      const cat = simpleCategory(a.category || '其他');
+      slot.ms += segEnd - cur;
+      slot.catMs[cat] = (slot.catMs[cat] || 0) + mins;
+      slot.appMs[a.app] = (slot.appMs[a.app] || 0) + mins;
+      slot.layerMs[a.source] = (slot.layerMs[a.source] || 0) + mins;
+      const t = (a.title || '').trim();
+      if (t) slot.titleMs[t] = (slot.titleMs[t] || 0) + mins;
+      if (a.focusId) slot.focusMs[a.focusId] = (slot.focusMs[a.focusId] || 0) + mins;
+      cur = segEnd;
+    }
+  }
+
+  return slots.map((slot) => {
+    const top = Object.entries(slot.catMs).sort((x, y) => y[1] - x[1])[0];
+    const app = Object.entries(slot.appMs).sort((x, y) => y[1] - x[1])[0];
+    const layer = Object.entries(slot.layerMs).sort((x, y) => y[1] - x[1])[0];
+    const title = Object.entries(slot.titleMs).sort((x, y) => y[1] - x[1])[0];
+    const focus = Object.entries(slot.focusMs).sort((x, y) => y[1] - x[1])[0];
+    return {
+      index: slot.index,
+      startMin: slot.startMin,
+      endMin: Math.min(1440, slot.startMin + slotMin),
+      filledMin: Math.round(slot.ms / 60000),
+      category: top ? top[0] : null,
+      app: app ? app[0] : null,
+      layer: layer ? layer[0] : null,
+      // 这一格最有代表性的备注（来自人工标注/导入的标题），给日历和时间轴显示
+      note: title ? title[0] : '',
+      // 专注会话 id：界面上要能单独删掉一条专注
+      focusId: focus ? focus[0] : null,
+      // 主要事件占该格的比例：低于 0.6 说明这段本身是混合的
+      purity: top && slot.ms ? Number((top[1] / (slot.ms / 60000)).toFixed(2)) : 0
+    };
+  });
+}
+
 function foldSessions(atoms, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
   const sessions = [];
@@ -519,7 +694,28 @@ function aggregate(sessions) {
     }))
     .sort((a, b) => b.durationMs - a.durationMs);
 
-  return { totalMs, apps, categories };
+  // 展示分组版：把 13 类合成 7 组，只用于「时间构成」这类展示，
+  // 细分分类仍留在 categories 里做统计与设置页规则。
+  const groupMap = new Map();
+  for (const c of categories) {
+    const g = simpleCategory(c.name);
+    if (!groupMap.has(g)) groupMap.set(g, { name: g, durationMs: 0, sessionCount: 0, apps: new Set() });
+    const item = groupMap.get(g);
+    item.durationMs += c.durationMs;
+    item.sessionCount += c.sessionCount;
+    for (const a of c.apps) item.apps.add(a);
+  }
+  const categoriesGrouped = Array.from(groupMap.values())
+    .map(c => ({
+      name: c.name,
+      durationMs: c.durationMs,
+      percent: totalMs > 0 ? c.durationMs / totalMs : 0,
+      sessionCount: c.sessionCount,
+      apps: Array.from(c.apps)
+    }))
+    .sort((a, b) => b.durationMs - a.durationMs);
+
+  return { totalMs, apps, categories, categoriesGrouped };
 }
 
 function pct(n) {
@@ -551,9 +747,38 @@ function buildDayReport(dataDir, dateStr, options) {
   }
 
   const { gaps } = inferDurations(workAtoms, opts);
-  const allSessions = foldSessions(workAtoms, opts);
 
-  // 旧数据里锁屏会被记成普通活动，这里也归入「离座」
+  // 专注会话也是「一段时间里在做什么」的一种声明，必须参与同一套优先级消解，
+  // 否则它和自动录制会各画一份，同一段时间被重复计算两次。
+  const arhatSessions = readArhatSessions(dataDir, dateStr);
+  const focusAtoms = [];
+  for (const f of arhatSessions) {
+    const rawFrom = new Date(f.startTime).getTime();
+    const rawDur = Number(f.durationMs) || 0;
+    if (!Number.isFinite(rawFrom) || rawDur <= 0) continue;
+    // 专注也服从「15 分钟一块」：起点向下对齐，时长至少一个块
+    const cv = new Date(rawFrom);
+    cv.setSeconds(0, 0);
+    cv.setMinutes(Math.floor(cv.getMinutes() / 15) * 15);
+    const from = cv.getTime();
+    const dur = Math.max(15, Math.round(rawDur / 60000 / 15) * 15) * 60000;
+    focusAtoms.push({
+      ms: from,
+      durationMs: dur,
+      kind: 'active',
+      app: f.focusText || '专注',
+      title: f.focusText || '',
+      category: '专注',
+      source: 'focus',
+      focusId: f.id
+    });
+  }
+
+  // 消解之后 atoms 才代表「这一段时间到底算谁的」，后面的会话与统计都基于它
+  const resolvedAtoms = resolveByPriority([...workAtoms, ...focusAtoms]);
+  const allSessions = foldSessions(resolvedAtoms, opts);
+
+  // 旧数据里锁屏会被记成普通活动，这里也归入「空档」
   const sessions = [];
   for (const s of allSessions) {
     if (classify.isExcluded(s.category)) {
@@ -564,7 +789,17 @@ function buildDayReport(dataDir, dateStr, options) {
     }
   }
 
-  const { totalMs, apps, categories } = aggregate(sessions);
+  const agg = aggregate(sessions);
+  const { apps, categories, categoriesGrouped } = agg;
+  // 生活事务保留在 sessions（时间线要完整），但不计入有效工时
+  // 睡眠单独统计，不能再算进「生活事务」，否则两栏相加会超过 24 小时
+  const sleepMs = sessions
+    .filter(s => classify.isSleep(s.category))
+    .reduce((sum, s) => sum + s.durationMs, 0);
+  const lifeMs = sessions
+    .filter(s => classify.isLife(s.category) && !classify.isSleep(s.category))
+    .reduce((sum, s) => sum + s.durationMs, 0);
+  const totalMs = Math.max(0, agg.totalMs - lifeMs - sleepMs);
 
   const firstMs = atoms.length ? atoms[0].ms : null;
   const lastEndMs = atoms.length
@@ -573,7 +808,6 @@ function buildDayReport(dataDir, dateStr, options) {
   const spanMs = (firstMs && lastEndMs) ? Math.max(0, lastEndMs - firstMs) : 0;
 
   const notes = readArhatNotes(dataDir, dateStr);
-  const arhatSessions = readArhatSessions(dataDir, dateStr);
 
   const dataNotes = [];
   if (raw.length === 0) {
@@ -581,7 +815,7 @@ function buildDayReport(dataDir, dateStr, options) {
   }
   const bigGaps = gaps.filter(g => g.gapMs > opts.idleGapMs);
   if (bigGaps.length > 0) {
-    dataNotes.push(`存在 ${bigGaps.length} 处超过 ${Math.round(opts.idleGapMs / 60000)} 分钟的空档（离座、休眠或应用未运行），此时长不可信`);
+    dataNotes.push(`存在 ${bigGaps.length} 处超过 ${Math.round(opts.idleGapMs / 60000)} 分钟的空档（空档、休眠或应用未运行），此时长不可信`);
   }
   if (spanMs > 0 && totalMs / spanMs < 0.35) {
     dataNotes.push(`有效记录仅占区间跨度的 ${pct(totalMs / spanMs)}，实际在岗时间可能更长`);
@@ -596,6 +830,8 @@ function buildDayReport(dataDir, dateStr, options) {
       sessionCount: sessions.length,
       uniqueApps: apps.length,
       trackedMs: totalMs,
+      lifeMs,
+      sleepMs,
       idleMs,
       idleSessionCount,
       spanMs,
@@ -605,7 +841,15 @@ function buildDayReport(dataDir, dateStr, options) {
       bigGapCount: bigGaps.length
     },
     categories,
+    categoriesGrouped,
     apps,
+    // 展示层：15 分钟一格的主要事件，UI 与 AI 回顾都读这一层
+    slots: buildSlots(resolvedAtoms, dateStr, opts),
+    layers: {
+      autoMs: resolvedAtoms.filter(a => a.source === 'auto').reduce((n, a) => n + (a.durationMs || 0), 0),
+      importedMs: resolvedAtoms.filter(a => a.source === 'imported').reduce((n, a) => n + (a.durationMs || 0), 0),
+      manualMs: resolvedAtoms.filter(a => a.source === 'manual').reduce((n, a) => n + (a.durationMs || 0), 0)
+    },
     sessions: sessions.map(s => ({
       start: new Date(s.startMs).toISOString(),
       end: new Date(s.endMs).toISOString(),
@@ -618,6 +862,7 @@ function buildDayReport(dataDir, dateStr, options) {
     })),
     focus: {
       arhatSessions: arhatSessions.map(s => ({
+        id: s.id,
         start: s.startTime,
         end: s.endTime,
         durationMs: s.durationMs,
@@ -802,7 +1047,7 @@ function renderDayMarkdown(report, detail) {
   lines.push(`- 统计区间：${toHm(s.firstAt)} – ${toHm(s.lastAt)}（跨度 ${formatDuration(s.spanMs)}）`);
   lines.push(`- 有效记录：${formatDuration(s.trackedMs)}（占跨度 ${pct(s.coverage)}）`);
   if (s.idleMs > 0) {
-    lines.push(`- 锁屏离座：${formatDuration(s.idleMs)}（已从有效工时中剔除）`);
+    lines.push(`- 空档（锁屏/未记录）：${formatDuration(s.idleMs)}（已从有效工时中剔除）`);
   }
   lines.push(`- 采样记录 ${s.recordCount} 条 · 折叠为 ${s.sessionCount} 个会话 · 涉及 ${s.uniqueApps} 个应用`);
   if (report.dataNotes.length) {
@@ -938,7 +1183,7 @@ function renderPromptContext(rawItems, options) {
   inferDurations(workAtoms, opts);
   const allSessions = foldSessions(workAtoms, opts);
 
-  // 锁屏/登录界面归为离座，不参与工作内容
+  // 锁屏/登录界面归为空档，不参与工作内容
   const sessions = [];
   let idleMs = idleAtoms.reduce((s, a) => s + (Number.isFinite(a.durationMs) ? a.durationMs : 0), 0);
   for (const s of allSessions) {
@@ -997,6 +1242,8 @@ function renderPromptContext(rawItems, options) {
 }
 
 module.exports = {
+  simpleCategory,
+  SIMPLE_GROUP_NAMES,
   DEFAULT_OPTIONS,
   DEFAULT_CATEGORY_RULES,
   DEFAULT_IGNORED_APPS,

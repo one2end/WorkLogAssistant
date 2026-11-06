@@ -28,10 +28,11 @@ export default {
   emits: ['update:modelValue'],
   data() {
     return {
+      // AI 不是导航项：它是「能力」，开启后渗入今日页、时间线与设置，
+      // 而不是占一个独立页面让人自己去点。
       items: [
         { id: 'today', label: '今日概览', icon: 'home' },
         { id: 'timeline', label: '时间线', icon: 'timeline' },
-        { id: 'summary', label: 'AI 摘要', icon: 'summary' },
         { id: 'settings', label: '设置', icon: 'settings' }
       ]
     };

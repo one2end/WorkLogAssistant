@@ -36,6 +36,34 @@ class StorageManager {
     this._migrateIfNeeded();
   }
 
+  /**
+   * 运行时切换数据根目录（供设置页改存储路径后立即生效，无需重启）。
+   * 直接在当前实例上改路径，这样 ActivityRecorder / ApiServer 等已持有
+   * 本实例引用的地方会自动指向新目录。
+   */
+  setDataDir(newPath) {
+    const target = newPath && newPath.trim() ? newPath.trim() : this._defaultDataDir;
+
+    if (target !== this._defaultDataDir) {
+      try {
+        if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+        const testFile = path.join(target, '.write_test');
+        fs.writeFileSync(testFile, 'test', 'utf8');
+        fs.unlinkSync(testFile);
+      } catch (error) {
+        console.error('自定义存储路径不可用，保持原路径:', error.message);
+        return { success: false, error: error.message };
+      }
+    }
+
+    this.dataDir = target;
+    this.activitiesDir = path.join(target, 'activities');
+    this.summariesDir = path.join(target, 'summaries');
+    this.screenshotsDir = path.join(target, 'screenshots');
+    this.ensureDataDir();
+    return { success: true, dataDir: target };
+  }
+
   // --- Helpers ---
 
   _toDateStr(timestamp) {
@@ -93,7 +121,10 @@ class StorageManager {
       platform: rec.platform || 'windows',
       durationMs: typeof rec.dur === 'number' ? rec.dur : 0,
       kind: rec.kind === 'idle' ? 'idle' : 'active',
-      source: rec.source === 'manual' ? 'manual' : 'auto',
+      // 三层来源：manual=本人补记，imported=别的软件导入的标注，auto=本机录制
+      source: rec.source === 'manual' ? 'manual'
+        : (rec.source === 'dida' || rec.source === 'uptimer') ? 'imported'
+        : 'auto',
       category: rec.cat || undefined
     };
   }
@@ -328,6 +359,107 @@ class StorageManager {
     }
   }
 
+  /**
+   * 记录层 / 展示层判定。
+   *
+   * 记录层：本机自动录制的原始采样（source 为空或 recorded）。它是事实，
+   *         只能读、不能改——改了就等于篡改历史。
+   * 展示层：人工补记（manual）、别的软件导入的标注（dida / uptimer）。
+   *         它们是「人的表述」，会写错、会重复，必须可改可删。
+   */
+  static layerOf(rec) {
+    const src = rec && rec.source;
+    return (!src || src === 'recorded') ? 'record' : 'display';
+  }
+
+  /** 修改一条展示层记录（标题 / 分类 / 应用名）。记录层一律拒绝。 */
+  updateDisplayRecord(dateStr, matchT, patch = {}) {
+    const file = this._activityJsonlFile(dateStr);
+    if (!fs.existsSync(file)) return { success: false, error: '没有这一天的数据' };
+
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    let hit = null;
+    const out = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let rec;
+      try { rec = JSON.parse(line); } catch (e) { out.push(line); continue; }
+      if (!hit && rec.t === matchT) {
+        if (StorageManager.layerOf(rec) === 'record') {
+          return { success: false, error: '记录层数据不可修改' };
+        }
+        hit = rec;
+        const next = { ...rec };
+        if (typeof patch.title === 'string') next.title = patch.title;
+        if (typeof patch.cat === 'string') next.cat = patch.cat;
+        if (typeof patch.app === 'string') next.app = patch.app;
+        next.editedAt = new Date().toISOString();
+        out.push(JSON.stringify(next));
+        continue;
+      }
+      out.push(line);
+    }
+    if (!hit) return { success: false, error: '没找到这条记录' };
+    fs.writeFileSync(file, out.join('\n') + '\n', 'utf8');
+    return { success: true };
+  }
+
+  /**
+   * 删除某段时间内的所有「标注层」记录（含跨天拆出来的多段）。
+   * 记录层的采样一律保留——删除标注只是把这段还给原始数据。
+   */
+  deleteDisplayRange(dateStr, startIso, endIso) {
+    const file = this._activityJsonlFile(dateStr);
+    if (!fs.existsSync(file)) return { success: false, error: '没有这一天的数据', removed: 0 };
+    const from = new Date(startIso).getTime();
+    const to = new Date(endIso).getTime();
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) {
+      return { success: false, error: '时间区间无效', removed: 0 };
+    }
+
+    const out = [];
+    let removed = 0;
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      let rec;
+      try { rec = JSON.parse(line); } catch (e) { out.push(line); continue; }
+      const s0 = new Date(rec.t).getTime();
+      const e0 = s0 + (rec.dur || 0);
+      const overlap = s0 < to && e0 > from;
+      if (overlap && StorageManager.layerOf(rec) === 'display') { removed += 1; continue; }
+      out.push(line);
+    }
+    if (!removed) return { success: false, error: '这一段来自记录层，不能删除（可以编辑覆盖它）', removed: 0 };
+    fs.writeFileSync(file, out.length ? out.join('\n') + '\n' : '', 'utf8');
+    return { success: true, removed };
+  }
+
+  /** 删除一条展示层记录。记录层一律拒绝（要删只能删整天，那是另一套语义）。 */
+  deleteDisplayRecord(dateStr, matchT) {
+    const file = this._activityJsonlFile(dateStr);
+    if (!fs.existsSync(file)) return { success: false, error: '没有这一天的数据' };
+
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    let removed = null;
+    const out = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let rec;
+      try { rec = JSON.parse(line); } catch (e) { out.push(line); continue; }
+      if (!removed && rec.t === matchT) {
+        if (StorageManager.layerOf(rec) === 'record') {
+          return { success: false, error: '记录层数据不可删除' };
+        }
+        removed = rec;
+        continue;
+      }
+      out.push(line);
+    }
+    if (!removed) return { success: false, error: '没找到这条记录' };
+    fs.writeFileSync(file, out.length ? out.join('\n') + '\n' : '', 'utf8');
+    return { success: true };
+  }
+
   clearActivities() {
     try {
       const removed = new Set();
@@ -537,7 +669,11 @@ class StorageManager {
       const set = new Set();
       fs.readdirSync(this.activitiesDir).forEach(f => {
         const m = /^(\d{4}-\d{2}-\d{2})\.(json|jsonl)$/.exec(f);
-        if (m) set.add(m[1]);
+        if (!m) return;
+        // 空文件（例如导入后被清空）不算"有数据"，否则日历上会出现点了没内容的日期
+        try {
+          if (fs.statSync(path.join(this.activitiesDir, f)).size > 2) set.add(m[1]);
+        } catch (e) { /* 忽略读取失败的文件 */ }
       });
       return Array.from(set).sort();
     } catch (error) {
@@ -613,8 +749,12 @@ class StorageManager {
           const srcFile = path.join(srcDir, file);
           const destFile = path.join(destDir, file);
           if (fs.statSync(srcFile).isFile()) {
-            fs.copyFileSync(srcFile, destFile);
-            fileCount++;
+            // 目标目录已有数据的场景（例如指向 iCloud 上另一台机器的备份）：
+            // 绝不覆盖已有文件，避免把对方的原始数据冲掉。
+            if (!fs.existsSync(destFile)) {
+              fs.copyFileSync(srcFile, destFile);
+              fileCount++;
+            }
           }
         }
       }
