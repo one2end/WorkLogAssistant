@@ -2,6 +2,8 @@
 
 基于 Electron + Vue 的智能工作日志助手。自动监控工作活动，AI 生成结构化摘要，内置"专注模式"帮助你保持专注觉察。
 
+**官网 / 下载：https://one2end.github.io/WorkLogAssistant/** · **最新版本：[v0.8.0](https://github.com/one2end/WorkLogAssistant/releases/latest)**
+
 ## 它能解决什么问题？
 
 - **忘了今天干了什么**：自动记录你在电脑上的每一次窗口切换，下班前一键生成工作日志
