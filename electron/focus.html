@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: -apple-system, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .hud {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 100%;
+    padding: 0 14px 3px;
+    border-radius: 999px;
+    background:
+      radial-gradient(120% 180% at 8% 0%,
+        color-mix(in srgb, var(--tint, #f97316) 9%, transparent), transparent 70%),
+      var(--hud-bg);
+    border: 1px solid var(--hud-border);
+    box-shadow: var(--hud-shadow), inset 0 1px 0 var(--hud-sheen);
+    backdrop-filter: blur(18px) saturate(1.2);
+    transition: border-color 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                background 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  /* 休息态整体转成柔和绿，让人一眼看出该停 */
+  .hud.break {
+    background: var(--hud-bg-break);
+    border-color: var(--hud-border-break);
+  }
+
+  .pulse {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--tint, #f97316);
+  }
+
+  .pulse::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 1px solid var(--tint, #f97316);
+    opacity: 0;
+    animation: ring 2.6s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  }
+
+  @keyframes ring {
+    0% { transform: scale(0.7); opacity: 0.7; }
+    70%, 100% { transform: scale(1.5); opacity: 0; }
+  }
+
+  .phase {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--tint, #f97316);
+    flex: 0 0 auto;
+  }
+
+  .hud.break .phase { color: var(--hud-success); }
+
+  .clock {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--hud-text);
+    flex: 0 0 auto;
+    letter-spacing: -0.01em;
+  }
+
+  .divider {
+    width: 1px;
+    height: 12px;
+    background: var(--hud-divider);
+    flex: 0 0 auto;
+  }
+
+  .task {
+    flex: 1;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--hud-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rounds {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--hud-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bar {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 5px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--hud-bar-track);
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--tint, #f97316);
+    transition: width 900ms linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse::after { animation: none; }
+    .hud, .bar-fill { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="hud" id="hud">
+  <span class="pulse"></span>
+  <span class="phase" id="phase">专注中</span>
+  <span class="clock" id="clock">25:00</span>
+  <span class="divider" id="divider"></span>
+  <span class="task" id="task">—</span>
+  <span class="rounds" id="rounds"></span>
+  <div class="bar" id="bar"><div class="bar-fill" id="barFill" style="width:0%"></div></div>
+</div>
+<script>
+const { ipcRenderer } = require('electron');
+
+const el = {
+  hud: document.getElementById('hud'),
+  phase: document.getElementById('phase'),
+  clock: document.getElementById('clock'),
+  task: document.getElementById('task'),
+  rounds: document.getElementById('rounds'),
+  divider: document.getElementById('divider'),
+  bar: document.getElementById('bar'),
+  barFill: document.getElementById('barFill')
+};
+
+ipcRenderer.on('focus-hud', (e, state) => {
+  if (!state || !state.active) return;
+
+  document.documentElement.style.setProperty('--tint', state.tint || '#f97316');
+  el.hud.classList.toggle('break', state.phase === 'break');
+
+  el.phase.textContent = state.phaseLabel || '专注中';
+  el.clock.textContent = state.paused ? '已暂停' : state.clock;
+  el.task.textContent = state.focusText || '—';
+  el.rounds.textContent = state.totalRounds > 0 ? `${state.round}/${state.totalRounds}` : '';
+
+  const hasTimer = state.phase !== 'open';
+  el.bar.style.display = hasTimer ? 'block' : 'none';
+  el.barFill.style.width = Math.round((state.progress || 0) * 100) + '%';
+  el.barFill.style.background = state.phase === 'break' ? 'var(--hud-success)' : (state.tint || 'var(--tint)');
+});
+
+// 主题与主窗口 src/styles/tokens.css 的 5 套主题手工对齐
+// （打包后此 HTML 无法 @import src）。--tint 是专注模式强调色，不在此覆盖。
+const themeMap = {
+  dark:   { bg: 'rgba(18,20,24,0.9)',     bgBreak: 'rgba(14,26,21,0.92)',    border: 'rgba(255,255,255,0.1)',  borderBreak: 'rgba(52,211,153,0.34)',  text: '#eceef2', secondary: '#9aa1ad', muted: '#6b7280', divider: 'rgba(255,255,255,0.12)', barTrack: 'rgba(255,255,255,0.08)',   sheen: 'rgba(255,255,255,0.055)', success: '#34d399', shadow: '0 8px 28px rgba(0,0,0,0.42)' },
+  light:  { bg: 'rgba(255,255,255,0.94)', bgBreak: 'rgba(236,253,245,0.95)', border: 'rgba(15,23,42,0.12)',   borderBreak: 'rgba(5,150,105,0.34)',   text: '#0f172a', secondary: '#5b6472', muted: '#8a929e', divider: 'rgba(15,23,42,0.12)',   barTrack: 'rgba(15,23,42,0.08)',     sheen: 'rgba(255,255,255,0.8)',   success: '#059669', shadow: '0 8px 28px rgba(15,23,42,0.14)' },
+  ocean:  { bg: 'rgba(13,33,48,0.9)',     bgBreak: 'rgba(9,32,26,0.92)',     border: 'rgba(125,211,252,0.18)', borderBreak: 'rgba(52,211,153,0.34)',  text: '#e4f2fb', secondary: '#8fb2c7', muted: '#64829a', divider: 'rgba(125,211,252,0.16)', barTrack: 'rgba(125,211,252,0.1)',   sheen: 'rgba(125,211,252,0.06)', success: '#34d399', shadow: '0 8px 28px rgba(0,0,0,0.42)' },
+  forest: { bg: 'rgba(16,29,24,0.9)',     bgBreak: 'rgba(12,32,22,0.92)',    border: 'rgba(134,239,172,0.16)', borderBreak: 'rgba(74,222,128,0.34)',  text: '#e3f2e9', secondary: '#94b3a3', muted: '#678374', divider: 'rgba(134,239,172,0.14)', barTrack: 'rgba(134,239,172,0.1)',   sheen: 'rgba(134,239,172,0.06)', success: '#4ade80', shadow: '0 8px 28px rgba(0,0,0,0.42)' },
+  rose:   { bg: 'rgba(28,20,25,0.9)',     bgBreak: 'rgba(18,32,25,0.92)',    border: 'rgba(251,207,232,0.16)', borderBreak: 'rgba(52,211,153,0.34)',  text: '#f6e9ef', secondary: '#b899a6', muted: '#8a6b78', divider: 'rgba(251,207,232,0.14)', barTrack: 'rgba(251,207,232,0.1)',   sheen: 'rgba(251,207,232,0.06)', success: '#34d399', shadow: '0 8px 28px rgba(0,0,0,0.42)' }
+};
+
+function applyTheme(t) {
+  const v = themeMap[t] || themeMap.dark;
+  const r = document.documentElement.style;
+  r.setProperty('--hud-bg', v.bg);
+  r.setProperty('--hud-bg-break', v.bgBreak);
+  r.setProperty('--hud-border', v.border);
+  r.setProperty('--hud-border-break', v.borderBreak);
+  r.setProperty('--hud-text', v.text);
+  r.setProperty('--hud-secondary', v.secondary);
+  r.setProperty('--hud-muted', v.muted);
+  r.setProperty('--hud-divider', v.divider);
+  r.setProperty('--hud-bar-track', v.barTrack);
+  r.setProperty('--hud-sheen', v.sheen);
+  r.setProperty('--hud-success', v.success);
+  r.setProperty('--hud-shadow', v.shadow);
+}
+
+ipcRenderer.on('focus-theme', (e, t) => applyTheme(t));
+applyTheme('dark');
+</script>
+</body>
+</html>

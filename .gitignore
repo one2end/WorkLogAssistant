@@ -16,3 +16,12 @@ Thumbs.db
 config.local.json
 config.json
 .claude/
+# 图标中间产物（由 npm run icons 生成）
+build/icon-*.png
+
+# electron-builder 输出（release、release-v2 等）
+release*/
+
+# 收口补充（2026-11-06）
+dist-electron-new/
+.workbuddy/

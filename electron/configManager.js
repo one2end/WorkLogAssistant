@@ -37,7 +37,13 @@ class ConfigManager {
     const defaultConfig = {
       language: 'zh',
       monitoring: {
-        interval: 60
+        interval: 60,
+        idleThresholdSec: 180,
+        minSegmentSec: 3
+      },
+      focus: {
+        pomodoro: { workMin: 25, breakMin: 5, rounds: 4 },
+        immersive: { workMin: 15, breakMin: 15, rounds: 0 }
       },
       api: {
         provider: 'deepseek',
@@ -55,6 +61,14 @@ class ConfigManager {
       },
       storage: {
         customPath: ''
+      },
+      bridge: {
+        enabled: true,
+        port: 47821,
+        token: ''
+      },
+      analysis: {
+        categoryRules: null
       },
       ui: {
         theme: 'dark',

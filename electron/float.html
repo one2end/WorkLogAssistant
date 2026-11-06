@@ -3,50 +3,155 @@
 <head>
 <meta charset="UTF-8">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-  font-family: 'Segoe UI', sans-serif;
-  background: transparent;
-  overflow: hidden;
-  user-select: none;
-}
-.float-widget {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 12px;
-  background: var(--float-bg, rgba(13, 13, 13, 0.92));
-  border: 1px solid var(--float-border, rgba(100, 255, 218, 0.3));
-  border-radius: 20px;
-  backdrop-filter: blur(10px);
-  cursor: grab;
-  transition: background 0.2s, border-color 0.2s;
-  height: 100%;
-}
-.float-widget:hover {
-  border-color: var(--float-border-hover, rgba(100, 255, 218, 0.6));
-  background: var(--float-bg-hover, rgba(13, 13, 13, 0.96));
-}
-.float-widget:active { cursor: grabbing; }
-.dot { width:6px;height:6px;border-radius:50%;background:#6b7280;flex-shrink:0 }
-.info { display:flex; align-items:center; gap:6px; flex:1; min-width:0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .float-widget {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 100%;
+    padding: 0 6px 0 10px;
+    background:
+      radial-gradient(120% 180% at 8% 0%,
+        color-mix(in srgb, var(--float-accent) 12%, transparent), transparent 70%),
+      var(--float-bg);
+    border: 1px solid var(--float-border);
+    border-radius: 999px;
+    box-shadow: var(--float-shadow), inset 0 1px 0 var(--float-sheen);
+    backdrop-filter: blur(18px) saturate(1.2);
+    cursor: grab;
+    transition: border-color 140ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                background 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .float-widget:hover {
+    border-color: var(--float-border-hover);
+    background: var(--float-bg-hover);
+  }
+
+  .float-widget:active { cursor: grabbing; }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--float-muted);
+    flex-shrink: 0;
+    transition: background 200ms ease;
+  }
+
+  .dot.on {
+    background: var(--float-success);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--float-success) 18%, transparent);
+    animation: pulse 2.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.85); }
+  }
+
+  .info {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  #appName {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--float-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+    letter-spacing: -0.005em;
+  }
+
+  #duration {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--float-accent);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .icon-btn {
+    width: 21px;
+    height: 21px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: var(--float-btn-bg);
+    color: var(--float-muted);
+    box-shadow: inset 0 1px 0 var(--float-sheen);
+    transition: background 140ms ease, color 140ms ease;
+  }
+
+  .icon-btn:hover {
+    background: var(--float-btn-hover);
+    color: var(--float-text);
+  }
+
+  .icon-btn:focus-visible {
+    outline: 2px solid var(--float-accent);
+    outline-offset: 1px;
+  }
+
+  .icon-btn svg { display: block; }
+
+  #resizeHandle {
+    cursor: ew-resize;
+    padding: 0 2px;
+    color: var(--float-muted);
+    opacity: 0.55;
+    flex-shrink: 0;
+    line-height: 0;
+  }
+
+  #resizeHandle:hover { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot.on { animation: none; }
+    .float-widget, .icon-btn { transition: none; }
+  }
 </style>
 </head>
 <body>
 <div class="float-widget" id="widget">
   <div class="dot" id="dot"></div>
-  <div class="info" id="info">
-    <span id="appName" style="font-size:12px;color:var(--float-text,#e8e8e8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0">--</span>
-    <span id="duration" style="font-size:11px;color:var(--float-accent,#64ffda);font-weight:600;white-space:nowrap"></span>
+  <div class="info">
+    <span id="appName">--</span>
+    <span id="duration"></span>
   </div>
-  <button id="toggleBtn" style="border:none;border-radius:50%;width:20px;height:20px;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;background:rgba(107,114,128,0.3);color:#9ca3af;transition:all 0.2s;flex-shrink:0" title="开关记录">⏸</button>
-  <span id="resizeHandle" style="cursor:ew-resize;padding:0 3px;font-size:10px;color:var(--float-text,#888);opacity:0.4">⋮</span>
+  <button id="toggleBtn" class="icon-btn" title="暂停记录">
+    <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1.2"/><rect x="14" y="4" width="4" height="16" rx="1.2"/></svg>
+  </button>
+  <span id="resizeHandle" title="拖动调整宽度">
+    <svg width="8" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>
+  </span>
 </div>
 <script>
 const { ipcRenderer } = require('electron');
 let monitoring = false;
 
-// --- Drag & double-click logic ---
+// --- 拖动与双击逻辑 ---
 let dragging = false, dragStartX = 0, dragStartY = 0, winStartX = 0, winStartY = 0;
 let clickTimer = null, clickCount = 0;
 const DRAG_THRESHOLD = 4;
@@ -54,7 +159,7 @@ const DRAG_THRESHOLD = 4;
 const widget = document.getElementById('widget');
 
 widget.addEventListener('mousedown', (e) => {
-  if (e.target.id === 'toggleBtn' || e.target.id === 'resizeHandle') return;
+  if (e.target.closest('#toggleBtn') || e.target.closest('#resizeHandle')) return;
   if (resizing) return;
   dragging = false;
   dragStartX = e.screenX;
@@ -93,12 +198,12 @@ widget.addEventListener('mousedown', (e) => {
   e.preventDefault();
 });
 
-// --- Toggle button ---
+// --- 记录开关 ---
 document.getElementById('toggleBtn').addEventListener('click', () => {
   ipcRenderer.invoke('toggle-monitoring').then(s => { monitoring = s; updateUI(); });
 });
 
-// --- Resize handle ---
+// --- 宽度调整 ---
 const handle = document.getElementById('resizeHandle');
 let resizing = false, rStartX, rStartW;
 handle.addEventListener('mousedown', (e) => {
@@ -115,40 +220,61 @@ document.addEventListener('mouseup', () => {
   if (resizing) { resizing = false; ipcRenderer.invoke('save-float-width'); }
 });
 
-// --- Theme ---
+// --- 主题 ---
+// 与 src/styles/tokens.css 的 5 套主题手工对齐（打包后此 HTML 无法 @import src）：
+// bg/border/hover/accent/text/muted ← --bg-surface / --border-default / --border-strong /
+// --accent / --text-primary / --text-tertiary；sheen ← --surface-sheen；shadow ← --shadow-md
 const themeMap = {
-  dark: { '--float-bg':'rgba(13,13,13,0.92)','--float-border':'rgba(100,255,218,0.3)','--float-border-hover':'rgba(100,255,218,0.6)','--float-bg-hover':'rgba(13,13,13,0.96)','--float-accent':'#64ffda','--float-text':'#e8e8e8' },
-  light: { '--float-bg':'rgba(255,255,255,0.92)','--float-border':'rgba(13,110,253,0.3)','--float-border-hover':'rgba(13,110,253,0.6)','--float-bg-hover':'rgba(255,255,255,0.96)','--float-accent':'#0d6efd','--float-text':'#212529' },
-  ocean: { '--float-bg':'rgba(13,33,55,0.92)','--float-border':'rgba(79,195,247,0.3)','--float-border-hover':'rgba(79,195,247,0.6)','--float-bg-hover':'rgba(13,33,55,0.96)','--float-accent':'#4fc3f7','--float-text':'#d4e4f7' },
-  forest: { '--float-bg':'rgba(30,54,32,0.92)','--float-border':'rgba(129,199,132,0.3)','--float-border-hover':'rgba(129,199,132,0.6)','--float-bg-hover':'rgba(30,54,32,0.96)','--float-accent':'#81c784','--float-text':'#d4e8d0' },
-  rose: { '--float-bg':'rgba(58,31,46,0.92)','--float-border':'rgba(244,143,177,0.3)','--float-border-hover':'rgba(244,143,177,0.6)','--float-bg-hover':'rgba(58,31,46,0.96)','--float-accent':'#f48fb1','--float-text':'#f0d4e0' }
+  dark:   { bg: 'rgba(18,20,24,0.9)',     border: 'rgba(255,255,255,0.1)',  hover: 'rgba(255,255,255,0.18)', bgHover: 'rgba(18,20,24,0.96)',   accent: '#5e8bff', text: '#eceef2', muted: '#6b7280', btn: 'rgba(255,255,255,0.08)', btnHover: 'rgba(255,255,255,0.16)', sheen: 'rgba(255,255,255,0.055)', success: '#34d399', shadow: '0 4px 16px rgba(0,0,0,0.36)' },
+  light:  { bg: 'rgba(255,255,255,0.94)', border: 'rgba(15,23,42,0.12)',   hover: 'rgba(15,23,42,0.24)',   bgHover: 'rgba(255,255,255,0.98)', accent: '#2563eb', text: '#0f172a', muted: '#8a929e', btn: 'rgba(15,23,42,0.06)',     btnHover: 'rgba(15,23,42,0.12)',   sheen: 'rgba(255,255,255,0.8)',   success: '#059669', shadow: '0 4px 16px rgba(15,23,42,0.10)' },
+  ocean:  { bg: 'rgba(13,33,48,0.9)',     border: 'rgba(125,211,252,0.18)', hover: 'rgba(125,211,252,0.34)', bgHover: 'rgba(13,33,48,0.96)',   accent: '#38bdf8', text: '#e4f2fb', muted: '#64829a', btn: 'rgba(125,211,252,0.1)',   btnHover: 'rgba(125,211,252,0.2)', sheen: 'rgba(125,211,252,0.06)', success: '#34d399', shadow: '0 4px 16px rgba(0,0,0,0.36)' },
+  forest: { bg: 'rgba(16,29,24,0.9)',     border: 'rgba(134,239,172,0.16)', hover: 'rgba(134,239,172,0.32)', bgHover: 'rgba(16,29,24,0.96)',   accent: '#34d399', text: '#e3f2e9', muted: '#678374', btn: 'rgba(134,239,172,0.1)',   btnHover: 'rgba(134,239,172,0.2)', sheen: 'rgba(134,239,172,0.06)', success: '#4ade80', shadow: '0 4px 16px rgba(0,0,0,0.36)' },
+  rose:   { bg: 'rgba(28,20,25,0.9)',     border: 'rgba(251,207,232,0.16)', hover: 'rgba(251,207,232,0.32)', bgHover: 'rgba(28,20,25,0.96)',   accent: '#f472b6', text: '#f6e9ef', muted: '#8a6b78', btn: 'rgba(251,207,232,0.1)',   btnHover: 'rgba(251,207,232,0.2)', sheen: 'rgba(251,207,232,0.06)', success: '#34d399', shadow: '0 4px 16px rgba(0,0,0,0.36)' }
 };
+
 function applyTheme(t) {
   const v = themeMap[t] || themeMap.dark;
-  for (const [k,val] of Object.entries(v)) document.documentElement.style.setProperty(k,val);
+  const root = document.documentElement.style;
+  root.setProperty('--float-bg', v.bg);
+  root.setProperty('--float-bg-hover', v.bgHover);
+  root.setProperty('--float-border', v.border);
+  root.setProperty('--float-border-hover', v.hover);
+  root.setProperty('--float-accent', v.accent);
+  root.setProperty('--float-text', v.text);
+  root.setProperty('--float-muted', v.muted);
+  root.setProperty('--float-btn-bg', v.btn);
+  root.setProperty('--float-btn-hover', v.btnHover);
+  root.setProperty('--float-sheen', v.sheen);
+  root.setProperty('--float-success', v.success);
+  root.setProperty('--float-shadow', v.shadow);
 }
 
-// --- UI update ---
+// --- 状态刷新 ---
+const ICON_PAUSE = '<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1.2"/><rect x="14" y="4" width="4" height="16" rx="1.2"/></svg>';
+const ICON_PLAY = '<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2a1 1 0 0 1 1.5-.87l9 6.8a1 1 0 0 1 0 1.74l-9 6.8A1 1 0 0 1 8 18.8z"/></svg>';
+
 function updateUI() {
   const dot = document.getElementById('dot');
   const btn = document.getElementById('toggleBtn');
-  if (monitoring) {
-    dot.style.background='#10b981';
-    btn.textContent='⏸'; btn.style.background='rgba(16,185,129,0.25)'; btn.style.color='#10b981'; btn.title='暂停记录';
-  } else {
-    dot.style.background='#6b7280';
-    btn.textContent='▶'; btn.style.background='rgba(107,114,128,0.3)'; btn.style.color='#9ca3af'; btn.title='开始记录';
-  }
+  dot.className = monitoring ? 'dot on' : 'dot';
+  btn.innerHTML = monitoring ? ICON_PAUSE : ICON_PLAY;
+  btn.title = monitoring ? '暂停记录' : '开始记录';
 }
 
-// --- IPC listeners ---
+// --- IPC ---
 ipcRenderer.on('float-update', (e, data) => {
   document.getElementById('appName').textContent = data.appName || '--';
   document.getElementById('duration').textContent = data.duration || '';
-  if (data.isMonitoring !== undefined && data.isMonitoring !== monitoring) { monitoring = data.isMonitoring; updateUI(); }
+  if (data.isMonitoring !== undefined && data.isMonitoring !== monitoring) {
+    monitoring = data.isMonitoring;
+    updateUI();
+  }
 });
 ipcRenderer.on('float-monitoring-status', (e, s) => { monitoring = s; updateUI(); });
 ipcRenderer.on('float-theme', (e, t) => applyTheme(t));
+
+applyTheme('dark');
+updateUI();
 </script>
 </body>
 </html>

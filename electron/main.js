@@ -2,14 +2,47 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage } = require('electr
 const path = require('path');
 const fs = require('fs');
 const WindowMonitor = require('./windowMonitor');
+const ActivityRecorder = require('./activityRecorder');
 const Summarizer = require('./summarizer');
 const ConfigManager = require('./configManager');
 const StorageManager = require('./storageManager');
 const LogManager = require('./logManager');
 const ArhatManager = require('./arhatManager');
+const FocusManager = require('./focusManager');
+const { ApiServer, generateToken } = require('./apiServer');
+const analytics = require('./analytics');
+
+/**
+ * 图标资源路径。打包后放在 resources 目录（见 package.json extraResources），
+ * 开发时直接读 build/。
+ */
+function assetPath(name) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, name)
+    : path.join(__dirname, '..', 'build', name);
+}
+
+/**
+ * Windows 任务栏 / 开始菜单靠 AppUserModelID 把窗口归到某个应用。
+ * 不设的话，源码运行时窗口会被算作 electron.exe，显示 Electron 的默认图标。
+ * 这个值要和 electron-builder 的 appId 保持一致。
+ */
+const APP_ID = 'com.worklog.assistant';
+
+// 数据目录固定成这个值。
+// 注意：改 app.setName 会让 Electron 重算 userData 路径（跟着名字走），
+// 历史上因为目录名不同出现过两次，所以这里显式钉死，避免升级后"数据消失"。
+const DATA_APP_DIR = 'worklog-assistant';
+
+try {
+  app.setAppUserModelId(APP_ID);
+  app.setName('WorkLog Assistant');
+  app.setPath('userData', path.join(app.getPath('appData'), DATA_APP_DIR));
+} catch (e) { /* 非 Windows 平台忽略前两项 */ }
 
 let mainWindow;
 let floatWindow;
+let focusWindow;
 let tray;
 let isMonitoring = false;
 let monitorInterval = null;
@@ -29,18 +62,189 @@ const summarizer = new Summarizer();
 const logManager = new LogManager(customPath);
 const arhatManager = new ArhatManager(customPath);
 
+// --- 专注助手（番茄 / 沉浸 / 罗汉） ---
+
+const focusManager = new FocusManager({
+  arhatManager,
+  getConfig: () => configManager.getConfig(),
+  onLog: (message, type) => logManager.addLog(message, type || 'info'),
+  onPhaseChange: (state) => {
+    notifyFocus(state);
+    broadcastFocus(state);
+  },
+  onEnd: (record) => {
+    hideFocusWindow();
+    broadcastFocus({ active: false, lastRecord: record });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('focus-ended', record);
+    }
+  }
+});
+
+function notifyFocus(state) {
+  try {
+    const { Notification } = require('electron');
+    if (!Notification.isSupported()) return;
+    const isBreak = state.phase === 'break';
+    new Notification({
+      title: isBreak ? '该休息了' : `${state.modeName} · 开始专注`,
+      body: isBreak
+        ? `${state.durationMs / 60000} 分钟后回来，站起来走走`
+        : (state.focusText || '回到当下这一件事'),
+      silent: false
+    }).show();
+  } catch (e) { /* 通知失败不影响主流程 */ }
+}
+
+function broadcastFocus(state) {
+  const payload = state || focusManager.getState();
+  if (focusWindow && !focusWindow.isDestroyed()) {
+    focusWindow.webContents.send('focus-hud', payload);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('focus-state', payload);
+  }
+}
+
+function createFocusWindow() {
+  if (focusWindow && !focusWindow.isDestroyed()) return focusWindow;
+
+  const { screen } = require('electron');
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const width = 280;
+  const height = 48;
+
+  focusWindow = new BrowserWindow({
+    width,
+    height,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: workArea.y + 14,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    hasShadow: false,
+    focusable: false,
+    show: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false }
+  });
+
+  focusWindow.loadFile(path.join(__dirname, 'focus.html'));
+  // 隐藏窗口的 ready-to-show 在部分 Electron 版本不触发，主题用 did-finish-load 兜底
+  focusWindow.webContents.once('did-finish-load', () => {
+    if (!focusWindow || focusWindow.isDestroyed()) return;
+    const theme = configManager.getConfig().ui?.theme || 'dark';
+    focusWindow.webContents.send('focus-theme', theme);
+  });
+  focusWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  focusWindow.setAlwaysOnTop(true, 'screen-saver');
+  focusWindow.once('ready-to-show', () => {
+    focusWindow.showInactive();
+    broadcastFocus();
+  });
+  focusWindow.on('closed', () => { focusWindow = null; });
+
+  return focusWindow;
+}
+
+function hideFocusWindow() {
+  if (focusWindow && !focusWindow.isDestroyed()) {
+    focusWindow.hide();
+  }
+}
+
+const activityRecorder = new ActivityRecorder({
+  monitor: windowMonitor,
+  storage: storageManager,
+  getConfig: () => configManager.getConfig(),
+  onLog: (message, type) => logManager.addLog(message, type || 'info'),
+  onSegment: (record) => {
+    // 只把「工作片段」实时推给界面，空闲段不刷时间线
+    if (record.kind !== 'active') return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('activity-logged', {
+        id: record.t,
+        timestamp: record.t,
+        processName: record.app,
+        windowTitle: record.title,
+        platform: record.platform,
+        durationMs: record.dur,
+        kind: 'active'
+      });
+    }
+  }
+});
+
+// --- 对外数据接口（本地 HTTP + MCP） ---
+
+function getMcpServerPath() {
+  // 打包后 mcp/ 会被 asarUnpack，需要指向解包目录
+  return path.join(__dirname, '..', 'mcp', 'worklog-mcp.js')
+    .replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+}
+
+function ensureBridgeToken() {
+  const cfg = configManager.getConfig();
+  let token = cfg.bridge?.token;
+  if (!token) {
+    token = generateToken();
+    configManager.updateConfig({ bridge: { token } });
+  }
+  return token;
+}
+
+const apiServer = new ApiServer({
+  getDataDir: () => storageManager.getDataDir(),
+  getConfig: () => ({ ...configManager.getConfig(), version: app.getVersion() }),
+  port: configManager.getConfig().bridge?.port || 47821,
+  token: ensureBridgeToken()
+});
+
+async function startBridge() {
+  const cfg = configManager.getConfig();
+  if (cfg.bridge?.enabled === false) {
+    logManager.addLog('数据接口已禁用，跳过启动', 'info');
+    return;
+  }
+  const result = await apiServer.start();
+  if (result.ok) {
+    logManager.addLog(`数据接口已启动: ${result.url}`, 'info');
+  } else {
+    logManager.addLog('数据接口启动失败: ' + result.error, 'error');
+  }
+}
+
+function getMcpConfigSnippet() {
+  // 统一成正斜杠：Node 在 Windows 上完全支持，且 JSON 里不用双反斜杠转义，更短更好读
+  const toPosix = (p) => p.replace(/\\/g, '/');
+  const snippet = {
+    mcpServers: {
+      worklog: {
+        command: 'node',
+        args: [toPosix(getMcpServerPath())],
+        env: { WORKLOG_DATA_DIR: toPosix(storageManager.getDataDir()) }
+      }
+    }
+  };
+  return JSON.stringify(snippet, null, 2);
+}
+
 function createWindow() {
   const { screen } = require('electron');
   const display = screen.getPrimaryDisplay();
   const workArea = display.workArea;
 
   mainWindow = new BrowserWindow({
-    width: 480,
+    width: 620,
     height: workArea.height,
-    x: workArea.x + workArea.width - 480,
+    x: workArea.x + workArea.width - 620,
     y: workArea.y,
-    minWidth: 420,
+    minWidth: 520,
     minHeight: 600,
+    // Windows 下用 .ico 才能在任务栏/Alt+Tab 拿到多尺寸清晰图标
+    icon: process.platform === 'win32' ? assetPath('icon.ico') : assetPath('icon.png'),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -49,16 +253,43 @@ function createWindow() {
     show: false,
     frame: false,
     titleBarStyle: 'hidden',
-    backgroundColor: '#0d0d0d'
+    backgroundColor: configManager.getConfig().ui?.theme === 'light' ? '#f7f8fa' : '#0b0c0e'
   });
 
-  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-  
+  const isDev = process.env.NODE_ENV === 'development';
+  const distIndex = path.join(__dirname, '../dist/index.html');
+
+  const loadProduction = () => {
+    if (!fs.existsSync(distIndex)) {
+      logManager.addLog('未找到 dist/index.html，请先执行 npm run build', 'error');
+      mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+        '<body style="background:#0d0d0d;color:#e6e6e6;font-family:sans-serif;padding:40px">' +
+        '<h2>页面资源缺失</h2><p>没有找到 dist/index.html。</p>' +
+        '<p>请先运行 <code>npm run build</code>，或使用 <code>npm run electron:dev</code> 启动开发模式。</p></body>'
+      ));
+      return;
+    }
+    mainWindow.loadFile(distIndex).catch((err) => {
+      logManager.addLog('加载页面失败: ' + err.message, 'error');
+    });
+  };
+
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+    // 开发模式下如果 dev server 还没起来，直接回退到构建产物，避免黑屏
+    mainWindow.loadURL(devUrl).catch(() => {
+      logManager.addLog('开发服务器不可达，回退到 dist/index.html', 'info');
+      loadProduction();
+    });
+    mainWindow.webContents.once('did-fail-load', (e, code, desc, url) => {
+      if (url && url.startsWith('http://localhost')) {
+        logManager.addLog(`开发服务器连接失败(${code} ${desc})，回退到构建产物`, 'info');
+        loadProduction();
+      }
+    });
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    loadProduction();
   }
 
   mainWindow.once('ready-to-show', () => {
@@ -66,6 +297,22 @@ function createWindow() {
     if (floatWindow) {
       floatWindow.hide();
     }
+  });
+
+  // 把渲染进程的报错转存到应用日志，便于排查白屏/黑屏
+  mainWindow.webContents.on('console-message', (event, level, message) => {
+    if (level < 2) return;
+    // Electron 自带的 CSP 提示在开启 nodeIntegration 时无解，不往诊断日志里塞噪音
+    if (message.includes('Electron Security Warning')) return;
+    logManager.addLog('[渲染进程] ' + message, 'error');
+  });
+
+  mainWindow.webContents.on('did-fail-load', (e, code, desc) => {
+    logManager.addLog(`页面加载失败 ${code}: ${desc}`, 'error');
+  });
+
+  mainWindow.webContents.on('render-process-gone', (e, details) => {
+    logManager.addLog('渲染进程异常退出: ' + details.reason, 'error');
   });
 
   mainWindow.on('minimize', (event) => {
@@ -83,23 +330,27 @@ function createWindow() {
 
 function createTray() {
   let trayIcon;
-  
+
   try {
-    const iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../build/icon.png');
-    trayIcon = nativeImage.createFromPath(iconPath);
-    
-    if (trayIcon.isEmpty()) {
-      console.log('图标文件为空，使用默认图标');
-      trayIcon = nativeImage.createEmpty();
+    // 优先用专门为托盘生成的 32px 图，缩到 16px 比从 1024 缩更清晰
+    const candidates = ['tray.png', 'icon.png'];
+    let img = null;
+    for (const name of candidates) {
+      const p = assetPath(name);
+      if (!fs.existsSync(p)) continue;
+      const candidate = nativeImage.createFromPath(p);
+      if (!candidate.isEmpty()) {
+        img = candidate;
+        break;
+      }
     }
+    trayIcon = img || nativeImage.createEmpty();
   } catch (error) {
-    console.log('无法加载图标文件，使用默认图标:', error.message);
+    logManager.addLog('加载托盘图标失败: ' + error.message, 'error');
     trayIcon = nativeImage.createEmpty();
   }
 
-  tray = new Tray(trayIcon.resize({ width: 16, height: 16 }));
+  tray = new Tray(trayIcon);
 
   const contextMenu = Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => showMainWindow() },
@@ -177,11 +428,13 @@ function createFloatWindow() {
 function updateFloatWindow() {
   if (!floatWindow) return;
 
+  const status = activityRecorder.getStatus();
+  const cur = status.current;
+
   let duration = '';
-  if (isMonitoring && currentAppStartTime) {
-    const diffMs = Date.now() - currentAppStartTime;
-    const minutes = Math.floor(diffMs / 60000);
-    if (minutes < 1) duration = '<1分钟';
+  if (isMonitoring && cur) {
+    const minutes = Math.floor(cur.elapsedMs / 60000);
+    if (minutes < 1) duration = '<1m';
     else if (minutes < 60) duration = `${minutes}分钟`;
     else {
       const hours = Math.floor(minutes / 60);
@@ -190,8 +443,13 @@ function updateFloatWindow() {
     }
   }
 
+  let appName = '--';
+  if (isMonitoring && cur) {
+    appName = cur.idle ? '空闲中' : cur.app;
+  }
+
   floatWindow.webContents.send('float-update', {
-    appName: isMonitoring ? (currentAppName || '--') : '--',
+    appName,
     duration,
     isMonitoring
   });
@@ -267,37 +525,10 @@ function updateTrayMenu() {
 
 function startMonitoring() {
   const config = configManager.getConfig();
-  const monitorIntervalTime = config.monitoring.interval * 1000;
-  
+
   logManager.addLog('开始记录', 'info');
-  logManager.addLog('记录间隔: ' + config.monitoring.interval + '秒', 'info');
-  
-  monitorInterval = setInterval(async () => {
-    try {
-      const activity = await windowMonitor.getCurrentActivity();
-      if (activity) {
-        // Track current app for float window
-        if (activity.processName !== currentAppName) {
-          currentAppName = activity.processName;
-          currentAppStartTime = Date.now();
-        }
-        updateFloatWindow();
 
-        storageManager.saveActivity(activity);
-        logManager.addLog('记录活动: ' + activity.processName + ' - ' + activity.windowTitle, 'info');
-
-        if (mainWindow) {
-          mainWindow.webContents.send('activity-logged', activity);
-        }
-      } else {
-        // Even if no new activity, update float window timer
-        updateFloatWindow();
-      }
-    } catch (error) {
-      console.error('记录错误:', error);
-      logManager.addLog('记录错误: ' + error.message, 'error');
-    }
-  }, monitorIntervalTime);
+  activityRecorder.start();
 
   const schedules = config.summary?.schedules || [];
 
@@ -364,11 +595,9 @@ function startMonitoring() {
 
 function stopMonitoring() {
   logManager.addLog('停止记录', 'info');
-  logManager.addLog('记录已暂停', 'info');
-  if (monitorInterval) {
-    clearInterval(monitorInterval);
-    monitorInterval = null;
-  }
+
+  activityRecorder.stop();
+
   if (summaryInterval) {
     clearInterval(summaryInterval);
     summaryInterval = null;
@@ -377,11 +606,15 @@ function stopMonitoring() {
     clearInterval(scheduleCheckerInterval);
     scheduleCheckerInterval = null;
   }
+  logManager.addLog('记录已暂停', 'info');
 }
 
 function quitApp() {
   app.isQuitting = true;
   stopMonitoring();
+  try {
+    apiServer.stop();
+  } catch (e) { /* ignore */ }
   if (mainWindow) {
     mainWindow.destroy();
   }
@@ -415,6 +648,18 @@ app.whenReady().then(() => {
   startMonitoring();
   updateTrayMenu();
   logManager.addLog('已自动开始记录', 'info');
+
+  // 启动本地数据接口
+  startBridge();
+
+  // 浮窗计时每秒刷新
+  setInterval(() => updateFloatWindow(), 1000);
+
+  // 专注状态机每秒推进
+  setInterval(() => {
+    const state = focusManager.tick();
+    if (state) broadcastFocus(state);
+  }, 1000);
 
   logManager.addLog('应用程序已就绪', 'info');
 
@@ -458,11 +703,104 @@ ipcMain.handle('save-config', (event, config) => {
     floatWindow.webContents.send('float-theme', config.ui?.theme || 'dark');
   }
 
+  // 专注 HUD 是懒创建窗口：此刻可能还不存在，创建时会再推一次当前主题
+  if (focusWindow && !focusWindow.isDestroyed()) {
+    focusWindow.webContents.send('focus-theme', config.ui?.theme || 'dark');
+  }
+
   return true;
 });
 
 ipcMain.handle('get-activities', (event, date) => {
   return storageManager.getActivities(date);
+});
+
+// --- 聚合统计（前端与 AI 接口共用同一套口径） ---
+
+ipcMain.handle('get-day-analytics', (event, date) => {
+  try {
+    const dateStr = date || analytics.toDateStr(new Date());
+    const report = analytics.buildDayReport(storageManager.getDataDir(), dateStr);
+    return { ok: true, report, markdown: analytics.renderDayMarkdown(report, 'normal') };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-range-analytics', (event, payload) => {
+  try {
+    const to = (payload && payload.to) || analytics.toDateStr(new Date());
+    const from = (payload && payload.from) || analytics.toDateStr(
+      new Date(new Date(to + 'T00:00:00').getTime() - 6 * 86400000)
+    );
+    const report = analytics.buildRangeReport(storageManager.getDataDir(), from, to);
+    return { ok: true, report, markdown: analytics.renderRangeMarkdown(report, 'normal') };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+// 热力图专用：只返回逐日有效时长，口径与单日 report.stats.trackedMs 一致
+ipcMain.handle('get-daily-tracked', (event, payload) => {
+  try {
+    const p = payload || {};
+    const to = p.to || analytics.toDateStr(new Date());
+    const from = p.from || analytics.toDateStr(
+      new Date(new Date(to + 'T00:00:00').getTime() - 83 * 86400000)
+    );
+    const days = analytics.buildDailyTrackedMs(storageManager.getDataDir(), from, to);
+    return { ok: true, from, to, days, generatedAt: new Date().toISOString() };
+  } catch (error) {
+    return { ok: false, error: error.message, days: [] };
+  }
+});
+
+ipcMain.handle('get-recorder-status', () => {
+  return activityRecorder.getStatus();
+});
+
+// 手工补记：录制器漏掉的时段，由用户补上（类似 RescueTime 的手动条目）
+ipcMain.handle('add-manual-record', (event, payload) => {
+  const p = payload || {};
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(p.date || '')
+    ? p.date
+    : analytics.toDateStr(new Date());
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(p.startTime || '').trim());
+  if (!m) {
+    return { ok: false, error: '开始时间格式应为 HH:mm' };
+  }
+
+  const durationMin = parseInt(p.durationMin, 10);
+  if (!durationMin || durationMin < 1 || durationMin > 24 * 60) {
+    return { ok: false, error: '时长需在 1–1440 分钟之间' };
+  }
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const start = new Date(`${dateStr}T${pad(m[1])}:${m[2]}:00`);
+  if (Number.isNaN(start.getTime())) {
+    return { ok: false, error: '时间无法解析' };
+  }
+
+  const ok = storageManager.appendActivityRecords([{
+    t: start.toISOString(),
+    dur: durationMin * 60000,
+    kind: 'active',
+    app: String(p.app || '手工记录').trim() || '手工记录',
+    title: String(p.title || '').trim(),
+    platform: 'manual',
+    source: 'manual',
+    cat: p.category || ''
+  }]);
+
+  if (ok) {
+    logManager.addLog(`手工补记 ${dateStr} ${p.startTime} · ${durationMin} 分钟`, 'info');
+  }
+  return { ok, error: ok ? null : '写入失败' };
+});
+
+ipcMain.handle('flush-recorder', () => {
+  const n = activityRecorder.flush();
+  return { flushed: n };
 });
 
 ipcMain.handle('get-summaries', (event, date) => {
@@ -697,26 +1035,51 @@ ipcMain.handle('get-storage-path', () => {
 
 // --- Arhat Mode ---
 
-ipcMain.handle('arhat-start', (event, focusText) => {
-  const session = arhatManager.startSession(focusText);
-  logManager.addLog('罗汉模式已开始: ' + (focusText || '无主题'), 'info');
-  return session;
+// --- 专注助手 ---
+
+ipcMain.handle('focus-presets', () => {
+  return focusManager.getPresets();
 });
 
-ipcMain.handle('arhat-stop', () => {
-  const session = arhatManager.endSession();
-  if (session) {
-    const mins = Math.round(session.durationMs / 60000);
-    logManager.addLog(`罗汉模式结束，持续 ${mins} 分钟，记录 ${session.notesCount} 条杂念`, 'info');
+ipcMain.handle('focus-start', (event, payload) => {
+  const { mode, focusText, overrides } = payload || {};
+  const state = focusManager.start(mode || 'pomodoro', focusText, overrides);
+  createFocusWindow();
+  broadcastFocus(state);
+  return state;
+});
+
+ipcMain.handle('focus-toggle-pause', () => {
+  const state = focusManager.togglePause();
+  broadcastFocus(state);
+  return state;
+});
+
+ipcMain.handle('focus-skip', () => {
+  const state = focusManager.skip();
+  broadcastFocus(state);
+  return state;
+});
+
+ipcMain.handle('focus-end', () => {
+  const record = focusManager.end();
+  if (!record) {
+    hideFocusWindow();
+    broadcastFocus({ active: false });
   }
-  return session;
+  return record;
 });
 
-ipcMain.handle('arhat-get-session', () => {
-  return arhatManager.getActiveSession();
+ipcMain.handle('focus-state', () => {
+  return focusManager.getState();
+});
+
+ipcMain.handle('focus-add-note', (event, text, category) => {
+  return focusManager.addNote(text, category);
 });
 
 ipcMain.handle('arhat-add-note', (event, text, category) => {
+  // 兼容旧调用
   return arhatManager.addNote(text, category);
 });
 
@@ -732,11 +1095,104 @@ ipcMain.handle('arhat-get-sessions', (event, date) => {
   return arhatManager.getSessions(date);
 });
 
-ipcMain.handle('get-auto-launch', () => {
-  return app.getLoginItemSettings().openAtLogin;
+// --- 数据接口（HTTP / MCP） IPC ---
+
+ipcMain.handle('get-bridge-status', () => {
+  const status = apiServer.getStatus();
+  const cfg = configManager.getConfig();
+  return {
+    ...status,
+    enabled: cfg.bridge?.enabled !== false,
+    dataDir: storageManager.getDataDir(),
+    mcpServerPath: getMcpServerPath(),
+    mcpConfig: getMcpConfigSnippet(),
+    exampleUrls: {
+      health: status.url ? `${status.url}/health` : null,
+      today: status.url ? `${status.url}/api/report/day?token=${status.token}` : null,
+      landing: status.url ? `${status.url}/?token=${status.token}` : null
+    }
+  };
 });
 
-ipcMain.handle('get-dates-with-data', () => {
+ipcMain.handle('set-bridge-config', async (event, patch) => {
+  const updates = { bridge: {} };
+  if (typeof patch.enabled === 'boolean') updates.bridge.enabled = patch.enabled;
+  if (Number.isInteger(patch.port) && patch.port >= 1024 && patch.port <= 65535) {
+    updates.bridge.port = patch.port;
+  }
+  if (patch.regenerateToken) {
+    updates.bridge.token = generateToken();
+  }
+  configManager.updateConfig(updates);
+
+  await apiServer.stop();
+
+  const cfg = configManager.getConfig();
+  apiServer.token = cfg.bridge?.token || ensureBridgeToken();
+  apiServer.basePort = cfg.bridge?.port || 47821;
+
+  if (cfg.bridge?.enabled !== false) {
+    const result = await apiServer.start();
+    logManager.addLog(
+      result.ok ? `数据接口已重启: ${result.url}` : '数据接口重启失败: ' + result.error,
+      result.ok ? 'info' : 'error'
+    );
+  } else {
+    logManager.addLog('数据接口已关闭', 'info');
+  }
+
+  if (mainWindow) {
+    mainWindow.webContents.send('bridge-status-changed');
+  }
+
+  return true;
+});
+
+ipcMain.handle('test-bridge', async () => {
+  const status = apiServer.getStatus();
+  if (!status.running) {
+    return { ok: false, error: '接口未运行' };
+  }
+  try {
+    const http = require('http');
+    return await new Promise((resolve) => {
+      const req = http.get(
+        {
+          hostname: '127.0.0.1',
+          port: status.port,
+          path: '/api/report/day?detail=compact',
+          headers: { Authorization: `Bearer ${status.token}` },
+          timeout: 5000
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (c) => { body += c; });
+          res.on('end', () => resolve({
+            ok: res.statusCode === 200,
+            statusCode: res.statusCode,
+            preview: body.slice(0, 400)
+          }));
+        }
+      );
+      req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: '请求超时' }); });
+      req.on('error', (err) => resolve({ ok: false, error: err.message }));
+    });
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('open-bridge-url', () => {
+  const status = apiServer.getStatus();
+  if (!status.running) return false;
+  const { shell } = require('electron');
+  shell.openExternal(`${status.url}/?token=${status.token}`);
+  return true;
+});
+
+ipcMain.handle('get-auto-launch', () => {
+  return app.getLoginItemSettings().openAtLogin;
+});ipcMain.handle('get-dates-with-data', () => {
   return storageManager.getDatesWithData();
 });
 

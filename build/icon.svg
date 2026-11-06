@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    WorkLog 应用图标
+    设计约束：
+      1. 16px 下仍要能认出「脉搏线」，所以只保留一个主图形，不做细节
+      2. 描边 88/1024，缩到 16px 约 1.4px，不会糊成灰块
+      3. 圆角矩形容器 + 蓝紫渐变，与界面内的品牌标记保持一致
+  -->
+  <defs>
+    <linearGradient id="bg" x1="140" y1="60" x2="884" y2="968" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7CA3FF" />
+      <stop offset="0.48" stop-color="#6A87FF" />
+      <stop offset="1" stop-color="#9C7CFF" />
+    </linearGradient>
+
+    <radialGradient id="sheen" cx="0.28" cy="0.12" r="0.82">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.30" />
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.06" />
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient id="shade" x1="512" y1="32" x2="512" y2="992" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1B1F3A" stop-opacity="0" />
+      <stop offset="1" stop-color="#1B1F3A" stop-opacity="0.20" />
+    </linearGradient>
+  </defs>
+
+  <!-- 容器 -->
+  <rect x="32" y="32" width="960" height="960" rx="228" fill="url(#bg)" />
+  <rect x="32" y="32" width="960" height="960" rx="228" fill="url(#sheen)" />
+  <rect x="32" y="32" width="960" height="960" rx="228" fill="url(#shade)" />
+
+  <!-- 边缘高光，暗色桌面上更有边界感 -->
+  <rect x="34" y="34" width="956" height="956" rx="226" fill="none"
+        stroke="#FFFFFF" stroke-opacity="0.20" stroke-width="3" />
+
+  <!-- 脉搏线：前波 + 主尖峰，比单纯锯齿更像心电图 -->
+  <path
+    d="M188 516 H268 L312 468 L360 556 L436 352 L596 676 L664 516 H836"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="80"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

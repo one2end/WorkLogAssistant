@@ -1,2881 +1,1118 @@
 <template>
-  <div id="app" :class="theme">
-    <!-- Arhat Mode Overlay -->
-    <div v-if="arhatStartDialog" class="arhat-start-dialog">
-      <div class="arhat-start-card">
-        <h3>进入罗汉模式</h3>
-        <p>写下当前最重要的一件事</p>
-        <input
-          ref="arhatStartInput"
-          v-model="arhatFocusInput"
-          class="arhat-start-input"
-          placeholder="例如：完成API重构"
-          @keydown.enter="startArhat"
-          @keydown.escape="arhatStartDialog = false"
-        >
-        <div class="arhat-start-actions">
-          <button @click="arhatStartDialog = false" class="action-btn">取消</button>
-          <button @click="startArhat" class="action-btn primary">开始觉察</button>
-        </div>
-      </div>
-    </div>
-    <div v-if="arhatActive" class="arhat-overlay">
-      <div class="arhat-breath" :class="{ paused: arhatNoteFocused }"></div>
-      <div class="arhat-content">
-        <div class="arhat-focus-text">{{ arhatFocusText || '觉察当下' }}</div>
-        <div class="arhat-timer">{{ arhatTimerDisplay }}</div>
-        <div class="arhat-note-area">
-          <input
-            ref="arhatNoteInput"
-            v-model="arhatNoteText"
-            class="arhat-note-input"
-            :class="{ visible: arhatNoteVisible }"
-            placeholder="杂念闪记...按 Enter 保存"
-            @focus="arhatNoteFocused = true"
-            @blur="arhatNoteFocused = false"
-            @keydown.enter="saveArhatNote"
-            @keydown.escape="arhatNoteVisible = false"
-          >
-          <button v-if="!arhatNoteVisible" class="arhat-note-trigger" @click="showArhatNote">
-            记一笔杂念
-          </button>
-        </div>
-        <div v-if="arhatNotes.length > 0" class="arhat-notes-count">
-          已记录 {{ arhatNotes.length }} 条杂念
-        </div>
-        <button class="arhat-exit-btn" @click="stopArhat">结束觉察</button>
-      </div>
-    </div>
+  <div class="app-root" :class="'theme-' + theme">
+    <FocusOverlay
+      :state="focusState"
+      @end="endFocus"
+      @toggle-pause="toggleFocusPause"
+      @skip="skipFocusPhase"
+      @add-note="addFocusNote"
+    />
 
-    <div class="container">
-      <div v-if="toastMessage" class="toast" :class="toastType" @click="toastMessage = ''">
-        {{ toastMessage }}
-      </div>
-      <div class="title-bar">
-        <div class="title-bar-drag">
-          <span class="app-icon">⏱</span>
-          <span class="app-title">WorkLog Assistant</span>
-        </div>
-        <div class="title-bar-controls">
-          <button @click="minimizeWindow" class="win-btn" title="最小化">
-            <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
-          </button>
-          <button @click="closeWindow" class="win-btn win-btn-close" title="关闭">
-            <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.2"/></svg>
-          </button>
-        </div>
-      </div>
+    <transition name="modal-fade">
+      <div v-if="focusDialog" class="modal-mask" @click.self="closeFocusDialog">
+        <div class="focus-dialog">
+          <h3>开始专注</h3>
+          <p>选一个节奏，写下当下最重要的一件事</p>
 
-      <header class="header">
-        <div class="header-left">
-          <button @click="toggleMonitoring" :class="['monitor-btn', isMonitoring ? 'active' : '']">
-            <span class="monitor-dot" :class="{ pulse: isMonitoring }"></span>
-            {{ isMonitoring ? '记录中' : '已暂停' }}
-          </button>
-          <div class="date-picker">
-            <button @click="changeDate(-1)" class="date-nav-btn">‹</button>
-            <div class="date-input-wrapper">
-              <button class="date-display-btn" @click="showCalendar = !showCalendar">
-                {{ formatDateDisplay(selectedDate) }}
-              </button>
-              <div v-if="showCalendar" class="calendar-popup" @mousedown.stop>
-                <div class="calendar-header">
-                  <button @click="changeCalendarMonth(-1)" class="cal-nav-btn">‹</button>
-                  <span class="cal-title">{{ calendarYear }}年{{ calendarMonth + 1 }}月</span>
-                  <button @click="changeCalendarMonth(1)" class="cal-nav-btn">›</button>
-                </div>
-                <div class="calendar-weekdays">
-                  <span v-for="d in ['日','一','二','三','四','五','六']" :key="d">{{ d }}</span>
-                </div>
-                <div class="calendar-days">
-                  <button
-                    v-for="day in calendarDays"
-                    :key="day.key"
-                    class="cal-day"
-                    :class="{
-                      'other-month': !day.currentMonth,
-                      'is-today': day.isToday,
-                      'is-selected': day.dateStr === selectedDate,
-                      'has-data': datesWithData.has(day.dateStr),
-                      'is-future': day.isFuture
-                    }"
-                    :disabled="day.isFuture"
-                    @click="selectCalendarDate(day)"
-                  >
-                    {{ day.day }}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <button @click="changeDate(1)" class="date-nav-btn" :disabled="isToday">›</button>
-            <button v-if="!isToday" @click="goToToday" class="today-btn">今天</button>
-          </div>
-        </div>
-        <div class="header-right">
-          <button @click="showArhatStart" class="icon-btn" title="罗汉模式">
-            🧘
-          </button>
-          <div class="dropdown-wrapper">
-            <button @click="showDataMenu = !showDataMenu" class="icon-btn" title="数据管理">
-              📥
-            </button>
-            <div v-if="showDataMenu" class="dropdown-menu" @mouseleave="showDataMenu = false">
-              <button @click="exportData" class="dropdown-item">导出当日 JSON</button>
-              <button @click="exportFullJSON" class="dropdown-item">导出全部 JSON</button>
-              <button @click="exportCSV" class="dropdown-item">导出全部 CSV</button>
-              <div class="dropdown-divider"></div>
-              <button @click="importData('merge')" class="dropdown-item">导入合并</button>
-              <button @click="importData('overwrite')" class="dropdown-item danger">导入覆盖</button>
-            </div>
-          </div>
-          <button @click="activeTab = 'settings'" class="icon-btn" title="设置">
-            ⚙️
-          </button>
-        </div>
-      </header>
-
-      <main class="main-content">
-        <div v-if="activeTab !== 'settings'" class="stats-section">
-          <div class="stat-card">
-            <div class="stat-value">{{ statistics.totalActivities }}</div>
-            <div class="stat-label">{{ isToday ? '今日活动' : '当日活动' }}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value">{{ statistics.uniqueApplications }}</div>
-            <div class="stat-label">应用数量</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value">{{ formatDuration(totalRecordedTime) }}</div>
-            <div class="stat-label">记录时长</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value">{{ formatDuration(idleTime) }}</div>
-            <div class="stat-label">未操作电脑</div>
-          </div>
-        </div>
-
-        <div v-if="activeTab !== 'settings'" class="charts-section">
-          <div class="chart-card">
-            <div class="chart-header">
-              <h3>应用使用时长</h3>
-              <span class="chart-badge">{{ Object.keys(appDurationStats).length }} 个应用</span>
-            </div>
-            <div class="chart-content">
-              <div v-for="(duration, app, index) in appDurationStats" :key="app" class="app-bar">
-                <div class="app-rank">{{ index + 1 }}</div>
-                <div class="app-name" :title="app">{{ app }}</div>
-                <div class="app-bar-container">
-                  <div class="app-bar-fill duration-fill" :style="{ width: getDurationBarWidth(duration) + '%' }"></div>
-                </div>
-                <div class="app-count">{{ formatDuration(duration) }}</div>
-              </div>
-              <div v-if="Object.keys(appDurationStats).length === 0" class="empty-state">
-                <p>暂无数据</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="chart-card">
-            <div class="chart-header">
-              <h3>子活动次数排名</h3>
-              <span class="chart-badge">Top {{ Object.keys(subActivityStats).length }}</span>
-            </div>
-            <div class="chart-content">
-              <div v-for="(count, title, index) in subActivityStats" :key="title" class="app-bar">
-                <div class="app-rank">{{ index + 1 }}</div>
-                <div class="app-name" :title="title">{{ title }}</div>
-                <div class="app-bar-container">
-                  <div class="app-bar-fill" :style="{ width: getBarWidth(count) + '%' }"></div>
-                </div>
-                <div class="app-count">{{ count }}</div>
-              </div>
-              <div v-if="Object.keys(subActivityStats).length === 0" class="empty-state">
-                <p>暂无数据</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="activeTab !== 'settings'" class="tab-card">
-          <div class="tabs">
+          <div class="mode-grid">
             <button
-              v-for="tab in tabs"
-              :key="tab.id"
-              :class="['tab-btn', { active: activeTab === tab.id }]"
-              @click="activeTab = tab.id"
+              v-for="p in focusPresetList"
+              :key="p.id"
+              class="mode-card"
+              :class="{ active: focusMode === p.id }"
+              :style="{ '--mode-tint': p.tint }"
+              @click="focusMode = p.id"
             >
-              {{ tab.label }}
+              <Icon :name="p.icon" :size="15" />
+              <span class="mc-name">{{ p.name }}</span>
+              <span class="mc-hint">{{ p.hint }}</span>
             </button>
           </div>
 
-        <div class="tab-content">
-          <div v-if="activeTab === 'activities'" class="activities-list">
-            <div v-if="activities.length === 0" class="empty-state">
-              <p>暂无活动记录</p>
-            </div>
-            <div v-else class="activity-items">
-              <div 
-                v-for="activity in activities" 
-                :key="activity.id" 
-                class="activity-item"
-              >
-                <div class="activity-time">
-                  {{ formatTime(activity.timestamp) }}
-                </div>
-                <div class="activity-details">
-                  <div class="activity-process">{{ activity.processName }}</div>
-                  <div class="activity-window">{{ activity.windowTitle }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <input
+            v-model="focusInput"
+            class="modal-input"
+            :placeholder="focusMode === 'arhat' ? '例如：把这份合同看完' : '例如：写三季度商户分析报告'"
+            @keydown.enter="startFocus"
+            @keydown.esc="closeFocusDialog"
+          >
 
-          <div v-if="activeTab === 'summaries'" class="summaries-list">
-            <div class="summary-actions">
-              <button @click="generateSummary" class="action-btn" :disabled="isGeneratingSummary">
-                {{ isGeneratingSummary ? '生成中...' : '生成摘要' }}
-              </button>
-            </div>
-            <div class="summary-range-actions">
-              <div class="range-inputs">
-                <label>开始</label>
-                <input type="datetime-local" v-model="summaryStartTime" class="datetime-input">
-                <label>结束</label>
-                <input type="datetime-local" v-model="summaryEndTime" class="datetime-input">
-              </div>
-              <button @click="generateSummaryForRange" class="action-btn" :disabled="isGeneratingSummary">
-                {{ isGeneratingSummary ? '生成中...' : '按时间段生成' }}
-              </button>
-            </div>
-            <div v-if="summaries.length === 0" class="empty-state">
-              <p>暂无摘要记录</p>
-            </div>
-            <div v-else class="summary-items">
-              <div
-                v-for="summary in summaries"
-                :key="summary.id"
-                class="summary-item"
-              >
-                <div class="summary-header">
-                  <div class="summary-meta">
-                    <span class="summary-time">{{ formatSummaryTimeRange(summary) }}</span>
-                    <span class="summary-divider">·</span>
-                    <span class="summary-count">{{ summary.activityCount }} 个活动</span>
-                  </div>
-                </div>
-                <div class="summary-content" v-html="renderMarkdown(summary.summary)"></div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="activeTab === 'logs'" class="logs-panel">
-            <div class="log-controls">
-              <button @click="clearLogs" class="icon-btn small" title="清除日志">🗑️</button>
-              <button @click="openLogsFolder" class="icon-btn small" title="打开日志文件夹">📁</button>
-            </div>
-            <div class="log-content-full" ref="logContent">
-              <div v-for="(log, index) in logs" :key="index" class="log-entry" :class="log.type">
-                <span class="log-time">{{ log.time }}</span>
-                <span class="log-message">{{ log.message }}</span>
-              </div>
-            </div>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" @click="closeFocusDialog">取消</button>
+            <button class="btn btn-primary" @click="startFocus">开始</button>
           </div>
         </div>
-        </div>
+      </div>
+    </transition>
 
-        <div v-if="activeTab === 'settings'" class="settings-panel-full">
-            <div class="settings-header">
-              <button @click="activeTab = 'activities'" class="back-btn">
-                ← 返回
-              </button>
-              <h2>设置</h2>
-            </div>
-            <div class="settings-group">
-              <h3>记录设置</h3>
-              <div class="setting-item">
-                <label>记录间隔 (秒)</label>
-                <input 
-                  v-model.number="config.monitoring.interval" 
-                  type="number" 
-                  min="10"
-                  @change="saveConfig"
-                >
-              </div>
-            </div>
+    <TitleBar
+      :monitoring="isMonitoring"
+      @minimize="minimizeWindow"
+      @close="closeWindow"
+      @toggle-monitoring="toggleMonitoring"
+    />
 
-            <div class="settings-group">
-              <h3>API 设置</h3>
-              <div class="setting-item">
-                <label>模型提供商</label>
-                <select v-model="config.api.provider" @change="onProviderChange" class="select-input">
-                  <option v-for="(preset, key) in providerPresets" :key="key" :value="key">
-                    {{ preset.name }}
-                  </option>
-                </select>
-              </div>
-              <div class="setting-item">
-                <label>API Key</label>
-                <input
-                  v-model="config.api.apiKey"
-                  type="password"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>Base URL</label>
-                <input
-                  v-model="config.api.baseUrl"
-                  type="text"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>模型名称</label>
-                <input
-                  v-model="config.api.modelName"
-                  type="text"
-                  @change="saveConfig"
-                >
-              </div>
-            </div>
+    <div class="shell">
+      <NavRail v-model="view" @focus="showArhatStart" />
 
-            <div class="settings-group">
-              <h3>摘要设置</h3>
-              <div class="setting-item">
-                <label>回溯时间 (分钟)</label>
-                <input 
-                  v-model.number="config.summary.lookbackMinutes" 
-                  type="number" 
-                  min="5"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>最大令牌数</label>
-                <input 
-                  v-model.number="config.summary.maxTokens" 
-                  type="number" 
-                  min="100"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>压缩活动</label>
-                <input 
-                  v-model="config.summary.compressActivities" 
-                  type="checkbox"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>AI提示词</label>
-                <textarea
-                  v-model="config.summary.prompt"
-                  @change="saveConfig"
-                  placeholder="自定义AI提示词，留空使用默认提示词"
-                  rows="4"
-                ></textarea>
-              </div>
-              <div class="setting-item schedule-section">
-                <label>总结周期</label>
-                <div class="schedule-list">
-                  <div v-for="(schedule, index) in config.summary.schedules" :key="index" class="schedule-row">
-                    <input type="time" v-model="schedule.startTime" @change="saveConfig" class="time-input">
-                    <span class="schedule-sep">~</span>
-                    <input type="time" v-model="schedule.endTime" @change="saveConfig" class="time-input">
-                    <button @click="removeSchedule(index)" class="schedule-del-btn" title="删除">✕</button>
-                  </div>
-                  <button @click="addSchedule" class="schedule-add-btn">+ 添加时间段</button>
-                  <p class="schedule-hint">配置后将在每个时间段结束时自动生成该时段的摘要</p>
-                </div>
-              </div>
-            </div>
+      <main class="content">
+        <TodayView
+          v-if="view === 'today'"
+          :report="report"
+          :recorder="recorder"
+          :is-today="isToday"
+          :heat-daily="heatDaily"
+          :selected-date="selectedDate"
+          @jump-to-time="onJumpToTime"
+          @select-date="selectHeatDate"
+        />
 
-            <div class="settings-group">
-              <h3>费用预估</h3>
-              <div class="setting-item">
-                <label>输入价格 (元/百万token)</label>
-                <input v-model.number="costEstimate.inputPricePerMillion" type="number" min="0" step="0.1">
-              </div>
-              <div class="setting-item">
-                <label>输出价格 (元/百万token)</label>
-                <input v-model.number="costEstimate.outputPricePerMillion" type="number" min="0" step="0.1">
-              </div>
-              <div class="setting-item">
-                <label>每日工作时长 (小时)</label>
-                <input v-model.number="costEstimate.workHoursPerDay" type="number" min="1" max="24">
-              </div>
-              <div class="cost-result">
-                <p>每日调用次数: {{ estimatedDailyCalls }} 次</p>
-                <p>每次预估 token: 输入 ~{{ estimatedInputTokens }}, 输出 ~{{ config.summary?.maxTokens || 500 }}</p>
-                <p>每日预估费用: {{ estimatedDailyCost }} 元</p>
-                <p>每月预估费用: {{ estimatedMonthlyCost }} 元</p>
-              </div>
-            </div>
+        <TimelineView
+          v-else-if="view === 'timeline'"
+          :report="report"
+          :activities="activities"
+          :selected-date="selectedDate"
+          :dates-with-data="datesWithData"
+          :focus-target="timelineTarget"
+          @update:selected-date="onSelectDate"
+          @shift="changeDate"
+          @today="goToToday"
+          @refresh="onDataChanged"
+          @manual-error="showToast($event, 'error')"
+          @focus-consumed="timelineTarget = null"
+          @focus-missed="onFocusMissed"
+        />
 
-            <div class="settings-group">
-              <h3>通用</h3>
-              <div class="setting-item">
-                <label>开机自启动</label>
-                <input
-                  v-model="autoLaunch"
-                  type="checkbox"
-                  @change="toggleAutoLaunch"
-                >
-              </div>
-              <div class="setting-item">
-                <label>最小化浮窗</label>
-                <input
-                  v-model="config.ui.floatWindow"
-                  type="checkbox"
-                  @change="saveConfig"
-                >
-              </div>
-              <div class="setting-item">
-                <label>主题</label>
-                <div class="theme-cards">
-                  <button
-                    v-for="t in themeOptions"
-                    :key="t.id"
-                    class="theme-card"
-                    :class="{ active: theme === t.id }"
-                    :title="t.label"
-                    @click="theme = t.id; onThemeChange()"
-                  >
-                    <span class="theme-dot" :style="{ background: t.accent }"></span>
-                    <span class="theme-label">{{ t.label }}</span>
-                  </button>
-                </div>
-              </div>
-              <div class="setting-item">
-                <label>数据存储路径</label>
-                <div class="storage-path-row">
-                  <input
-                    :value="storagePath || '默认路径'"
-                    type="text"
-                    readonly
-                    class="storage-path-input"
-                    :title="storagePath"
-                  >
-                  <button @click="selectStoragePath" class="action-btn small">选择</button>
-                  <button v-if="config.storage && config.storage.customPath" @click="resetStoragePath" class="action-btn small danger">重置</button>
-                </div>
-                <p class="setting-hint">设置为 iCloud/OneDrive/坚果云 同步目录可实现跨设备同步</p>
-              </div>
-            </div>
+        <SummaryView
+          v-else-if="view === 'summary'"
+          :summaries="summaries"
+          :selected-date="selectedDate"
+          :dates-with-data="datesWithData"
+          :generating="isGeneratingSummary"
+          :range-start="summaryStartTime"
+          :range-end="summaryEndTime"
+          @generate="generateSummary"
+          @generate-range="generateSummaryForRange"
+          @update:selected-date="onSelectDate"
+          @shift="changeDate"
+          @today="goToToday"
+          @update:range-start="summaryStartTime = $event"
+          @update:range-end="summaryEndTime = $event"
+        />
 
-            <div class="settings-group about-section">
-              <h3>关于</h3>
-              <div class="about-info">
-                <p>WorkLog Assistant <span class="version">v{{ appVersion }}</span></p>
-                <p class="about-desc">自动追踪工作活动，AI 生成工作日志</p>
-                <div class="update-section">
-                  <button @click="checkForUpdates" class="action-btn" :disabled="checkingUpdate">
-                    {{ checkingUpdate ? '检查中...' : '检查更新' }}
-                  </button>
-                  <div v-if="updateInfo" class="update-result">
-                    <template v-if="updateInfo.error">
-                      <span class="update-error">检查失败: {{ updateInfo.error }}</span>
-                    </template>
-                    <template v-else-if="updateInfo.hasUpdate">
-                      <span class="update-available">发现新版本 v{{ updateInfo.latestVersion }}</span>
-                      <button @click="openDownloadLink" class="action-btn">前往下载</button>
-                    </template>
-                    <template v-else>
-                      <span class="update-latest">已是最新版本</span>
-                    </template>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+        <SettingsView
+          v-else
+          :config="config"
+          :theme="theme"
+          :theme-options="themeOptions"
+          :provider-presets="providerPresets"
+          :bridge="bridge"
+          :bridge-loading="bridgeLoading"
+          :bridge-testing="bridgeTesting"
+          :bridge-test-result="bridgeTestResult"
+          :bridge-copied="bridgeCopied"
+          :bridge-port-input="bridgePortInput"
+          :auto-launch="autoLaunch"
+          :app-version="appVersion"
+          :update-info="updateInfo"
+          :checking-update="checkingUpdate"
+          :logs="logs"
+          :storage-path="storagePath"
+          @save="saveConfig"
+          @provider-change="onProviderChange"
+          @toggle-auto-launch="toggleAutoLaunch"
+          @theme-change="onThemeChange"
+          @select-storage="selectStoragePath"
+          @reset-storage="resetStoragePath"
+          @export-day="exportData"
+          @export-full-json="exportFullJSON"
+          @export-csv="exportCSV"
+          @import-merge="importData('merge')"
+          @import-overwrite="importData('overwrite')"
+          @bridge-toggle="toggleBridge"
+          @bridge-apply-port="applyBridgePort"
+          @bridge-regen="regenerateBridgeToken"
+          @bridge-test="testBridge"
+          @bridge-copy="copyBridgeText"
+          @bridge-open="openBridgeUrl"
+          @update:bridge-port-input="bridgePortInput = $event"
+          @add-schedule="addSchedule"
+          @remove-schedule="removeSchedule"
+          @check-update="checkForUpdates"
+          @open-download="openDownloadLink"
+          @clear-logs="clearLogs"
+          @open-logs="openLogsFolder"
+        />
       </main>
     </div>
+
+    <transition name="toast">
+      <div v-if="toastMessage" class="toast" :class="toastType">{{ toastMessage }}</div>
+    </transition>
   </div>
 </template>
 
 <script>
-const { ipcRenderer, shell } = require('electron');
-const { marked } = require('marked');
+const { ipcRenderer, shell, clipboard } = require('electron');
+
+import Icon from './components/Icon.vue';
+import TitleBar from './components/TitleBar.vue';
+import NavRail from './components/NavRail.vue';
+import FocusOverlay from './components/FocusOverlay.vue';
+import TodayView from './views/TodayView.vue';
+import TimelineView from './views/TimelineView.vue';
+import SummaryView from './views/SummaryView.vue';
+import SettingsView from './views/SettingsView.vue';
+
+function pad(n) {
+  return String(n).padStart(2, '0');
+}
+
+function localDateStr(d) {
+  const x = d || new Date();
+  return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+}
+
+/** 热力图范围：周一开头，最后一列是本周，共 weeks*7 天 */
+function heatRange(weeks = 12) {
+  const anchor = new Date();
+  anchor.setHours(0, 0, 0, 0);
+  const offset = (anchor.getDay() + 6) % 7; // 周一=0 … 周日=6
+  const monday = new Date(anchor);
+  monday.setDate(anchor.getDate() - offset);
+  const from = new Date(monday);
+  from.setDate(monday.getDate() - (weeks - 1) * 7);
+  const to = new Date(monday);
+  to.setDate(monday.getDate() + 6);
+  return { from: localDateStr(from), to: localDateStr(to) };
+}
+
+function emptyReport(date) {
+  return {
+    kind: 'day',
+    date,
+    stats: {
+      recordCount: 0, sessionCount: 0, uniqueApps: 0, trackedMs: 0,
+      idleMs: 0, idleSessionCount: 0, spanMs: 0, coverage: 0,
+      firstAt: null, lastAt: null, bigGapCount: 0
+    },
+    categories: [],
+    apps: [],
+    sessions: [],
+    focus: { arhatSessions: [], notes: [] },
+    dataNotes: []
+  };
+}
 
 export default {
   name: 'App',
+  components: { Icon, TitleBar, NavRail, FocusOverlay, TodayView, TimelineView, SummaryView, SettingsView },
   data() {
     return {
-      activeTab: 'activities',
-      tabs: [
-        { id: 'activities', label: '活动记录' },
-        { id: 'summaries', label: '摘要' },
-        { id: 'logs', label: '日志' }
-      ],
+      view: 'today',
       isMonitoring: false,
+      recorder: null,
+
+      selectedDate: localDateStr(),
+      report: emptyReport(localDateStr()),
       activities: [],
       summaries: [],
-      statistics: {
-        totalActivities: 0,
-        uniqueApplications: 0,
-        mostUsedApplication: null
-      },
-      appUsageStats: {},
-      subActivityStats: {},
-      appDurationStats: {},
-      idleTime: 0,
-      totalRecordedTime: 0,
-      costEstimate: {
-        inputPricePerMillion: 1,
-        outputPricePerMillion: 2,
-        workHoursPerDay: 10
-      },
-      config: {
-        monitoring: {
-          interval: 60
-        },
-        api: {
-          provider: 'deepseek',
-          apiKey: '',
-          baseUrl: 'https://api.deepseek.com/chat/completions',
-          modelName: 'deepseek-chat'
-        },
-        summary: {
-          lookbackMinutes: 60,
-          maxTokens: 500,
-          compressActivities: true,
-          schedules: []
-        },
-        storage: {
-          customPath: ''
-        }
-      },
+      datesWithData: new Set(),
+      heatDaily: [],
+      heatFrom: '',
+      heatTo: '',
+      timelineTarget: null,
       logs: [],
+
+      config: {
+        monitoring: { interval: 60, idleThresholdSec: 180, minSegmentSec: 3 },
+        api: { provider: 'deepseek', apiKey: '', baseUrl: '', modelName: '' },
+        summary: { lookbackMinutes: 60, maxTokens: 500, compressActivities: true, prompt: '', schedules: [] },
+        focus: {
+          pomodoro: { workMin: 25, breakMin: 5, rounds: 4 },
+          immersive: { workMin: 15, breakMin: 15, rounds: 0 }
+        },
+        storage: { customPath: '' },
+        ui: { theme: 'dark', floatWindow: true }
+      },
+      providerPresets: {},
       theme: 'dark',
+      themeOptions: [
+        { id: 'dark', label: '深色', preview: '#0b0c0e', surface: '#191c21' },
+        { id: 'light', label: '浅色', preview: '#f7f8fa', surface: '#ffffff' },
+        { id: 'ocean', label: '海洋', preview: '#071620', surface: '#123044' },
+        { id: 'forest', label: '森林', preview: '#0a1310', surface: '#16281f' },
+        { id: 'rose', label: '玫瑰', preview: '#120d10', surface: '#271b22' }
+      ],
+      autoLaunch: false,
+      storagePath: '',
+
+      bridge: null,
+      bridgeLoading: false,
+      bridgeTesting: false,
+      bridgeTestResult: null,
+      bridgePortInput: 47821,
+      bridgeCopied: '',
+
       isGeneratingSummary: false,
       summaryStartTime: '',
       summaryEndTime: '',
-      selectedDate: new Date().toISOString().split('T')[0],
-      autoLaunch: false,
+
       appVersion: '',
       updateInfo: null,
       checkingUpdate: false,
-      datesWithData: new Set(),
-      showCalendar: false,
-      calendarYear: new Date().getFullYear(),
-      calendarMonth: new Date().getMonth(),
+
+      focusState: { active: false },
+      focusPresets: {},
+      focusDialog: false,
+      focusMode: 'pomodoro',
+      focusInput: '',
+
       toastMessage: '',
-      toastType: 'error',
-      toastTimer: null,
-      storagePath: '',
-      providerPresets: {},
-      // Arhat mode
-      arhatActive: false,
-      arhatStartDialog: false,
-      arhatFocusInput: '',
-      arhatFocusText: '',
-      arhatNoteVisible: false,
-      arhatNoteText: '',
-      arhatNoteFocused: false,
-      arhatNotes: [],
-      arhatTimerDisplay: '00:00',
-      arhatTimerInterval: null,
-      showDataMenu: false,
-      themeOptions: [
-        { id: 'dark', label: '深色', accent: '#64ffda' },
-        { id: 'light', label: '浅色', accent: '#0d6efd' },
-        { id: 'ocean', label: '海洋', accent: '#4fc3f7' },
-        { id: 'forest', label: '森林', accent: '#81c784' },
-        { id: 'rose', label: '玫瑰', accent: '#f48fb1' }
-      ]
+      toastType: 'info'
     };
-  },
-  computed: {
-    isToday() {
-      return this.selectedDate === new Date().toISOString().split('T')[0];
-    },
-    calendarDays() {
-      const year = this.calendarYear;
-      const month = this.calendarMonth;
-      const firstDay = new Date(year, month, 1);
-      const startDow = firstDay.getDay();
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split('T')[0];
-      const days = [];
-
-      // Previous month padding
-      const prevMonthEnd = new Date(year, month, 0).getDate();
-      for (let i = startDow - 1; i >= 0; i--) {
-        const d = prevMonthEnd - i;
-        const dt = new Date(year, month - 1, d);
-        const dateStr = dt.toISOString().split('T')[0];
-        days.push({ day: d, dateStr, currentMonth: false, isToday: dateStr === todayStr, isFuture: dt > today, key: 'p' + d });
-      }
-
-      // Current month
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dt = new Date(year, month, d);
-        const dateStr = dt.toISOString().split('T')[0];
-        days.push({ day: d, dateStr, currentMonth: true, isToday: dateStr === todayStr, isFuture: dt > today, key: 'c' + d });
-      }
-
-      // Next month padding
-      const remaining = 42 - days.length;
-      for (let d = 1; d <= remaining; d++) {
-        const dt = new Date(year, month + 1, d);
-        const dateStr = dt.toISOString().split('T')[0];
-        days.push({ day: d, dateStr, currentMonth: false, isToday: dateStr === todayStr, isFuture: dt > today, key: 'n' + d });
-      }
-
-      return days;
-    },
-    estimatedDailyCalls() {
-      const lookback = parseInt(this.config.summary?.lookbackMinutes) || 60;
-      const workHours = this.costEstimate.workHoursPerDay || 10;
-      return Math.floor(workHours * 60 / lookback);
-    },
-    estimatedInputTokens() {
-      const lookback = parseInt(this.config.summary?.lookbackMinutes) || 60;
-      const interval = parseInt(this.config.monitoring?.interval) || 60;
-      const activitiesPerCall = Math.floor(lookback * 60 / interval);
-      return Math.round(activitiesPerCall * 50 / 2);
-    },
-    estimatedDailyCost() {
-      const calls = this.estimatedDailyCalls;
-      const inputTokens = this.estimatedInputTokens;
-      const outputTokens = parseInt(this.config.summary?.maxTokens) || 500;
-      const inputCost = (inputTokens * calls / 1000000) * (this.costEstimate.inputPricePerMillion || 0);
-      const outputCost = (outputTokens * calls / 1000000) * (this.costEstimate.outputPricePerMillion || 0);
-      return (inputCost + outputCost).toFixed(4);
-    },
-    estimatedMonthlyCost() {
-      return (parseFloat(this.estimatedDailyCost) * 30).toFixed(2);
-    }
   },
   async mounted() {
     await this.loadConfig();
     await this.loadProviderPresets();
-    await this.loadActivities();
-    await this.loadSummaries();
+    await this.reloadDate();
     await this.loadLogs();
-    await this.checkMonitoringStatus();
-    await this.loadDatesWithData();
-    this.setupEventListeners();
+    await this.loadBridgeStatus();
     this.appVersion = await ipcRenderer.invoke('get-app-version');
-    document.addEventListener('mousedown', this.closeCalendar);
+    this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
+    this.isMonitoring = await ipcRenderer.invoke('get-monitoring-status');
+    await this.loadRecorderStatus();
+    await this.loadFocusPresets();
+    await this.loadFocusState();
+    this.setupEventListeners();
     this.initSummaryTimeRange();
-    this.addLog('应用已启动');
+
+    this._statusTimer = setInterval(() => this.loadRecorderStatus(), 2000);
   },
   beforeUnmount() {
-    document.removeEventListener('mousedown', this.closeCalendar);
     this.removeEventListeners();
-    if (this.arhatTimerInterval) {
-      clearInterval(this.arhatTimerInterval);
+    if (this._statusTimer) clearInterval(this._statusTimer);
+    if (this._refreshTimer) clearTimeout(this._refreshTimer);
+  },
+  computed: {
+    isToday() {
+      return this.selectedDate === localDateStr();
+    },
+    focusPresetList() {
+      const order = ['pomodoro', 'immersive', 'arhat'];
+      return order
+        .map(id => this.focusPresets[id])
+        .filter(Boolean);
     }
   },
   methods: {
-    async loadConfig() {
+    // ============ 数据加载 ============
+
+    async reloadDate() {
+      await Promise.all([
+        this.loadReport(),
+        this.loadActivities(),
+        this.loadSummaries(),
+        this.loadDatesWithData(),
+        this.loadDailyTracked()
+      ]);
+    },
+
+    async loadReport() {
       try {
-        this.config = await ipcRenderer.invoke('get-config');
-        this.theme = this.config.ui?.theme || 'dark';
-        if (this.config.ui) {
-          this.config.ui.floatWindow = this.config.ui.floatWindow !== false;
-        }
-        if (!this.config.summary.schedules) {
-          this.config.summary.schedules = [];
-        }
-        if (!this.config.storage) {
-          this.config.storage = { customPath: '' };
-        }
-        this.storagePath = this.config.storage.customPath || '';
-        this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
+        const res = await ipcRenderer.invoke('get-day-analytics', this.selectedDate);
+        this.report = (res && res.ok) ? res.report : emptyReport(this.selectedDate);
       } catch (error) {
-        console.error('加载配置失败:', error);
+        this.report = emptyReport(this.selectedDate);
       }
     },
-    async loadProviderPresets() {
-      try {
-        this.providerPresets = await ipcRenderer.invoke('get-provider-presets');
-      } catch (error) {
-        console.error('加载模型预设失败:', error);
-      }
-    },
-    onProviderChange() {
-      const preset = this.providerPresets[this.config.api.provider];
-      if (preset) {
-        // Only auto-fill baseUrl and modelName if they match the previous preset or are empty
-        this.config.api.baseUrl = preset.baseUrl;
-        this.config.api.modelName = preset.modelName;
-      }
-      this.saveConfig();
-    },
-    async saveConfig() {
-      try {
-        const configToSave = {
-          language: this.config.language || 'zh',
-          monitoring: {
-            interval: parseInt(this.config.monitoring?.interval) || 60
-          },
-          api: {
-            apiKey: String(this.config.api?.apiKey || ''),
-            baseUrl: String(this.config.api?.baseUrl || 'https://api.deepseek.com/chat/completions'),
-            modelName: String(this.config.api?.modelName || 'deepseek-chat')
-          },
-          summary: {
-            intervalMinutes: parseInt(this.config.summary?.intervalMinutes) || 30,
-            lookbackMinutes: parseInt(this.config.summary?.lookbackMinutes) || 60,
-            maxTokens: parseInt(this.config.summary?.maxTokens) || 500,
-            compressActivities: !!this.config.summary?.compressActivities,
-            prompt: String(this.config.summary?.prompt || ''),
-            schedules: JSON.parse(JSON.stringify(this.config.summary?.schedules || []))
-          },
-          ui: {
-            theme: String(this.config.ui?.theme || 'dark'),
-            fontSize: parseInt(this.config.ui?.fontSize) || 14,
-            showTimestamps: Boolean(this.config.ui?.showTimestamps) || true,
-            floatWindow: this.config.ui?.floatWindow !== false
-          }
-        };
-        
-        await ipcRenderer.invoke('save-config', configToSave);
-        this.addLog('配置已保存');
-      } catch (error) {
-        console.error('保存配置失败:', error);
-        this.addLog('保存配置失败: ' + error.message);
-      }
-    },
+
     async loadActivities() {
       try {
-        const allActivities = await ipcRenderer.invoke('get-activities', this.selectedDate);
-        this.activities = [...allActivities].reverse();
-        this.updateStatistics();
-        this.updateCharts();
+        const all = await ipcRenderer.invoke('get-activities', this.selectedDate);
+        this.activities = [...all].reverse();
       } catch (error) {
-        console.error('加载活动失败:', error);
+        this.activities = [];
       }
     },
+
+    async loadSummaries() {
+      try {
+        const items = await ipcRenderer.invoke('get-summaries', this.selectedDate);
+        this.summaries = [...items].reverse();
+      } catch (error) {
+        this.summaries = [];
+      }
+    },
+
     async loadDatesWithData() {
       try {
         const dates = await ipcRenderer.invoke('get-dates-with-data');
         this.datesWithData = new Set(dates);
-      } catch (error) {
-        console.error('加载日期数据失败:', error);
-      }
+      } catch (error) { /* noop */ }
     },
-    async loadSummaries() {
+
+    /** 热力图范围锚定今天、与 selectedDate 无关，60s 冷却避免反复重算 */
+    async loadDailyTracked(force = false) {
+      const now = Date.now();
+      if (!force && now - (this._lastHeatLoad || 0) < 60000) return;
+      this._lastHeatLoad = now;
+      const { from, to } = heatRange(12);
       try {
-        this.summaries = await ipcRenderer.invoke('get-summaries', this.selectedDate);
-        this.summaries = [...this.summaries].reverse();
+        const res = await ipcRenderer.invoke('get-daily-tracked', { from, to });
+        this.heatDaily = (res && res.ok) ? res.days : [];
+        this.heatFrom = from;
+        this.heatTo = to;
       } catch (error) {
-        console.error('加载摘要失败:', error);
+        this.heatDaily = [];
       }
     },
+
+    async loadRecorderStatus() {
+      try {
+        this.recorder = await ipcRenderer.invoke('get-recorder-status');
+      } catch (error) { /* noop */ }
+    },
+
     async loadLogs() {
       try {
-        const logs = await ipcRenderer.invoke('get-logs');
-        this.logs = [...logs].reverse();
-      } catch (error) {
-        console.error('加载日志失败:', error);
-      }
+        const items = await ipcRenderer.invoke('get-logs');
+        this.logs = [...items].reverse();
+      } catch (error) { /* noop */ }
     },
-    async checkMonitoringStatus() {
+
+    async loadConfig() {
       try {
-        this.isMonitoring = await ipcRenderer.invoke('get-monitoring-status');
+        this.config = await ipcRenderer.invoke('get-config');
+        const m = (this.config.monitoring = this.config.monitoring || {});
+        if (m.idleThresholdSec === undefined) m.idleThresholdSec = 180;
+        if (m.minSegmentSec === undefined) m.minSegmentSec = 3;
+        if (m.interval === undefined) m.interval = 60;
+        this.config.summary = this.config.summary || {};
+        if (!this.config.summary.schedules) this.config.summary.schedules = [];
+        if (!this.config.focus) {
+          this.config.focus = {
+            pomodoro: { workMin: 25, breakMin: 5, rounds: 4 },
+            immersive: { workMin: 15, breakMin: 15, rounds: 0 }
+          };
+        }
+        this.theme = this.config.ui?.theme || 'dark';
+        this.storagePath = await ipcRenderer.invoke('get-storage-path');
       } catch (error) {
-        console.error('检查记录状态失败:', error);
+        this.addLog('读取配置失败: ' + error.message, 'error');
       }
     },
+
+    async loadProviderPresets() {
+      try {
+        this.providerPresets = await ipcRenderer.invoke('get-provider-presets');
+      } catch (error) { /* noop */ }
+    },
+
+    // ============ 配置 ============
+
+    async saveConfig() {
+      try {
+        await ipcRenderer.invoke('save-config', JSON.parse(JSON.stringify(this.config)));
+        return true;
+      } catch (error) {
+        this.showToast('保存失败: ' + error.message, 'error');
+        return false;
+      }
+    },
+
+    onProviderChange(provider) {
+      this.config.api.provider = provider;
+      const preset = this.providerPresets[provider];
+      if (preset) {
+        if (preset.baseUrl) this.config.api.baseUrl = preset.baseUrl;
+        if (preset.modelName) this.config.api.modelName = preset.modelName;
+      }
+      this.saveConfig();
+    },
+
+    onThemeChange(themeId) {
+      this.theme = themeId;
+      this.config.ui = this.config.ui || {};
+      this.config.ui.theme = themeId;
+      this.saveConfig();
+    },
+
+    async toggleAutoLaunch(enabled) {
+      try {
+        await ipcRenderer.invoke('set-auto-launch', enabled);
+        this.autoLaunch = enabled;
+        this.showToast(enabled ? '已开启开机自启动' : '已关闭开机自启动', 'success');
+      } catch (error) {
+        this.showToast('设置失败: ' + error.message, 'error');
+      }
+    },
+
+    addSchedule() {
+      if (!this.config.summary.schedules) this.config.summary.schedules = [];
+      this.config.summary.schedules.push({ startTime: '09:00', endTime: '12:00' });
+      this.saveConfig();
+    },
+
+    removeSchedule(index) {
+      this.config.summary.schedules.splice(index, 1);
+      this.saveConfig();
+    },
+
+    async selectStoragePath() {
+      try {
+        const chosen = await ipcRenderer.invoke('select-storage-folder');
+        if (!chosen) return;
+        const res = await ipcRenderer.invoke('migrate-storage', chosen);
+        if (res && res.success) {
+          this.config.storage = { customPath: chosen };
+          await this.saveConfig();
+          this.storagePath = chosen;
+          this.showToast(`已迁移 ${res.fileCount} 个文件，重启后生效`, 'success');
+        } else {
+          this.showToast('迁移失败: ' + (res && res.error), 'error');
+        }
+      } catch (error) {
+        this.showToast('切换失败: ' + error.message, 'error');
+      }
+    },
+
+    async resetStoragePath() {
+      this.config.storage = { customPath: '' };
+      await this.saveConfig();
+      this.storagePath = await ipcRenderer.invoke('get-storage-path');
+      this.showToast('已恢复默认路径，重启后生效', 'success');
+    },
+
+    // ============ 日期 ============
+
+    onSelectDate(dateStr) {
+      if (!dateStr || dateStr === this.selectedDate) return Promise.resolve();
+      this.selectedDate = dateStr;
+      return this.reloadDate();
+    },
+
+    onDataChanged() {
+      this.reloadDate();
+      this.loadDailyTracked(true);
+    },
+
+    /** 时间带点击：不换日期，切到时间线并定位到对应时段 */
+    onJumpToTime(payload) {
+      this.timelineTarget = {
+        minutes: payload && Number.isFinite(payload.minutes) ? payload.minutes : null,
+        date: this.selectedDate,
+        token: (this._focusToken = (this._focusToken || 0) + 1)
+      };
+      this.view = 'timeline';
+    },
+
+    /** 热力图点击：只换日期，仍留在今日概览 */
+    selectHeatDate(dateStr) {
+      if (!dateStr || dateStr > localDateStr()) return;
+      this.onSelectDate(dateStr);
+    },
+
+    onFocusMissed() {
+      this.showToast('该时段附近没有会话记录', 'info');
+    },
+
+    changeDate(delta) {
+      const d = new Date(this.selectedDate + 'T00:00:00');
+      d.setDate(d.getDate() + delta);
+      const next = localDateStr(d);
+      if (next > localDateStr()) return;
+      this.onSelectDate(next);
+    },
+
+    goToToday() {
+      this.onSelectDate(localDateStr());
+    },
+
     async toggleMonitoring() {
       try {
         this.isMonitoring = await ipcRenderer.invoke('toggle-monitoring');
-        this.addLog(this.isMonitoring ? '记录已开始' : '记录已暂停');
+        await this.loadRecorderStatus();
+        this.showToast(this.isMonitoring ? '已开始记录' : '已暂停记录', 'success');
       } catch (error) {
-        console.error('切换记录状态失败:', error);
-        this.addLog('切换记录状态失败: ' + error.message);
+        this.showToast('切换失败: ' + error.message, 'error');
       }
     },
+
+    // ============ 摘要 ============
+
+    initSummaryTimeRange() {
+      const now = new Date();
+      const start = new Date(now.getTime() - 60 * 60000);
+      this.summaryEndTime = this.toLocalDatetime(now);
+      this.summaryStartTime = this.toLocalDatetime(start);
+    },
+
+    toLocalDatetime(d) {
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    },
+
     async generateSummary() {
+      if (this.isGeneratingSummary) return;
+      this.isGeneratingSummary = true;
       try {
-        this.isGeneratingSummary = true;
-        this.addLog('正在生成摘要...');
         await ipcRenderer.invoke('generate-summary');
         await this.loadSummaries();
-        this.addLog('摘要生成成功');
-        this.showToast('摘要生成成功', 'success');
+        this.showToast('摘要已生成', 'success');
       } catch (error) {
-        console.error('生成摘要失败:', error);
-        this.addLog('生成摘要失败: ' + error.message);
-        this.showToast('生成摘要失败: ' + error.message, 'error');
+        this.showToast('生成失败: ' + error.message, 'error');
       } finally {
         this.isGeneratingSummary = false;
       }
     },
+
     async generateSummaryForRange() {
+      if (this.isGeneratingSummary) return;
       if (!this.summaryStartTime || !this.summaryEndTime) {
-        this.showToast('请选择开始和结束时间', 'error');
+        this.showToast('请先选择时间段', 'error');
         return;
       }
+      this.isGeneratingSummary = true;
       try {
-        this.isGeneratingSummary = true;
-        this.addLog(`正在生成 ${this.summaryStartTime} ~ ${this.summaryEndTime} 时间段摘要...`);
         await ipcRenderer.invoke('generate-summary-range', {
           startTime: new Date(this.summaryStartTime).toISOString(),
           endTime: new Date(this.summaryEndTime).toISOString()
         });
         await this.loadSummaries();
-        this.addLog('时间段摘要生成成功');
-        this.showToast('时间段摘要生成成功', 'success');
+        this.showToast('摘要已生成', 'success');
       } catch (error) {
-        console.error('生成时间段摘要失败:', error);
-        this.addLog('生成时间段摘要失败: ' + error.message);
-        this.showToast('生成时间段摘要失败: ' + error.message, 'error');
+        this.showToast('生成失败: ' + error.message, 'error');
       } finally {
         this.isGeneratingSummary = false;
       }
     },
-    initSummaryTimeRange() {
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0);
-      this.summaryStartTime = this.toLocalDatetimeString(today);
-      this.summaryEndTime = this.toLocalDatetimeString(now);
-    },
-    toLocalDatetimeString(date) {
-      const pad = n => String(n).padStart(2, '0');
-      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    },
-    minimizeWindow() {
-      ipcRenderer.invoke('minimize-window');
-    },
-    closeWindow() {
-      ipcRenderer.invoke('minimize-window');
-    },
-    changeDate(delta) {
-      const d = new Date(this.selectedDate);
-      d.setDate(d.getDate() + delta);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (d <= today) {
-        this.selectedDate = d.toISOString().split('T')[0];
-        this.calendarYear = d.getFullYear();
-        this.calendarMonth = d.getMonth();
-        this.onDateChange();
-      }
-    },
-    goToToday() {
-      this.selectedDate = new Date().toISOString().split('T')[0];
-      this.calendarYear = new Date().getFullYear();
-      this.calendarMonth = new Date().getMonth();
-      this.onDateChange();
-    },
-    formatDateDisplay(dateStr) {
-      const d = new Date(dateStr);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    },
-    changeCalendarMonth(delta) {
-      let m = this.calendarMonth + delta;
-      let y = this.calendarYear;
-      if (m < 0) { m = 11; y--; }
-      if (m > 11) { m = 0; y++; }
-      this.calendarMonth = m;
-      this.calendarYear = y;
-    },
-    selectCalendarDate(day) {
-      if (day.isFuture) return;
-      this.selectedDate = day.dateStr;
-      this.showCalendar = false;
-      this.onDateChange();
-    },
-    closeCalendar(e) {
-      if (this.showCalendar) {
-        this.showCalendar = false;
-      }
-    },
-    async onDateChange() {
-      await this.loadActivities();
-      await this.loadSummaries();
-    },
-    async exportData() {
-      this.showDataMenu = false;
-      const data = {
-        date: this.selectedDate,
-        activities: this.activities,
-        summaries: this.summaries,
-        statistics: this.statistics
-      };
-      const blob = JSON.stringify(data, null, 2);
-      const filename = `worklog_${this.selectedDate}.json`;
 
+    // ============ 专注助手 ============
+
+    async loadFocusPresets() {
       try {
-        await ipcRenderer.invoke('export-data', { filename, content: blob });
-        this.addLog(`数据已导出: ${filename}`);
-      } catch (error) {
-        this.addLog('导出失败: ' + error.message);
-      }
+        this.focusPresets = await ipcRenderer.invoke('focus-presets');
+      } catch (error) { /* noop */ }
     },
-    async toggleAutoLaunch() {
+
+    async loadFocusState() {
       try {
-        await ipcRenderer.invoke('set-auto-launch', this.autoLaunch);
-        this.addLog(this.autoLaunch ? '已启用开机自启动' : '已关闭开机自启动');
+        const s = await ipcRenderer.invoke('focus-state');
+        if (s) this.focusState = s;
+      } catch (error) { /* noop */ }
+    },
+
+    showArhatStart() {
+      this.focusDialog = true;
+      this.focusInput = '';
+    },
+
+    closeFocusDialog() {
+      this.focusDialog = false;
+    },
+
+    async startFocus() {
+      try {
+        const state = await ipcRenderer.invoke('focus-start', {
+          mode: this.focusMode,
+          focusText: (this.focusInput || '').trim()
+        });
+        this.focusState = state || { active: false };
+        this.focusDialog = false;
       } catch (error) {
-        this.addLog('设置自启动失败: ' + error.message);
+        this.showToast('开始失败: ' + error.message, 'error');
       }
     },
-    onThemeChange() {
-      this.config.ui = this.config.ui || {};
-      this.config.ui.theme = this.theme;
-      this.saveConfig();
+
+    async toggleFocusPause() {
+      try {
+        this.focusState = await ipcRenderer.invoke('focus-toggle-pause');
+      } catch (error) { /* noop */ }
     },
-    addSchedule() {
-      if (!this.config.summary.schedules) {
-        this.config.summary.schedules = [];
+
+    async skipFocusPhase() {
+      try {
+        this.focusState = await ipcRenderer.invoke('focus-skip');
+      } catch (error) { /* noop */ }
+    },
+
+    async endFocus() {
+      try {
+        const record = await ipcRenderer.invoke('focus-end');
+        this.focusState = { active: false };
+        if (record) {
+          const mins = Math.round(record.activeMs / 60000);
+          this.showToast(`${record.modeName}结束 · 专注 ${mins} 分钟`, 'success');
+        }
+        await this.loadReport();
+      } catch (error) {
+        this.focusState = { active: false };
       }
-      this.config.summary.schedules.push({ startTime: '09:00', endTime: '12:00' });
-      this.saveConfig();
     },
-    removeSchedule(index) {
-      this.config.summary.schedules.splice(index, 1);
-      this.saveConfig();
+
+    async addFocusNote(text) {
+      try {
+        const note = await ipcRenderer.invoke('focus-add-note', text, 'random');
+        if (note) this.showToast('已记录', 'success');
+      } catch (error) {
+        this.showToast('记录失败: ' + error.message, 'error');
+      }
     },
-    updateStatistics() {
-      const appUsage = {};
-      this.activities.forEach(activity => {
-        const appName = activity.processName;
-        appUsage[appName] = (appUsage[appName] || 0) + 1;
-      });
 
-      this.statistics = {
-        totalActivities: this.activities.length,
-        uniqueApplications: Object.keys(appUsage).length,
-        mostUsedApplication: Object.entries(appUsage)
-          .sort((a, b) => b[1] - a[1])[0]
-          ? {
-              name: Object.entries(appUsage).sort((a, b) => b[1] - a[1])[0][0],
-              count: Object.entries(appUsage).sort((a, b) => b[1] - a[1])[0][1]
-            }
-          : null
-      };
+    // ============ AI 接口 ============
+
+    async loadBridgeStatus() {
+      try {
+        this.bridge = await ipcRenderer.invoke('get-bridge-status');
+        this.bridgePortInput = this.bridge.port || this.bridge.basePort || 47821;
+      } catch (error) { /* noop */ }
     },
-    updateCharts() {
-      const appUsage = {};
-      const subActivity = {};
-      this.activities.forEach(activity => {
-        const appName = activity.processName;
-        appUsage[appName] = (appUsage[appName] || 0) + 1;
-        
-        const title = activity.windowTitle || appName;
-        subActivity[title] = (subActivity[title] || 0) + 1;
-      });
 
-      this.appUsageStats = Object.fromEntries(
-        Object.entries(appUsage).sort((a, b) => b[1] - a[1])
-      );
-
-      this.subActivityStats = Object.fromEntries(
-        Object.entries(subActivity).sort((a, b) => b[1] - a[1])
-      );
-
-      this.updateAppDurationStats();
+    async toggleBridge(enabled) {
+      this.bridgeLoading = true;
+      try {
+        await ipcRenderer.invoke('set-bridge-config', { enabled });
+        await this.loadBridgeStatus();
+        this.showToast(enabled ? '接口已开启' : '接口已关闭', 'success');
+      } catch (error) {
+        this.showToast('操作失败: ' + error.message, 'error');
+      } finally {
+        this.bridgeLoading = false;
+      }
     },
-    updateAppDurationStats() {
-      if (this.activities.length === 0) {
-        this.appDurationStats = {};
-        this.idleTime = 0;
-        this.totalRecordedTime = 0;
+
+    async applyBridgePort() {
+      const port = parseInt(this.bridgePortInput, 10);
+      if (!port || port < 1024 || port > 65535) {
+        this.showToast('端口需在 1024–65535 之间', 'error');
         return;
       }
-
-      const appDuration = {};
-      const sortedActivities = [...this.activities].reverse();
-      const intervalSec = parseInt(this.config.monitoring?.interval) || 60;
-      const maxGapMs = intervalSec * 3 * 1000;
-      let idleMs = 0;
-
-      sortedActivities.forEach((activity, index) => {
-        if (index < sortedActivities.length - 1) {
-          const nextActivity = sortedActivities[index + 1];
-          const duration = new Date(nextActivity.timestamp) - new Date(activity.timestamp);
-          if (duration <= maxGapMs) {
-            const appName = activity.processName;
-            appDuration[appName] = (appDuration[appName] || 0) + duration;
-          } else {
-            idleMs += duration;
-          }
-        }
-      });
-
-      const firstTime = new Date(sortedActivities[0].timestamp);
-      const lastTime = new Date(sortedActivities[sortedActivities.length - 1].timestamp);
-      this.totalRecordedTime = lastTime - firstTime;
-      this.idleTime = idleMs;
-
-      this.appDurationStats = Object.fromEntries(
-        Object.entries(appDuration).sort((a, b) => b[1] - a[1])
-      );
-    },
-    calculateDuration(start, end) {
-      const diff = new Date(end) - new Date(start);
-      const minutes = Math.floor(diff / 60000);
-      if (minutes < 1) return '<1分钟';
-      if (minutes < 60) return `${minutes}分钟`;
-      const hours = Math.floor(minutes / 60);
-      const remainingMinutes = minutes % 60;
-      if (remainingMinutes === 0) return `${hours}小时`;
-      return `${hours}小时${remainingMinutes}分钟`;
-    },
-    getBarWidth(count) {
-      const maxCount = Math.max(...Object.values(this.appUsageStats));
-      return maxCount > 0 ? (count / maxCount) * 100 : 0;
-    },
-    getDurationBarWidth(duration) {
-      const maxDuration = Math.max(...Object.values(this.appDurationStats));
-      return maxDuration > 0 ? (duration / maxDuration) * 100 : 0;
-    },
-    formatDuration(durationMs) {
-      const minutes = Math.floor(durationMs / 60000);
-      if (minutes < 1) return '<1分钟';
-      if (minutes < 60) return `${minutes}分钟`;
-      const hours = Math.floor(minutes / 60);
-      const remainingMinutes = minutes % 60;
-      if (remainingMinutes === 0) return `${hours}小时`;
-      return `${hours}小时${remainingMinutes}分钟`;
-    },
-    setupEventListeners() {
-      this._ipcListeners = {
-        'activity-logged': (event, activity) => {
-          this.activities.unshift(activity);
-          this.updateStatistics();
-          this.updateCharts();
-          const dateStr = new Date(activity.timestamp).toISOString().split('T')[0];
-          this.datesWithData.add(dateStr);
-          this.addLog(`活动记录: ${activity.processName} - ${activity.windowTitle}`);
-        },
-        'summary-generated': () => {
-          this.loadSummaries();
-          this.addLog('摘要已生成');
-        },
-        'log-message': (event, message) => {
-          this.addLog(message);
-        },
-        'error-message': (event, message) => {
-          this.addLog('错误: ' + message);
-        },
-        'config-updated': (event, newConfig) => {
-          this.config = { ...this.config, ...newConfig };
-          this.theme = this.config.ui?.theme || 'dark';
-          this.addLog('配置已更新');
-        },
-        'monitoring-status-changed': (event, status) => {
-          this.isMonitoring = status;
-        }
-      };
-      for (const [channel, handler] of Object.entries(this._ipcListeners)) {
-        ipcRenderer.on(channel, handler);
-      }
-    },
-    removeEventListeners() {
-      if (this._ipcListeners) {
-        for (const [channel, handler] of Object.entries(this._ipcListeners)) {
-          ipcRenderer.removeListener(channel, handler);
-        }
-        this._ipcListeners = null;
-      }
-    },
-    addLog(message, type = 'info') {
-      const logEntry = {
-        time: new Date().toLocaleTimeString('zh-CN'),
-        message: message,
-        type: type
-      };
-      this.logs.unshift(logEntry);
-
-      if (this.logs.length > 500) {
-        this.logs.pop();
-      }
-    },
-    async clearLogs() {
+      this.bridgeLoading = true;
       try {
-        await ipcRenderer.invoke('clear-logs');
-        this.logs = [];
+        await ipcRenderer.invoke('set-bridge-config', { port });
+        await this.loadBridgeStatus();
+        this.showToast('端口已更新为 ' + port, 'success');
       } catch (error) {
-        console.error('清除日志失败:', error);
-      }
-    },
-    async openLogsFolder() {
-      try {
-        await ipcRenderer.invoke('open-logs-folder');
-      } catch (error) {
-        console.error('打开日志文件夹失败:', error);
-      }
-    },
-    scrollToBottom() {
-      this.$nextTick(() => {
-        if (this.$refs.logContent) {
-          this.$refs.logContent.scrollTop = this.$refs.logContent.scrollHeight;
-        }
-      });
-    },
-    formatTime(timestamp) {
-      return new Date(timestamp).toLocaleTimeString('zh-CN');
-    },
-    formatDateTime(timestamp) {
-      return new Date(timestamp).toLocaleString('zh-CN');
-    },
-    formatSummaryTimeRange(summary) {
-      if (summary.startTime && summary.endTime) {
-        const start = new Date(summary.startTime);
-        const end = new Date(summary.endTime);
-        const startStr = start.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        const endStr = end.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        return `${startStr} ~ ${endStr}`;
-      }
-      return this.formatDateTime(summary.timestamp);
-    },
-    renderMarkdown(content) {
-      if (!content) return '';
-      return marked(content);
-    },
-    async checkForUpdates() {
-      this.checkingUpdate = true;
-      this.updateInfo = null;
-      try {
-        this.updateInfo = await ipcRenderer.invoke('check-for-updates');
-      } catch (error) {
-        this.updateInfo = { error: error.message };
+        this.showToast('更新失败: ' + error.message, 'error');
       } finally {
-        this.checkingUpdate = false;
+        this.bridgeLoading = false;
       }
     },
-    openDownloadLink() {
-      if (this.updateInfo?.downloadUrl) {
-        shell.openExternal(this.updateInfo.downloadUrl);
-      }
-    },
-    showToast(message, type = 'error') {
-      this.toastMessage = message;
-      this.toastType = type;
-      if (this.toastTimer) clearTimeout(this.toastTimer);
-      this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, 5000);
-    },
-    async selectStoragePath() {
+
+    async regenerateBridgeToken() {
+      this.bridgeLoading = true;
       try {
-        const folderPath = await ipcRenderer.invoke('select-storage-folder');
-        if (!folderPath) return;
-
-        const result = await ipcRenderer.invoke('migrate-storage', folderPath);
-        if (result.success) {
-          this.config.storage = this.config.storage || {};
-          this.config.storage.customPath = folderPath;
-          await this.saveConfig();
-          this.storagePath = folderPath;
-          this.showToast(`数据已迁移到新路径（${result.fileCount} 个文件），重启后生效`, 'success');
-        } else {
-          this.showToast('迁移失败: ' + result.error, 'error');
-        }
+        await ipcRenderer.invoke('set-bridge-config', { regenerateToken: true });
+        await this.loadBridgeStatus();
+        this.showToast('Token 已重置', 'success');
       } catch (error) {
-        this.showToast('选择路径失败: ' + error.message, 'error');
+        this.showToast('重置失败: ' + error.message, 'error');
+      } finally {
+        this.bridgeLoading = false;
       }
     },
-    async resetStoragePath() {
-      this.config.storage = this.config.storage || {};
-      this.config.storage.customPath = '';
-      await this.saveConfig();
-      this.storagePath = '';
-      this.showToast('已重置为默认存储路径，重启后生效', 'success');
-    },
-    // --- Arhat Mode ---
-    showArhatStart() {
-      this.arhatFocusInput = '';
-      this.arhatStartDialog = true;
-      this.$nextTick(() => {
-        if (this.$refs.arhatStartInput) {
-          this.$refs.arhatStartInput.focus();
-        }
-      });
-    },
-    async startArhat() {
-      this.arhatStartDialog = false;
-      this.arhatFocusText = this.arhatFocusInput || '觉察当下';
-      this.arhatNotes = [];
-      this.arhatNoteVisible = false;
-      this.arhatNoteText = '';
-      this.arhatActive = true;
 
-      await ipcRenderer.invoke('arhat-start', this.arhatFocusText);
-      this.addLog('罗汉模式已开始');
+    async testBridge() {
+      this.bridgeTesting = true;
+      this.bridgeTestResult = null;
+      try {
+        this.bridgeTestResult = await ipcRenderer.invoke('test-bridge');
+      } catch (error) {
+        this.bridgeTestResult = { ok: false, error: error.message };
+      } finally {
+        this.bridgeTesting = false;
+      }
+    },
 
-      // Start timer
-      const startTime = Date.now();
-      this.arhatTimerInterval = setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        const mins = Math.floor(elapsed / 60000);
-        const secs = Math.floor((elapsed % 60000) / 1000);
-        this.arhatTimerDisplay = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-      }, 1000);
-    },
-    async stopArhat() {
-      if (this.arhatTimerInterval) {
-        clearInterval(this.arhatTimerInterval);
-        this.arhatTimerInterval = null;
-      }
-      const session = await ipcRenderer.invoke('arhat-stop');
-      this.arhatActive = false;
-      if (session) {
-        const mins = Math.round(session.durationMs / 60000);
-        this.showToast(`觉察结束，持续 ${mins} 分钟，记录 ${session.notesCount} 条杂念`, 'success');
-      }
-    },
-    showArhatNote() {
-      this.arhatNoteVisible = true;
-      this.$nextTick(() => {
-        if (this.$refs.arhatNoteInput) {
-          this.$refs.arhatNoteInput.focus();
-        }
-      });
-    },
-    async saveArhatNote() {
-      const text = this.arhatNoteText.trim();
+    copyBridgeText(text, tag) {
       if (!text) return;
-      await ipcRenderer.invoke('arhat-add-note', text, 'random');
-      this.arhatNotes.push({ text, timestamp: new Date().toISOString() });
-      this.arhatNoteText = '';
-      this.arhatNoteVisible = false;
+      try {
+        clipboard.writeText(text);
+        this.bridgeCopied = tag;
+        setTimeout(() => {
+          if (this.bridgeCopied === tag) this.bridgeCopied = '';
+        }, 1600);
+      } catch (error) {
+        this.showToast('复制失败: ' + error.message, 'error');
+      }
     },
-    // --- Data Import/Export ---
+
+    openBridgeUrl() {
+      ipcRenderer.invoke('open-bridge-url');
+    },
+
+    // ============ 导入导出 ============
+
+    async exportData() {
+      try {
+        const items = await ipcRenderer.invoke('get-activities', this.selectedDate);
+        await ipcRenderer.invoke('export-data', {
+          filename: `worklog_${this.selectedDate}.json`,
+          content: JSON.stringify({ version: this.appVersion, date: this.selectedDate, activities: items }, null, 2)
+        });
+      } catch (error) {
+        this.showToast('导出失败: ' + error.message, 'error');
+      }
+    },
+
     async exportFullJSON() {
-      this.showDataMenu = false;
       try {
-        const result = await ipcRenderer.invoke('export-full-data', 'json');
-        if (result) this.showToast('完整数据已导出', 'success');
+        await ipcRenderer.invoke('export-full-data', 'json');
       } catch (error) {
         this.showToast('导出失败: ' + error.message, 'error');
       }
     },
+
     async exportCSV() {
-      this.showDataMenu = false;
       try {
-        const result = await ipcRenderer.invoke('export-full-data', 'csv');
-        if (result) this.showToast('CSV 数据已导出', 'success');
+        await ipcRenderer.invoke('export-full-data', 'csv');
       } catch (error) {
         this.showToast('导出失败: ' + error.message, 'error');
       }
     },
+
     async importData(mode) {
-      this.showDataMenu = false;
       try {
-        const result = await ipcRenderer.invoke('import-data', mode);
-        if (result.canceled) return;
-        if (result.success) {
-          this.showToast(`导入成功，共 ${result.importedCount} 条活动`, 'success');
-          await this.loadActivities();
-          await this.loadSummaries();
-          await this.loadDatesWithData();
-        } else {
-          this.showToast('导入失败: ' + result.error, 'error');
+        const res = await ipcRenderer.invoke('import-data', mode);
+        if (res && res.success) {
+          this.showToast(`已导入 ${res.importedCount} 条记录`, 'success');
+          await this.reloadDate();
+          await this.loadDailyTracked(true);
+        } else if (res && !res.canceled) {
+          this.showToast('导入失败: ' + res.error, 'error');
         }
       } catch (error) {
         this.showToast('导入失败: ' + error.message, 'error');
       }
+    },
+
+    // ============ 窗口 / 日志 / 更新 ============
+
+    minimizeWindow() {
+      ipcRenderer.invoke('minimize-window');
+    },
+
+    closeWindow() {
+      ipcRenderer.invoke('minimize-window');
+    },
+
+    async clearLogs() {
+      await ipcRenderer.invoke('clear-logs');
+      this.logs = [];
+    },
+
+    openLogsFolder() {
+      ipcRenderer.invoke('open-logs-folder');
+    },
+
+    async checkForUpdates() {
+      this.checkingUpdate = true;
+      try {
+        this.updateInfo = await ipcRenderer.invoke('check-for-updates');
+      } catch (error) {
+        this.updateInfo = { hasUpdate: false, error: error.message };
+      } finally {
+        this.checkingUpdate = false;
+      }
+    },
+
+    openDownloadLink() {
+      if (this.updateInfo && this.updateInfo.downloadUrl) {
+        shell.openExternal(this.updateInfo.downloadUrl);
+      }
+    },
+
+    // ============ 提示 / 日志 ============
+
+    showToast(message, type) {
+      this.toastMessage = message;
+      this.toastType = type || 'info';
+      if (this._toastTimer) clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => {
+        this.toastMessage = '';
+      }, 2600);
+    },
+
+    addLog(message, type) {
+      this.logs.unshift({
+        time: new Date().toLocaleTimeString('zh-CN'),
+        message,
+        type: type || 'info'
+      });
+      if (this.logs.length > 300) this.logs.length = 300;
+    },
+
+    // ============ IPC 事件 ============
+
+    setupEventListeners() {
+      this._listeners = {
+        'activity-logged': () => {
+          if (this.isToday) this.scheduleRefresh();
+        },
+        'focus-state': (event, state) => {
+          this.focusState = state && state.active ? state : { active: false };
+        },
+        'focus-ended': (event, record) => {
+          this.focusState = { active: false };
+          if (record) {
+            const mins = Math.round(record.activeMs / 60000);
+            this.showToast(`${record.modeName}结束 · 专注 ${mins} 分钟`, 'success');
+            this.loadReport();
+          }
+        },
+        'summary-generated': () => {
+          this.loadSummaries();
+          this.loadReport();
+        },
+        'monitoring-status-changed': (event, status) => {
+          this.isMonitoring = status;
+        },
+        'config-updated': (event, cfg) => {
+          this.config = { ...this.config, ...cfg };
+        },
+        'log-message': (event, message) => this.addLog(message),
+        'error-message': (event, message) => {
+          this.addLog('错误: ' + message, 'error');
+          this.showToast(message, 'error');
+        }
+      };
+
+      Object.entries(this._listeners).forEach(([channel, handler]) => {
+        ipcRenderer.on(channel, handler);
+      });
+    },
+
+    removeEventListeners() {
+      if (!this._listeners) return;
+      Object.entries(this._listeners).forEach(([channel, handler]) => {
+        ipcRenderer.removeListener(channel, handler);
+      });
+      this._listeners = null;
+    },
+
+    /** 新片段到达后节流刷新，避免频繁重算 */
+    scheduleRefresh() {
+      if (this._refreshTimer) return;
+      this._refreshTimer = setTimeout(async () => {
+        this._refreshTimer = null;
+        await this.loadReport();
+        await this.loadActivities();
+        await this.loadDatesWithData();
+        await this.loadDailyTracked();
+      }, 2000);
     }
   }
 };
 </script>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+@import './styles/tokens.css';
+@import './styles/base.css';
+</style>
 
-#app {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.toast {
-  position: fixed;
-  top: 40px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 10px 24px;
-  border-radius: 8px;
-  font-size: 13px;
-  z-index: 9999;
-  cursor: pointer;
-  animation: toast-in 0.3s ease;
-  max-width: 90%;
-  text-align: center;
-}
-
-.toast.error {
-  background-color: rgba(239, 68, 68, 0.95);
-  color: #fff;
-}
-
-.toast.success {
-  background-color: rgba(16, 185, 129, 0.95);
-  color: #fff;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-
-#app.dark {
-  --bg-primary: #0d0d0d;
-  --bg-secondary: #1a1a1a;
-  --bg-tertiary: #2a2a2a;
-  --text-primary: #e8e8e8;
-  --text-secondary: #888888;
-  --border-color: #333333;
-  --accent-color: #64ffda;
-  --accent-bg: rgba(100, 255, 218, 0.1);
-  --success-color: #64ffda;
-  --danger-color: #ff6b6b;
-  --warning-color: #ffd93d;
-  --pulse-color: rgba(100, 255, 218, 0.4);
-  --badge-text: #0d0d0d;
-  --color-scheme: dark;
-}
-
-#app.light {
-  --bg-primary: #f8f9fa;
-  --bg-secondary: #ffffff;
-  --bg-tertiary: #e9ecef;
-  --text-primary: #212529;
-  --text-secondary: #6c757d;
-  --border-color: #dee2e6;
-  --accent-color: #0d6efd;
-  --accent-bg: rgba(13, 110, 253, 0.08);
-  --success-color: #198754;
-  --danger-color: #dc3545;
-  --warning-color: #ffc107;
-  --pulse-color: rgba(13, 110, 253, 0.4);
-  --badge-text: #ffffff;
-  --color-scheme: light;
-}
-
-#app.ocean {
-  --bg-primary: #0b1929;
-  --bg-secondary: #0d2137;
-  --bg-tertiary: #122d4d;
-  --text-primary: #d4e4f7;
-  --text-secondary: #7ea8cc;
-  --border-color: #1a3a5c;
-  --accent-color: #4fc3f7;
-  --accent-bg: rgba(79, 195, 247, 0.1);
-  --success-color: #4fc3f7;
-  --danger-color: #ef5350;
-  --warning-color: #ffb74d;
-  --pulse-color: rgba(79, 195, 247, 0.4);
-  --badge-text: #0b1929;
-  --color-scheme: dark;
-}
-
-#app.forest {
-  --bg-primary: #1a2e1a;
-  --bg-secondary: #1e3620;
-  --bg-tertiary: #264228;
-  --text-primary: #d4e8d0;
-  --text-secondary: #8baa85;
-  --border-color: #2e5430;
-  --accent-color: #81c784;
-  --accent-bg: rgba(129, 199, 132, 0.1);
-  --success-color: #81c784;
-  --danger-color: #e57373;
-  --warning-color: #ffb74d;
-  --pulse-color: rgba(129, 199, 132, 0.4);
-  --badge-text: #1a2e1a;
-  --color-scheme: dark;
-}
-
-#app.rose {
-  --bg-primary: #2e1a24;
-  --bg-secondary: #3a1f2e;
-  --bg-tertiary: #4a2838;
-  --text-primary: #f0d4e0;
-  --text-secondary: #c48da0;
-  --border-color: #5c2e44;
-  --accent-color: #f48fb1;
-  --accent-bg: rgba(244, 143, 177, 0.1);
-  --success-color: #81c784;
-  --danger-color: #ef5350;
-  --warning-color: #ffcc80;
-  --pulse-color: rgba(244, 143, 177, 0.4);
-  --badge-text: #2e1a24;
-  --color-scheme: dark;
-}
-
-.container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-}
-
-.title-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 32px;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
-  -webkit-app-region: drag;
-  user-select: none;
-}
-
-.title-bar-drag {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 12px;
-}
-
-.app-icon {
-  font-size: 14px;
-}
-
-.app-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.title-bar-controls {
-  display: flex;
-  -webkit-app-region: no-drag;
-}
-
-.win-btn {
-  width: 46px;
-  height: 32px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.15s;
-}
-
-.win-btn:hover {
-  background-color: var(--bg-tertiary);
-}
-
-.win-btn-close:hover {
-  background-color: #e81123;
-  color: white;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 20px;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.header-left, .header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.date-picker {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.date-nav-btn {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-}
-
-.date-nav-btn:hover:not(:disabled) {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.date-nav-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.date-input-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.date-display-btn {
-  padding: 3px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: border-color 0.2s;
-}
-
-.date-display-btn:hover {
-  border-color: var(--accent-color);
-}
-
-.calendar-popup {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 260px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 10px;
-  z-index: 1000;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-
-.calendar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.cal-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.cal-nav-btn {
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.cal-nav-btn:hover {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.calendar-weekdays {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  text-align: center;
-  margin-bottom: 4px;
-}
-
-.calendar-weekdays span {
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 4px 0;
-}
-
-.calendar-days {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
-}
-
-.cal-day {
-  width: 100%;
-  aspect-ratio: 1;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  transition: all 0.15s;
-}
-
-.cal-day:hover:not(:disabled) {
-  background-color: var(--bg-tertiary);
-}
-
-.cal-day.other-month {
-  color: var(--text-secondary);
-  opacity: 0.4;
-}
-
-.cal-day.is-today {
-  border: 1px solid var(--accent-color);
-  font-weight: 600;
-}
-
-.cal-day.is-selected {
-  background-color: var(--accent-color);
-  color: var(--badge-text);
-  font-weight: 600;
-}
-
-.cal-day.has-data:not(.is-selected)::after {
-  content: '';
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background-color: #10b981;
-}
-
-.cal-day.is-future {
-  opacity: 0.25;
-  cursor: not-allowed;
-}
-
-.today-btn {
-  padding: 3px 10px;
-  border: 1px solid var(--accent-color);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--accent-color);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.today-btn:hover {
-  background: var(--accent-bg);
-}
-
-.monitor-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  border: 1px solid #6b7280;
-  border-radius: 20px;
-  background-color: rgba(107, 114, 128, 0.15);
-  color: #9ca3af;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-
-.monitor-btn:hover {
-  border-color: #f59e0b;
-  color: #f59e0b;
-  background-color: rgba(245, 158, 11, 0.1);
-}
-
-.monitor-btn.active {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(5, 150, 105, 0.15));
-  border-color: #10b981;
-  color: #10b981;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
-}
-
-.monitor-btn.active:hover {
-  border-color: #f59e0b;
-  color: #f59e0b;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(217, 119, 6, 0.15));
-  box-shadow: 0 0 12px rgba(245, 158, 11, 0.25);
-}
-
-.monitor-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: #6b7280;
-  transition: background-color 0.2s;
-}
-
-.monitor-dot.pulse {
-  background-color: #10b981;
-  animation: monitor-pulse 2s infinite;
-}
-
-@keyframes monitor-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
-  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
-}
-
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 var(--pulse-color); }
-  70% { box-shadow: 0 0 0 6px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 18px;
-  transition: background-color 0.2s;
-}
-
-.icon-btn:hover {
-  background-color: var(--border-color);
-}
-
-.icon-btn.small {
-  width: 28px;
-  height: 28px;
-  font-size: 14px;
-}
-
-.main-content {
+<style scoped>
+.shell {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.stats-section {
-  display: flex;
-  gap: 6px;
-  padding: 8px 20px;
-}
-
-.stat-card {
-  flex: 1;
-  padding: 6px 8px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  text-align: center;
-}
-
-.stat-value {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--accent-color);
-  margin-bottom: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stat-label {
-  font-size: 10px;
-  color: var(--text-secondary);
-  letter-spacing: 0.3px;
-}
-
-.charts-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 0 20px 12px;
-}
-
-.chart-card {
-  flex: 1;
-  padding: 14px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-}
-
-.chart-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.chart-header h3 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.chart-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background-color: var(--accent-color);
-  color: var(--badge-text);
-  opacity: 0.8;
-}
-
-.chart-content {
-  max-height: 170px;
-  overflow-y: auto;
-}
-
-.app-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  padding: 4px 8px;
-  border-radius: 4px;
-  transition: background-color 0.15s;
-}
-
-.app-bar:hover {
-  background-color: var(--bg-secondary);
-}
-
-.app-rank {
-  min-width: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-.app-bar:nth-child(1) .app-rank { color: #ffd700; }
-.app-bar:nth-child(2) .app-rank { color: #c0c0c0; }
-.app-bar:nth-child(3) .app-rank { color: #cd7f32; }
-
-.app-name {
-  width: 120px;
-  min-width: 120px;
-  max-width: 120px;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text-secondary);
-  cursor: default;
-}
-
-.app-bar-container {
-  flex: 1;
-  height: 18px;
-  background-color: var(--bg-primary);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.app-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent-color), var(--accent-bg));
-  border-radius: 4px;
-  transition: width 0.3s ease;
-}
-
-.app-bar-fill.duration-fill {
-  background: linear-gradient(90deg, var(--warning-color), rgba(255, 217, 61, 0.3));
-}
-
-.app-count {
-  min-width: 40px;
-  text-align: right;
-  font-size: 12px;
-  color: var(--text-primary);
-}
-
-.timeline-content {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.timeline-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px;
-  background-color: var(--bg-secondary);
-  border-radius: 4px;
-}
-
-.timeline-time {
-  min-width: 60px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.timeline-app {
-  flex: 1;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.timeline-duration {
-  min-width: 70px;
-  text-align: right;
-  font-size: 11px;
-  color: var(--accent-color);
-}
-
-.tab-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  margin: 0 20px 12px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
   min-height: 0;
+  overflow: hidden;
 }
 
-.tabs {
-  display: flex;
-  padding: 0;
-  gap: 0;
-  background-color: transparent;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.tab-btn {
+.content {
   flex: 1;
-  padding: 10px 0;
-  border: none;
-  background-color: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.2s;
-  border-bottom: 2px solid transparent;
-  font-size: 13px;
-  font-weight: 500;
-  text-align: center;
-}
-
-.tab-btn:hover {
-  color: var(--text-primary);
-}
-
-.tab-btn.active {
-  color: var(--accent-color);
-  border-bottom-color: var(--accent-color);
-}
-
-.tab-content {
-  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
+  background:
+    radial-gradient(760px 320px at 16% -6%,
+      color-mix(in srgb, var(--accent) 9%, transparent), transparent 72%),
+    var(--bg-canvas);
 }
 
-.activities-list,
-.summaries-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.activity-item {
-  padding: 10px 14px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  transition: border-color 0.15s;
-}
-
-.activity-item:hover {
-  border-color: var(--accent-color);
-}
-
-.summary-item {
-  padding: 16px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  transition: border-color 0.15s;
-}
-
-.summary-item:hover {
-  border-color: var(--accent-color);
-}
-
-.activity-time {
-  min-width: 80px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.activity-details {
-  flex: 1;
-}
-
-.activity-process {
-  font-weight: 500;
-  margin-bottom: 2px;
-}
-
-.activity-window {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-.summary-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.summary-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.summary-time {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.summary-divider {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.summary-count {
-  font-size: 12px;
-  color: var(--accent-color);
-  padding: 1px 8px;
-  background-color: rgba(74, 158, 255, 0.1);
-  border-radius: 10px;
-}
-
-.summary-content {
-  flex: 1;
-  line-height: 1.5;
-  font-size: 13px;
-}
-
-.summary-content :deep(h1),
-.summary-content :deep(h2),
-.summary-content :deep(h3),
-.summary-content :deep(h4),
-.summary-content :deep(h5),
-.summary-content :deep(h6) {
-  margin: 8px 0 4px 0;
-  font-weight: 600;
-}
-
-.summary-content :deep(h1) { font-size: 16px; }
-.summary-content :deep(h2) { font-size: 15px; }
-.summary-content :deep(h3) { font-size: 14px; }
-.summary-content :deep(h4),
-.summary-content :deep(h5),
-.summary-content :deep(h6) { font-size: 13px; }
-
-.summary-content :deep(p) {
-  margin: 4px 0;
-}
-
-.summary-content :deep(ul),
-.summary-content :deep(ol) {
-  margin: 4px 0;
-  padding-left: 20px;
-}
-
-.summary-content :deep(li) {
-  margin: 2px 0;
-}
-
-.summary-content :deep(code) {
-  background-color: var(--bg-tertiary);
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-}
-
-.summary-content :deep(pre) {
-  background-color: var(--bg-tertiary);
-  padding: 8px;
-  border-radius: 4px;
-  overflow-x: auto;
-  margin: 4px 0;
-}
-
-.summary-content :deep(pre code) {
-  background: none;
-  padding: 0;
-}
-
-.summary-content :deep(blockquote) {
-  border-left: 3px solid var(--accent-color);
-  padding-left: 12px;
-  margin: 4px 0;
-  color: var(--text-secondary);
-}
-
-.summary-actions {
-  margin-bottom: 12px;
-}
-
-.summary-range-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-  padding: 10px 12px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-}
-
-.range-inputs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.range-inputs label {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.datetime-input {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 12px;
-  color-scheme: var(--color-scheme);
-}
-
-.action-btn {
-  padding: 8px 20px;
-  border: 1px solid var(--accent-color);
-  border-radius: 6px;
-  background-color: var(--accent-bg);
-  color: var(--accent-color);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.action-btn:hover {
-  background-color: var(--accent-color);
-  color: var(--bg-primary);
-}
-
-.action-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.settings-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.settings-group {
-  background-color: var(--bg-secondary);
-  padding: 16px;
-  border-radius: 8px;
-}
-
-.settings-group h3 {
-  margin-bottom: 16px;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.setting-item {
-  display: flex;
-  align-items: center;
-  margin-bottom: 12px;
-  gap: 12px;
-}
-
-.setting-item:last-child {
-  margin-bottom: 0;
-}
-
-.setting-item label {
-  min-width: 120px;
-  font-size: 14px;
-}
-
-.setting-item input[type="text"],
-.setting-item input[type="number"],
-.setting-item input[type="password"] {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.setting-item input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 40px;
-  color: var(--text-secondary);
-}
-
-.log-panel {
-  height: 150px;
-  background-color: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-}
-
-.log-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 16px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.log-controls {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.log-type-btn {
-  padding: 4px 12px;
-  border: none;
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 11px;
-  transition: all 0.2s;
-}
-
-.log-type-btn:hover {
-  background-color: var(--border-color);
-}
-
-.log-type-btn.active {
-  background-color: var(--accent-color);
-  color: white;
-}
-
-.log-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 16px;
-}
-
-.log-entry {
-  display: flex;
-  gap: 8px;
-  font-size: 12px;
-  line-height: 1.6;
-  margin-bottom: 4px;
-}
-
-.log-entry.error .log-message {
-  color: var(--danger-color);
-}
-
-.log-entry.warning .log-message {
-  color: var(--warning-color);
-}
-
-.log-time {
-  color: var(--text-secondary);
-  min-width: 80px;
-}
-
-.log-message {
-  color: var(--text-primary);
-}
-
-.logs-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background-color: var(--bg-secondary);
-  border-radius: 8px;
-}
-
-.log-controls {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.log-content-full {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.settings-panel-full {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 16px 20px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.settings-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.back-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 14px;
-  transition: background-color 0.2s;
-}
-
-.back-btn:hover {
-  background-color: var(--border-color);
-}
-
-.settings-header h2 {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}
-
-.select-input {
-  padding: 6px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  color-scheme: var(--color-scheme);
-}
-
-.about-section {
-  text-align: center;
-}
-
-.about-info p {
-  margin: 4px 0;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.version {
-  color: var(--accent-color);
-  font-weight: 600;
-}
-
-.about-desc {
-  font-size: 12px !important;
-  opacity: 0.7;
-}
-
-.update-section {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.update-result {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-
-.update-available {
-  color: var(--accent-color);
-  font-weight: 600;
-}
-
-.update-latest {
-  color: var(--success-color);
-}
-
-.update-error {
-  color: var(--danger-color);
-}
-
-.setting-item textarea {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: inherit;
-  resize: vertical;
-}
-
-.cost-result {
-  padding: 10px 12px;
-  background-color: var(--bg-tertiary);
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.8;
-}
-
-.cost-result p {
-  margin: 0;
-}
-
-.schedule-section {
-  flex-direction: column;
-  align-items: flex-start !important;
-}
-
-.schedule-list {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.schedule-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.time-input {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 13px;
-  color-scheme: var(--color-scheme);
-}
-
-.schedule-sep {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.schedule-del-btn {
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--danger-color);
-  cursor: pointer;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.schedule-del-btn:hover {
-  background-color: var(--bg-tertiary);
-}
-
-.schedule-add-btn {
-  padding: 4px 12px;
-  border: 1px dashed var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.2s;
-}
-
-.schedule-add-btn:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.schedule-hint {
-  font-size: 11px;
-  color: var(--text-secondary);
-  opacity: 0.7;
-  margin: 2px 0 0 0;
-}
-
-.storage-path-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-}
-
-.storage-path-input {
-  flex: 1;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color);
-  background-color: var(--bg-tertiary);
-  color: var(--text-secondary);
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: default;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.setting-hint {
-  font-size: 11px;
-  color: var(--text-secondary);
-  opacity: 0.7;
-  margin: 2px 0 0 120px;
-}
-
-.action-btn.small {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-
-.action-btn.danger {
-  color: var(--danger-color);
-  border-color: var(--danger-color);
-}
-
-.action-btn.danger:hover {
-  background-color: var(--danger-color);
-  color: #fff;
-}
-/* --- Arhat Mode --- */
-
-.arhat-start-dialog {
+/* ---------- 弹窗 ---------- */
+.modal-mask {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: 300;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--bg-overlay);
   backdrop-filter: blur(4px);
 }
 
-.arhat-start-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  padding: 32px;
-  width: 340px;
+.modal-card {
+  width: 300px;
+  padding: var(--sp-5);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
   text-align: center;
 }
 
-.arhat-start-card h3 {
-  font-size: 18px;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-}
-
-.arhat-start-card p {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 20px;
-}
-
-.arhat-start-input {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 14px;
-  margin-bottom: 20px;
-  outline: none;
-}
-
-.arhat-start-input:focus {
-  border-color: var(--accent-color);
-}
-
-.arhat-start-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-
-.action-btn.primary {
-  background: var(--accent-color);
-  color: var(--badge-text);
-  border-color: var(--accent-color);
-}
-
-.arhat-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 10001;
+.modal-icon {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto var(--sp-3);
+  border-radius: var(--r-full);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-primary);
-  overflow: hidden;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
-.arhat-breath {
-  position: absolute;
-  width: 300px;
-  height: 300px;
-  border-radius: 50%;
-  background: radial-gradient(circle, var(--accent-bg) 0%, transparent 70%);
-  animation: arhat-breathe 8s ease-in-out infinite;
-  pointer-events: none;
+.modal-card h3 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
 }
 
-.arhat-breath.paused {
-  animation-play-state: paused;
+.modal-card p {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  line-height: var(--lh-snug);
 }
 
-@keyframes arhat-breathe {
-  0%, 100% { transform: scale(0.6); opacity: 0.3; }
-  50% { transform: scale(1.2); opacity: 0.7; }
-}
-
-.arhat-content {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 24px;
-}
-
-.arhat-focus-text {
-  font-size: 22px;
-  font-weight: 300;
-  color: var(--text-primary);
-  letter-spacing: 2px;
+.modal-input {
+  height: 34px;
   text-align: center;
-  max-width: 360px;
+  margin-bottom: var(--sp-4);
 }
 
-.arhat-timer {
-  font-size: 48px;
-  font-weight: 200;
-  color: var(--accent-color);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 4px;
-}
-.arhat-note-area {
+.modal-actions {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-height: 50px;
+  gap: var(--sp-2);
 }
 
-.arhat-note-input {
-  width: 300px;
-  padding: 10px 16px;
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity 0.3s, transform 0.3s;
-  pointer-events: none;
-}
-
-.arhat-note-input.visible {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.arhat-note-input:focus {
-  border-color: var(--accent-color);
-}
-
-.arhat-note-trigger {
-  padding: 8px 20px;
-  border: 1px dashed var(--border-color);
-  border-radius: 20px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.arhat-note-trigger:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.arhat-notes-count {
-  font-size: 12px;
-  color: var(--text-secondary);
-  opacity: 0.6;
-}
-
-.arhat-exit-btn {
-  margin-top: 20px;
-  padding: 8px 24px;
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.arhat-exit-btn:hover {
-  border-color: var(--danger-color);
-  color: var(--danger-color);
-}
-
-.dropdown-wrapper {
-  position: relative;
-}
-
-.dropdown-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 4px 0;
-  min-width: 150px;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.dropdown-item {
-  display: block;
-  width: 100%;
-  padding: 8px 14px;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.dropdown-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.dropdown-item.danger {
-  color: var(--danger-color);
-}
-
-.dropdown-divider {
-  height: 1px;
-  background: var(--border-color);
-  margin: 4px 0;
-}
-
-.theme-cards {
-  display: flex;
-  gap: 8px;
+.modal-actions .btn {
   flex: 1;
-  flex-wrap: wrap;
 }
 
-.theme-card {
+/* ---------- 专注启动弹窗 ---------- */
+.focus-dialog {
+  width: 368px;
+  padding: var(--sp-5);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.focus-dialog h3 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+
+.focus-dialog p {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+}
+
+.mode-card {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-tertiary);
+  gap: 4px;
+  padding: var(--sp-3) var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  text-align: center;
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+
+.mode-card:hover {
+  border-color: var(--border-strong);
   color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
 }
 
-.theme-card:hover {
-  border-color: var(--text-secondary);
+.mode-card.active {
+  border-color: var(--mode-tint);
+  background: color-mix(in srgb, var(--mode-tint) 12%, transparent);
+  color: var(--mode-tint);
 }
 
-.theme-card.active {
-  border-color: var(--accent-color);
+.mc-name {
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
-  background: var(--accent-bg);
+  margin-top: 2px;
 }
 
-.theme-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.mode-card.active .mc-name {
+  color: var(--mode-tint);
 }
 
-.theme-label {
+.mc-hint {
+  font-size: var(--fs-10);
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity var(--dur-2) var(--ease);
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+
+/* ---------- 提示条 ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 400;
+  max-width: 84%;
+  padding: 8px 16px;
+  border-radius: var(--r-full);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-12);
+  color: var(--text-primary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toast.success {
+  border-color: rgba(52, 211, 153, 0.4);
+  color: var(--success);
+}
+
+.toast.error {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--danger);
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
 }
 </style>
+

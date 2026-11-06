@@ -1,6 +1,6 @@
 {
   "name": "worklog-assistant",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "description": "WorkLog Assistant - Electron + Vue version",
   "main": "electron/main.js",
   "scripts": {
@@ -8,7 +8,10 @@
     "build": "vite build",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && npm run electron\"",
-    "electron:build": "npm run build && electron-builder",
+    "electron:build": "npm run build && electron-builder && node scripts/patch-exe-icon.js dist-electron",
+    "build:win": "npm run build && electron-builder --win && node scripts/patch-exe-icon.js dist-electron",
+    "icon:exe": "node scripts/patch-exe-icon.js --template",
+    "icons": "electron scripts/build-icons.js",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore"
   },
   "dependencies": {
@@ -35,10 +38,17 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "mcp/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "mcp/**/*",
+      "electron/analytics.js"
+    ],
     "extraResources": [
-      { "from": "build/icon.png", "to": "icon.png" }
+      { "from": "build/icon.png", "to": "icon.png" },
+      { "from": "build/icon.ico", "to": "icon.ico" },
+      { "from": "build/tray.png", "to": "tray.png" }
     ],
     "win": {
       "target": [

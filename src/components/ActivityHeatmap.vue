@@ -1,0 +1,245 @@
+<template>
+  <div ref="wrap" class="hm-wrap">
+    <template v-if="days.length">
+      <div class="hm-body">
+        <div class="hm-weekdays">
+          <span v-for="(w, i) in weekdays" :key="w" :style="{ gridRow: i + 1 }">{{ w }}</span>
+        </div>
+        <div class="hm-grid">
+          <button
+            v-for="c in cells"
+            :key="c.date"
+            class="hm-cell"
+            :data-level="c.level"
+            :class="{ 'is-future': c.isFuture, 'is-selected': c.isSelected }"
+            :style="{ gridRow: c.row + 1, gridColumn: c.col + 1 }"
+            :disabled="c.isFuture"
+            :title="tipText(c)"
+            :aria-label="tipText(c)"
+            @click="pick(c)"
+            @mouseenter="onHover($event, c)"
+            @mouseleave="hover = null"
+            @focus="onHover($event, c)"
+            @blur="hover = null"
+          ></button>
+        </div>
+      </div>
+
+      <div class="hm-foot">
+        <span class="hm-hint">每格一天 · 点击查看当天</span>
+        <span class="hm-legend">
+          <span>少</span>
+          <i v-for="l in [0, 1, 2, 3, 4]" :key="l" class="hm-cell" :data-level="l"></i>
+          <span>多</span>
+        </span>
+      </div>
+    </template>
+
+    <div v-else class="hm-none">暂无历史记录，先从今天开始</div>
+
+    <div
+      v-if="hover"
+      class="hm-tip"
+      :style="{ left: hover.x + 'px', top: hover.y + 'px' }"
+    >{{ tipText(hover.cell) }}</div>
+  </div>
+</template>
+
+<script>
+function localDateStr(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+export default {
+  name: 'ActivityHeatmap',
+  props: {
+    // 84 项 dense 升序：周一开头、每 7 项一列，由 App 的 heatRange() 生成
+    days: { type: Array, default: () => [] },
+    selectedDate: { type: String, default: '' },
+    thresholds: { type: Array, default: () => [90, 210, 360] } // 分钟
+  },
+  emits: ['select-date'],
+  data() {
+    return {
+      hover: null,
+      weekdays: ['一', '二', '三', '四', '五', '六', '日']
+    };
+  },
+  computed: {
+    cells() {
+      // 固定阈值 + 自适应兼底：数据充足时绝对可比，数据偏少时自动降档，
+      // 避免整片最浅色；scale 下限 0.2 防止单日极短记录被放大成满格。
+      const base = this.thresholds.length === 3 ? this.thresholds : [90, 210, 360];
+      const maxMin = this.days.reduce((m, d) => Math.max(m, (d.trackedMs || 0) / 60000), 0);
+      const scale = maxMin >= base[2] ? 1 : Math.min(1, Math.max(0.2, maxMin / base[2]));
+      const t = base.map((v) => v * scale);
+      const today = localDateStr(new Date());
+
+      return this.days.map((d, i) => {
+        const ms = d.trackedMs || 0;
+        const minutes = ms / 60000;
+        let level = 0;
+        if (minutes > 0) {
+          level = minutes < t[0] ? 1
+            : minutes < t[1] ? 2
+              : minutes < t[2] ? 3 : 4;
+        }
+        return {
+          date: d.date,
+          trackedMs: ms,
+          level,
+          row: i % 7,
+          col: Math.floor(i / 7),
+          isFuture: d.date > today,
+          isSelected: d.date === this.selectedDate && d.date <= today
+        };
+      });
+    }
+  },
+  methods: {
+    pick(c) {
+      if (!c.isFuture) this.$emit('select-date', c.date);
+    },
+    onHover(e, c) {
+      const rect = this.$refs.wrap.getBoundingClientRect();
+      // focus 事件没有 clientX/clientY，退回用格子自身的位置
+      const cellRect = e.currentTarget && e.currentTarget.getBoundingClientRect
+        ? e.currentTarget.getBoundingClientRect() : { left: rect.left, top: rect.top };
+      const cx = Number.isFinite(e.clientX) ? e.clientX : cellRect.left;
+      const cy = Number.isFinite(e.clientY) ? e.clientY : cellRect.top;
+      const x = Math.min(Math.max(0, cx - rect.left + 12), Math.max(0, rect.width - 150));
+      const y = Math.max(0, cy - rect.top - 32);
+      this.hover = { x, y, cell: c };
+    },
+    tipText(c) {
+      if (!c) return '';
+      return `${c.date} · ${c.trackedMs > 0 ? this.fmt(c.trackedMs) : '无记录'}`;
+    },
+    fmt(ms) {
+      if (!ms || ms <= 0) return '0m';
+      const totalMin = Math.round(ms / 60000);
+      if (totalMin < 1) return '<1m';
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      if (h === 0) return `${m}m`;
+      if (m === 0) return `${h}h`;
+      return `${h}h${m}m`;
+    }
+  }
+};
+</script>
+
+<style scoped>
+.hm-wrap {
+  position: relative;
+}
+
+.hm-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.hm-weekdays {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.hm-weekdays span {
+  width: 12px;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: right;
+  color: var(--text-tertiary);
+}
+
+.hm-grid {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  grid-auto-columns: 12px;
+  gap: 3px;
+}
+
+.hm-cell {
+  display: block;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border-radius: 2px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+  cursor: pointer;
+  transition: transform var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+}
+
+.hm-cell[data-level="1"] { background: color-mix(in srgb, var(--accent) 22%, var(--bg-inset)); }
+.hm-cell[data-level="2"] { background: color-mix(in srgb, var(--accent) 45%, var(--bg-inset)); }
+.hm-cell[data-level="3"] { background: color-mix(in srgb, var(--accent) 70%, var(--bg-inset)); }
+.hm-cell[data-level="4"] { background: var(--accent); border-color: transparent; }
+
+.hm-cell:hover:not(:disabled) {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 1px var(--text-primary);
+}
+
+.hm-cell.is-future {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.hm-cell.is-selected {
+  box-shadow: 0 0 0 1.5px var(--text-primary);
+}
+
+.hm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.hm-hint {
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+
+.hm-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+}
+
+.hm-legend .hm-cell {
+  width: 10px;
+  height: 10px;
+  cursor: default;
+}
+
+.hm-none {
+  padding: var(--sp-5) 0;
+  text-align: center;
+  font-size: var(--fs-12);
+  color: var(--text-tertiary);
+}
+
+.hm-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  padding: 4px 8px;
+  border-radius: var(--r-xs);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-10);
+  color: var(--text-primary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+</style>

@@ -176,39 +176,42 @@ class Summarizer {
     return storage.getActivitiesByTimeRange(cutoffTime.toISOString(), now.toISOString());
   }
   buildPrompt(activities) {
-    let customPrompt = this.config.summary.prompt;
-    let activityText = '';
-    if (this.config.summary.compressActivities) {
-      const groupedActivities = this.groupActivities(activities);
-      for (const [processName, windows] of Object.entries(groupedActivities)) {
-        activityText += `应用: ${processName}\n`;
-        activityText += `窗口: ${windows.join(' | ')}\n\n`;
-      }
-    } else {
-      activities.forEach(activity => {
-        activityText += `[${new Date(activity.timestamp).toLocaleTimeString('zh-CN')}] `;
-        activityText += `${activity.processName} - ${activity.windowTitle}\n`;
+    const customPrompt = this.config.summary.prompt || '';
+
+    // 用真实会话时间线作为输入：每段自带时长，模型才能算出时间分配
+    let activityText;
+    let context = null;
+    try {
+      const analytics = require('./analytics');
+      context = analytics.renderPromptContext(activities, {
+        ignoredApps: this.config.analysis?.ignoredApps
       });
+      activityText = context.text || '';
+    } catch (error) {
+      context = null;
+    }
+
+    if (!activityText) {
+      // 兜底：退回逐条罗列
+      activityText = activities.map(a =>
+        `[${new Date(a.timestamp).toLocaleTimeString('zh-CN')}] ${a.processName} - ${a.windowTitle}`
+      ).join('\n');
     }
 
     if (customPrompt && customPrompt.trim() !== '') {
       return `${customPrompt}\n\n${activityText}`;
     }
 
-    const timeRange = activities.length > 0
-      ? `${new Date(activities[0].timestamp).toLocaleTimeString('zh-CN')} ~ ${new Date(activities[activities.length - 1].timestamp).toLocaleTimeString('zh-CN')}`
-      : '';
+    return `以下是这段时间内电脑前台窗口的使用记录，已按连续停留折叠成片段，每行包含时间范围、时长、应用、分类和窗口标题。
 
-    return `请根据以下 ${timeRange} 时间段内的电脑使用活动记录，生成一份结构化的工作日志摘要。
+${activityText}
 
-要求：
+请生成一份结构化工作日志摘要，要求：
 1. 用 "## 工作概览" 开头，一句话总结这段时间的主要工作方向
-2. 用 "## 主要工作" 列出具体做了什么（根据窗口标题推断，不要简单罗列应用名）
-3. 用 "## 时间分配" 简要说明各类工作的大致时间占比
-4. 语言简洁，避免废话，像写给自己看的笔记
-
-活动记录：
-${activityText}`;
+2. 用 "## 主要工作" 列出具体做了什么——根据窗口标题推断实际工作内容，不要简单罗列应用名
+3. 用 "## 时间分配" 基于上面每段标注的真实时长，给出各条工作线的耗时估算和占比
+4. 如果出现"离座"或空档，简要说明
+5. 语言简洁，避免废话，像写给自己看的笔记`;
   }
 
   groupActivities(activities) {

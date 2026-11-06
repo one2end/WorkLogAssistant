@@ -54,8 +54,64 @@ class StorageManager {
     return path.join(this.activitiesDir, `${dateStr}.json`);
   }
 
+  _activityJsonlFile(dateStr) {
+    return path.join(this.activitiesDir, `${dateStr}.jsonl`);
+  }
+
   _summaryFile(dateStr) {
     return path.join(this.summariesDir, `${dateStr}.json`);
+  }
+
+  _readJsonlFile(filePath) {
+    try {
+      if (!fs.existsSync(filePath)) return [];
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const out = [];
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          out.push(JSON.parse(trimmed));
+        } catch (e) {
+          // 单行损坏不影响整份文件
+        }
+      }
+      return out;
+    } catch (error) {
+      console.error(`读取 JSONL 失败 ${filePath}:`, error);
+      return [];
+    }
+  }
+
+  /** 把录制器写下的片段转换成前端/统计一直使用的活动结构 */
+  _fromSegment(rec, index) {
+    return {
+      id: `${rec.t}#${index}`,
+      timestamp: rec.t,
+      processName: rec.app || 'unknown',
+      windowTitle: rec.title || '',
+      platform: rec.platform || 'windows',
+      durationMs: typeof rec.dur === 'number' ? rec.dur : 0,
+      kind: rec.kind === 'idle' ? 'idle' : 'active',
+      source: rec.source === 'manual' ? 'manual' : 'auto',
+      category: rec.cat || undefined
+    };
+  }
+
+  /** 读某天全部活动：旧版 JSON + 新版 JSONL，按时间排序 */
+  _readActivityFile(dateStr) {
+    const items = [];
+
+    const legacy = this._readJsonFile(this._activityFile(dateStr));
+    if (Array.isArray(legacy)) items.push(...legacy);
+
+    const segments = this._readJsonlFile(this._activityJsonlFile(dateStr));
+    segments.forEach((rec, i) => {
+      if (rec && rec.t) items.push(this._fromSegment(rec, i));
+    });
+
+    items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    return items;
   }
 
   _readJsonFile(filePath) {
@@ -168,16 +224,59 @@ class StorageManager {
     }
   }
 
+  /**
+   * 追加写入录制片段（JSONL，一行一条）。
+   * 相比旧版「读整个文件 → 解析 → push → 全量重写」，追加写是 O(1)，
+   * 不会随当天记录变多而变慢。
+   */
+  appendActivityRecords(records) {
+    if (!Array.isArray(records) || records.length === 0) return false;
+
+    const byDate = new Map();
+    for (const rec of records) {
+      if (!rec || !rec.t) continue;
+      const dateStr = this._toDateStr(rec.t);
+      if (!byDate.has(dateStr)) byDate.set(dateStr, []);
+      byDate.get(dateStr).push(rec);
+    }
+
+    let ok = true;
+    for (const [dateStr, list] of byDate.entries()) {
+      try {
+        const filePath = this._activityJsonlFile(dateStr);
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const payload = list
+          .map(r => JSON.stringify({
+            t: r.t,
+            dur: r.dur,
+            kind: r.kind || 'active',
+            app: r.app,
+            title: r.title || '',
+            platform: r.platform || 'windows',
+            ...(r.source === 'manual' ? { source: 'manual' } : {}),
+            ...(r.cat ? { cat: r.cat } : {})
+          }))
+          .join('\n') + '\n';
+        fs.appendFileSync(filePath, payload, 'utf8');
+      } catch (error) {
+        console.error(`追加活动记录失败 ${dateStr}:`, error);
+        ok = false;
+      }
+    }
+    return ok;
+  }
+
   getActivities(date) {
     if (!date) {
       return this._getAllFromDir(this.activitiesDir);
     }
     const dateStr = this._toDateStr(date);
-    return this._readJsonFile(this._activityFile(dateStr));
+    return this._readActivityFile(dateStr);
   }
 
   getAllActivities() {
-    return this._getAllFromDir(this.activitiesDir);
+    return this._getAllActivities();
   }
 
   getActivitiesByDateRange(startDate, endDate) {
@@ -187,10 +286,8 @@ class StorageManager {
     end.setHours(23, 59, 59, 999);
 
     const results = [];
-    const dateFiles = this._getDateFilesInRange(this.activitiesDir, start, end);
-    for (const filePath of dateFiles) {
-      const items = this._readJsonFile(filePath);
-      items.forEach(a => {
+    for (const dateStr of this._activityDatesInRange(start, end)) {
+      this._readActivityFile(dateStr).forEach(a => {
         const t = new Date(a.timestamp);
         if (t >= start && t <= end) results.push(a);
       });
@@ -203,10 +300,8 @@ class StorageManager {
     const end = new Date(endTime);
 
     const results = [];
-    const dateFiles = this._getDateFilesInRange(this.activitiesDir, start, end);
-    for (const filePath of dateFiles) {
-      const items = this._readJsonFile(filePath);
-      items.forEach(a => {
+    for (const dateStr of this._activityDatesInRange(start, end)) {
+      this._readActivityFile(dateStr).forEach(a => {
         const t = new Date(a.timestamp);
         if (t >= start && t <= end) results.push(a);
       });
@@ -216,9 +311,8 @@ class StorageManager {
 
   deleteActivity(activityId) {
     try {
-      // Need to search all day files for the activity
-      const files = this._listJsonFiles(this.activitiesDir);
-      for (const file of files) {
+      // 旧版 JSON 文件里可能存有该 id
+      for (const file of this._listJsonFiles(this.activitiesDir)) {
         const filePath = path.join(this.activitiesDir, file);
         const items = this._readJsonFile(filePath);
         const filtered = items.filter(a => a.id !== activityId);
@@ -236,8 +330,14 @@ class StorageManager {
 
   clearActivities() {
     try {
-      const files = this._listJsonFiles(this.activitiesDir);
-      files.forEach(f => fs.unlinkSync(path.join(this.activitiesDir, f)));
+      const removed = new Set();
+      for (const dir of [this.activitiesDir]) {
+        if (!fs.existsSync(dir)) continue;
+        fs.readdirSync(dir)
+          .filter(f => f.endsWith('.json') || f.endsWith('.jsonl'))
+          .forEach(f => removed.add(path.join(dir, f)));
+      }
+      removed.forEach(p => fs.unlinkSync(p));
       return true;
     } catch (error) {
       console.error('清空活动失败:', error);
@@ -395,13 +495,17 @@ class StorageManager {
 
       let removed = 0;
       [this.activitiesDir, this.summariesDir].forEach(dir => {
-        this._listJsonFiles(dir).forEach(file => {
-          const dateStr = file.replace('.json', '');
-          if (dateStr < cutoffStr) {
-            fs.unlinkSync(path.join(dir, file));
-            removed++;
-          }
-        });
+        if (!fs.existsSync(dir)) return;
+        fs.readdirSync(dir)
+          .filter(f => f.endsWith('.json') || f.endsWith('.jsonl'))
+          .forEach(file => {
+            const dateStr = file.replace(/\.(json|jsonl)$/, '');
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return;
+            if (dateStr < cutoffStr) {
+              fs.unlinkSync(path.join(dir, file));
+              removed++;
+            }
+          });
       });
 
       console.log(`清理完成，删除了 ${removed} 个过期文件，保留最近 ${daysToKeep} 天`);
@@ -424,6 +528,35 @@ class StorageManager {
       console.error(`列出文件失败 ${dir}:`, error);
       return [];
     }
+  }
+
+  /** 活动目录里有数据的日期（json 与 jsonl 取并集） */
+  _listActivityDates() {
+    try {
+      if (!fs.existsSync(this.activitiesDir)) return [];
+      const set = new Set();
+      fs.readdirSync(this.activitiesDir).forEach(f => {
+        const m = /^(\d{4}-\d{2}-\d{2})\.(json|jsonl)$/.exec(f);
+        if (m) set.add(m[1]);
+      });
+      return Array.from(set).sort();
+    } catch (error) {
+      return [];
+    }
+  }
+
+  _getAllActivities() {
+    let all = [];
+    for (const dateStr of this._listActivityDates()) {
+      all = all.concat(this._readActivityFile(dateStr));
+    }
+    return all;
+  }
+
+  _activityDatesInRange(start, end) {
+    const startStr = this._toDateStr(start);
+    const endStr = this._toDateStr(end);
+    return this._listActivityDates().filter(d => d >= startStr && d <= endStr);
   }
 
   _getAllFromDir(dir) {
@@ -450,8 +583,7 @@ class StorageManager {
   // --- Dates with data (for calendar) ---
 
   getDatesWithData() {
-    return this._listJsonFiles(this.activitiesDir)
-      .map(f => f.replace('.json', ''));
+    return this._listActivityDates();
   }
 
   // --- Data migration between paths ---
