@@ -11,7 +11,9 @@
 
 ## 当前版本
 
-**v0.7.0** — 专注助手三模式（番茄 / 沉浸 / 罗汉）、手工补记
+**v0.8.0** — 日时间带 / 12 周热力图 / 空状态插画 / 浮窗主题同步
+
+本版同时整合了 v0.7.0 之后的采集内核重写、AI 数据接口（MCP / 本地 HTTP）、应用图标重绘与整套界面视觉重构。
 
 ## 功能特性
 
@@ -54,6 +56,13 @@
 - **5 套主题**：深色、浅色、海洋、森林、玫瑰，全部共用一套语义 token
 - **自绘图标**：24×24、1.75 描边的内联 SVG 图标集，不依赖图标字体
 - **浮窗**：最小化后在桌面角落保留当前应用与计时，可拖动、可调宽
+
+### 数据可视化与空状态
+
+- **24 小时日时间带**：今日概览把一天画成 96 格（15 分钟/格）彩色带，按 `report.sessions` 聚合取主导分类着色，占用越多越不透明；带小时刻度与「当前时刻」标线。**点击任意格（含空白格）跳到时间线**并滚动高亮最接近的会话。
+- **12 周活动热力图**：12 列 × 7 行、周一开头，84 天密集数据由 `get-daily-tracked` IPC 与 `analytics.buildDailyTrackedMs` 提供（口径与首屏工时数字一致）；5 级色用 `--accent` + `color-mix` 自动跟随 5 套主题，阈值 `[90, 210, 360]` 分钟并在数据偏少时自适应降档；悬停显示当日时长，**点击只切换日期、留在概览**。
+- **空状态插画**：`EmptyIllustration.vue` 用一张 SVG 母题（表盘 + 记录卡片 + 时间条）配场景变体，替换 6 处空状态；纯 CSS 变量绘制，深浅色都可读，含 reduced-motion 保护。
+- **浮窗主题同步**：`float.html` 改为卡片式内高光 + accent 顶光 + 主题化阴影；`focus.html` 从硬编码深色改为 12 个 `--hud-*` 变量与 5 套主题映射，由主进程 `focus-theme` 事件跟随主窗口。
 
 ### AI 数据接口
 把工时数据交给任意 AI 汇总整理，两种接入方式：
@@ -188,20 +197,35 @@ npm install
 2. 填入对应的 API Key
 3. Base URL 和模型名称会自动填充，也可手动修改
 
-### 开发模式
+### 从源码直接运行（推荐，不打包）
 
 ```bash
-npm run electron:dev
+npm run build      # 构建前端产物到 dist/
+npm run electron   # 加载 dist/index.html 启动
 ```
 
-### 从源码直接运行（不打包）
+`electron .` 默认没有 `NODE_ENV`，`main.js` 里 `isDev = false`，因此**加载的是 `dist/index.html`**，不是 Vite 开发服务器。若 `dist/` 不存在，窗口会提示先执行构建。
+
+`npm run electron:dev` 会同时启动 Vite（5173）和 Electron，但 `electron .` 不注入 `NODE_ENV`，所以 Vite 起来了也**不会被加载**，没有热更新。真要连开发服务器，请开两个终端：
 
 ```bash
-npm run build      # 先构建前端产物
-npm run electron   # 加载 dist/ 启动
+# 终端 1
+npm run dev
+# 终端 2
+NODE_ENV=development npm run electron
 ```
 
-若 `dist/` 不存在，窗口会提示先执行构建。`npm run electron:dev` 走 vite 开发服务器，支持热更新。
+此时会 `loadURL('http://localhost:5173')` 并自动打开 DevTools；若 5173 不可达会自动回退到 `dist/`，不会黑屏。
+
+验证加载的是最新产物：看 `dist/assets/` 的文件名与时间戳，或在 DevTools Network 里确认请求是 `file://.../dist/index.html`（而不是 `http://localhost:5173` / `/@vite/client`）。
+
+改动生效方式：
+
+| 改了什么 | 怎么生效 |
+| --- | --- |
+| `electron/main.js`、`analytics.js` 等主进程模块 | **完全退出并重启 Electron**（启动时 require，无热重载） |
+| `electron/float.html`、`focus.html` | reload 对应浮窗，最稳是重启整个应用 |
+| `src/**/*.vue`、`src/styles/*.css` | `npm run build` + 重启 / 主窗口 reload |
 
 ### 构建应用
 
@@ -270,19 +294,22 @@ WorkLogAssistant-JS/
 │   │   ├── tokens.css       # 设计 token（间距/字号/圆角/5 套主题）
 │   │   └── base.css         # Reset + 通用组件（按钮/卡片/输入/空状态）
 │   ├── components/
-│   │   ├── Icon.vue         # 内联 SVG 图标集
-│   │   ├── TitleBar.vue     # 自定义标题栏
-│   │   ├── NavRail.vue      # 左侧导航
-│   │   ├── DateNav.vue      # 日期切换 + 日历弹层
-│   │   └── FocusOverlay.vue # 专注模式全屏层
+│   │   ├── Icon.vue              # 内联 SVG 图标集
+│   │   ├── TitleBar.vue          # 自定义标题栏
+│   │   ├── NavRail.vue           # 左侧导航
+│   │   ├── DateNav.vue           # 日期切换 + 日历弹层
+│   │   ├── FocusOverlay.vue      # 专注模式全屏层
+│   │   ├── ActivityHeatmap.vue   # 12 周活动热力图
+│   │   └── EmptyIllustration.vue # 空状态插画
 │   └── views/
 │       ├── TodayView.vue    # 今日概览
 │       ├── TimelineView.vue # 时间线
 │       ├── SummaryView.vue  # AI 摘要
 │       └── SettingsView.vue # 设置
-├── build/                    # 图标（icon.svg 为源文件）与构建资源
+├── build/                    # icon.svg（源文件）/ icon.png / icon.ico / tray.png
 ├── scripts/
-│   └── build-icons.js        # SVG → 各尺寸 PNG / ICO（需 Electron）
+│   ├── build-icons.js        # SVG → 各尺寸 PNG / ICO（需 Electron）
+│   └── patch-exe-icon.js     # 给 Electron 模板 exe 打图标（绕开 winCodeSign）
 ├── package.json
 ├── vite.config.js
 └── README.md
@@ -290,7 +317,15 @@ WorkLogAssistant-JS/
 
 ## 更新日志
 
-### v0.7.0 (当前版本)
+### v0.8.0 (当前版本)
+- **24 小时日时间带**：今日概览新增 96 格彩色时间带，点击任意时段跳到时间线并定位高亮最近会话
+- **12 周活动热力图**：周一开头、5 级强度随主题变化，悬停看时长、点击换日；新增 `get-daily-tracked` IPC 与 `buildDailyTrackedMs`，口径与首屏工时一致
+- **空状态插画**：`EmptyIllustration.vue` 统一 6 处空状态，全用 CSS 变量跟随主题
+- **浮窗主题同步**：`float.html` 卡片层次升级；`focus.html` 由硬编码深色改为 12 个 `--hud-*` 变量 + 5 套主题映射，主进程推送 `focus-theme`
+- **视觉重构**：设计 token 扩展大字号与表面层次，分类色板收敛，核心工时数字放大，图表加粗，5 套主题一致性提升
+- 修正文档关于 `electron:dev` 会加载 Vite 开发服务器的错误描述，补上运行与重启说明
+
+### v0.7.0
 - **专注助手重做**：拆成番茄钟 / 沉浸 / 罗汉三种预设，`focusManager` 负责状态机（阶段推进、暂停、跳过、轮次）
 - **桌面悬浮小窗**：新增 `focus.html`，工作/休息阶段实时显示，休息时整体转绿
 - **阶段通知**：工作→休息、休息→工作自动发系统通知
