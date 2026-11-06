@@ -25,3 +25,6 @@ release*/
 # 收口补充（2026-11-06）
 dist-electron-new/
 .workbuddy/
+
+# 独立版本打包输出（dist-electron/ 内 3 月旧 asar 被系统进程占用时改用）
+dist-electron-v*/
