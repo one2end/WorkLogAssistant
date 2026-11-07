@@ -26,17 +26,17 @@
         <div class="hero-main">
           <div class="hero-label">
             <span class="live-dot"></span>
-            有效工作
+            {{ isToday ? '今日记录时长' : '当日记录时长' }}
             <span class="hero-date">{{ isToday ? '今天' : report.date }}</span>
           </div>
           <div class="hero-value">
-            {{ heroHours }}<span class="hero-unit">h</span>
-            <span class="hero-min">{{ heroMinutes }}</span><span class="hero-unit">m</span>
+            <span>{{ heroHours }}</span><span class="hero-unit">小时</span>
+            <span class="hero-min">{{ heroMinutes }}</span><span class="hero-unit">分钟</span>
           </div>
           <div class="hero-sub">
             <span v-if="hasData">
               统计区间 {{ hm(report.stats.firstAt) }} – {{ hm(report.stats.lastAt) }}
-              · 工作占这段时间的 {{ pct(report.stats.coverage) }}
+              · 已记录占这段时间的 {{ pct(recordedCoverage) }}
             </span>
             <span v-else>还没有记录</span>
           </div>
@@ -44,7 +44,7 @@
 
         <div class="hero-side">
           <div class="mini-stat">
-            <span class="mini-value">{{ report.stats.uniqueApps || 0 }}</span>
+            <span class="mini-value">{{ (report.recordedApps || []).length }}</span>
             <span class="mini-label">应用</span>
           </div>
           <div class="mini-stat">
@@ -56,6 +56,16 @@
             <span class="mini-label">离座</span>
           </div>
         </div>
+      </div>
+
+      <div v-if="isToday && cards.session" class="hero-current" :class="{ idle: current && current.idle }">
+        <span class="hero-current-label">正在记录</span>
+        <template v-if="current">
+          <strong :title="current.title">{{ current.idle ? '离座' : current.app }}</strong>
+          <span class="hero-current-title" :title="current.title">{{ current.idle ? '等待新的操作' : (current.title || '当前窗口') }}</span>
+          <span class="hero-current-time">{{ elapsedText }}</span>
+        </template>
+        <span v-else class="hero-current-title">{{ recorder && recorder.running ? '等待新的窗口活动' : '记录已暂停' }}</span>
       </div>
 
       <EmptyIllustration
@@ -150,7 +160,7 @@
     <!-- 活跃度：跨度由设置页的热力图周数决定 -->
     <section v-if="cards.heatmap" class="card heat-card">
       <div class="card-head">
-        <span class="card-title">工作时长 · {{ heatWeeks }} 周</span>
+        <span class="card-title">记录时长 · {{ heatWeeks }} 周</span>
         <span class="head-note">{{ selectedDate }} · {{ heatSummary }}</span>
       </div>
       <ActivityHeatmap
@@ -165,23 +175,6 @@
         @pick-month="$emit('pick-month', $event)"
         @heat-today="$emit('heat-today')"
       />
-    </section>
-
-    <!-- 当前会话 -->
-    <section v-if="current && cards.session" class="session card" :class="{ idle: current.idle }">
-      <div class="session-icon">
-        <Icon :name="current.idle ? 'moon' : 'activity'" :size="15" />
-      </div>
-      <div class="session-body">
-        <div class="session-app">
-          {{ current.idle ? '当前空闲' : current.app }}
-          <span class="session-time">{{ elapsedText }}</span>
-        </div>
-        <div class="session-title">{{ current.idle ? '已有一段时间没有键鼠操作' : (current.title || '—') }}</div>
-      </div>
-      <span class="session-badge" :class="{ live: !current.idle }">
-        {{ current.idle ? '离座' : '进行中' }}
-      </span>
     </section>
 
     <!-- 分类分布 -->
@@ -226,7 +219,7 @@
     <section v-if="cards.apps" class="card">
       <div class="card-head">
         <span class="card-title">应用排行</span>
-        <span class="head-note">不含手工补记 · Top {{ rankedApps.length }}</span>
+        <span class="head-note">仅后台录制的软件 · Top {{ rankedApps.length }}</span>
       </div>
 
       <template v-if="rankedApps.length">
@@ -252,7 +245,6 @@
             </span>
           </li>
         </ul>
-        <p v-if="manualCount" class="manual-note">{{ manualCount }} 条手工补记未计入应用排行，可在时间线查看</p>
       </template>
 
       <div v-else class="empty">
@@ -388,9 +380,9 @@ export default {
       if (idleMin >= 60) {
         out.push({ text: `记录到 ${(idleMin / 60).toFixed(1)} 小时离座；如有需要，可补充这段时间在做什么`, meta: '可补充', color: '#d99a2b' });
       }
-      const cov = Number(st.coverage) || 0;
-      if (cov > 0 && cov < 0.6 && (Number(st.trackedMs) || 0) > 0) {
-        out.push({ text: `有效时长占记录跨度的 ${Math.round(cov * 100)}%；可查看时间线了解未记录时段`, meta: '查看时间线', color: '#8374c9' });
+      const cov = this.recordedCoverage;
+      if (cov > 0 && cov < 0.6 && (Number(st.recordedMs) || 0) > 0) {
+        out.push({ text: `已记录时长占记录跨度的 ${Math.round(cov * 100)}%；可查看时间线了解未记录时段`, meta: '查看时间线', color: '#8374c9' });
       }
       if (!out.length) {
         out.push({ text: '今天的记录比较完整，暂无明显待确认线索', meta: '已就绪', color: '#2f9c73' });
@@ -472,21 +464,22 @@ export default {
       return this.focus.sessions.length > 0 || this.focus.notes.length > 0;
     },
     heroHours() {
-      return Math.floor(((this.report.stats.trackedMs || 0) / 3600000));
+      return Math.floor(this.heroTotalMinutes / 60);
     },
     heroMinutes() {
-      const m = Math.round(((this.report.stats.trackedMs || 0) % 3600000) / 60000);
-      return String(m).padStart(2, '0');
+      return String(this.heroTotalMinutes % 60).padStart(2, '0');
+    },
+    heroTotalMinutes() {
+      return Math.round((this.report.stats.recordedMs || 0) / 60000);
+    },
+    recordedCoverage() {
+      return this.report.stats.spanMs > 0 ? (this.report.stats.recordedMs || 0) / this.report.stats.spanMs : 0;
     },
     idleText() {
       return this.fmt(this.report.stats.idleMs || 0);
     },
-    // 手工补记的「事项名」被写进 app 字段，它不是应用，不进应用排行
     rankedApps() {
-      return (this.report.apps || []).filter(a => !a.manual).slice(0, 6);
-    },
-    manualCount() {
-      return (this.report.apps || []).filter(a => a.manual).length;
+      return (this.report.recordedApps || []).slice(0, 6);
     },
     maxAppMs() {
       return this.rankedApps.length ? this.rankedApps[0].durationMs : 1;
@@ -727,14 +720,34 @@ export default {
 
 .hero-min {
   margin-left: 6px;
-  color: var(--text-secondary);
 }
 
 .hero-unit {
-  font-size: var(--fs-20);
+  font-size: var(--fs-14);
   font-weight: var(--fw-medium);
-  color: var(--text-tertiary);
-  margin: 0 2px;
+  color: var(--text-secondary);
+  margin: 0 8px 0 2px;
+}
+
+.hero-current {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  min-width: 0;
+  margin-top: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+}
+.hero-current.idle { border-color: var(--border-subtle); background: var(--bg-inset); }
+.hero-current-label { flex: 0 0 auto; color: var(--text-secondary); font-size: var(--fs-11); }
+.hero-current strong { flex: 0 0 auto; max-width: 28%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-13); }
+.hero-current-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: var(--fs-11); }
+.hero-current-time { margin-left: auto; color: var(--text-primary); font: var(--fs-13) var(--font-mono); font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .hero-current { flex-wrap: wrap; gap: 4px var(--sp-2); }
+  .hero-current-title { flex-basis: 100%; order: 3; }
 }
 
 .hero-sub {

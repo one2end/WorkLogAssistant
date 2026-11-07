@@ -25,6 +25,23 @@ test('manual annotation replaces overlapping recorded time without double counti
   assert.equal(report.stats.trackedMs, 60 * 60000);
   assert.equal(report.layers.manualMs, 30 * 60000);
   assert.equal(report.layers.autoMs, 30 * 60000);
+  assert.equal(report.recordedApps.length, 1);
+  assert.equal(report.recordedApps[0].processName, 'chrome');
+  assert.equal(report.recordedApps[0].durationMs, 60 * 60000);
+});
+
+test('recorded time includes life and sleep while effective work remains separate', t => {
+  const dir = fixture(t, [
+    { t: at('09:00'), dur: 30 * 60000, app: 'chrome', title: 'Research' },
+    { t: at('09:30'), dur: 30 * 60000, app: 'Lunch', source: 'manual', cat: '生活事务' },
+    { t: at('10:00'), dur: 30 * 60000, app: 'Nap', source: 'manual', cat: '睡眠' }
+  ]);
+  const report = analytics.buildDayReport(dir, '2026-11-08');
+  assert.equal(report.stats.recordedMs, 90 * 60000);
+  assert.equal(report.stats.trackedMs, 30 * 60000);
+  assert.deepEqual(report.recordedApps.map(a => a.processName), ['chrome']);
+  assert.equal(analytics.buildDailyTrackedMs(dir, '2026-11-08', '2026-11-08')[0].trackedMs,
+    90 * 60000);
 });
 
 test('range totals use the same day reports as its daily breakdown', t => {

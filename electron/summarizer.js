@@ -2,6 +2,8 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
+const { writeFileAtomic } = require('./atomicFile');
+const { estimateTokens, overlapClues } = require('./aiReview');
 
 // Provider presets: each defines default baseUrl, model, and request format
 const PROVIDER_PRESETS = {
@@ -125,10 +127,10 @@ class Summarizer {
     }
   }
 
-  async generateSummaryForRange(startTime, endTime) {
+  async generateSummaryForRange(startTime, endTime, options = {}) {
     try {
       const storage = this._createStorage();
-      const activities = storage.getActivitiesByTimeRange(startTime, endTime);
+      const activities = storage.getActivitiesByTimeRange(startTime, endTime).filter(a => a.kind !== 'idle');
       if (activities.length === 0) {
         console.log('该时间段没有活动记录');
         return null;
@@ -137,7 +139,7 @@ class Summarizer {
       const summary = await this.callAI(prompt);
       if (summary) {
         const date = new Date(startTime);
-        this.saveSummary(summary, activities, `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
+        this.saveSummary(summary, activities, `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`, options.kind);
         return summary;
       }
       return null;
@@ -200,6 +202,12 @@ class Summarizer {
       ).join('\n');
     }
 
+    const clues = overlapClues(activities);
+    if (clues.length) {
+      activityText += '\n\n需要核对的重叠线索（人工标注优先，窗口记录只是同时出现，不代表人工标注错误）：\n' +
+        clues.map(c => `- ${c.time} 人工写「${c.manual}」，后台窗口有 ${c.apps.join('、')}`).join('\n');
+    }
+
     if (customPrompt && customPrompt.trim() !== '') {
       return `${customPrompt}\n\n${activityText}`;
     }
@@ -211,9 +219,10 @@ ${activityText}
 请生成一份结构化回顾，要求：
 1. 用 "## 今天做了什么" 开头，一到两句话说明这段时间真正推进了什么。判断依据是窗口标题里的具体内容（文档名、页面标题、代码文件），不是应用名。
 2. 用 "## 时间去哪了" 按工作线归并（例如「商户收单材料」「代码与工具」「沟通对接」），每条给出耗时和占比，直接引用上面的真实时长。
-3. 用 "## 值得注意" 指出数据里真实的异常：同一应用连续超过 2 小时、长时间停在无明确目标的页面、反复在多个窗口间切换但没产出、以及明显被忽略的一条工作线。没有就写「无明显异常」，不要为了凑字数编。
-4. 用 "## 明天一件最重要的事" 只给一条、具体可执行，基于今天没做完或被打断的部分。
-5. 全部结论必须来自上面的记录，信息不足就直说，不要虚构人名、数字或结论。语言简洁，像写给自己的笔记。`;
+3. 用 "## 值得注意" 指出有证据的异常；若有人工解释与后台窗口重叠，核对两者是否可能属于同一件事，并列出需用户确认的差异。窗口同时出现不等于人工解释错误。没有足够证据就写「暂无可确认的异常」。
+4. 用 "## 分类建议" 给最多三条需要用户确认的时段，写清时间、建议的七组分类（工作/学习/生活/娱乐/睡眠/专注/其他）及标题证据；信息不足就写「暂无建议」，不要自行改动记录。
+5. 用 "## 下一步" 只给一条、具体可执行，基于当前时段没做完或被打断的部分；没有依据就省略。
+6. 全部结论必须来自上面的记录，信息不足就直说，不要虚构人名、数字或结论。语言简洁，像写给自己的笔记。`;
   }
 
   groupActivities(activities) {
@@ -275,6 +284,7 @@ ${activityText}
         }
       );
       if (response.data?.choices?.[0]?.message?.content) {
+        this._recordUsage(prompt, response.data.choices[0].message.content, response.data.usage);
         return response.data.choices[0].message.content;
       }
       return null;
@@ -304,6 +314,7 @@ ${activityText}
         }
       );
       if (response.data?.content?.[0]?.text) {
+        this._recordUsage(prompt, response.data.content[0].text, response.data.usage);
         return response.data.content[0].text;
       }
       return null;
@@ -338,6 +349,7 @@ ${activityText}
         }
       );
       if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        this._recordUsage(prompt, response.data.candidates[0].content.parts[0].text, response.data.usageMetadata);
         return response.data.candidates[0].content.parts[0].text;
       }
       return null;
@@ -347,11 +359,55 @@ ${activityText}
     }
   }
 
-  saveSummary(summary, activities, date) {
+  _usageFile() {
+    return path.join(this._createStorage().getDataDir(), 'ai', 'usage.json');
+  }
+
+  getUsageStats() {
+    try {
+      const rows = JSON.parse(fs.readFileSync(this._usageFile(), 'utf8'));
+      const recent = Array.isArray(rows) ? rows : [];
+      return { calls: recent.length,
+        inputTokens: recent.reduce((n, x) => n + x.inputTokens, 0),
+        outputTokens: recent.reduce((n, x) => n + x.outputTokens, 0),
+        estimatedCalls: recent.filter(x => x.estimated).length,
+        recent: recent.slice(-10).reverse() };
+    } catch (_) { return { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCalls: 0, recent: [] }; }
+  }
+
+  estimateNextReview(minutes = 60) {
+    const storage = this._createStorage();
+    const end = new Date();
+    const start = new Date(end.getTime() - minutes * 60000);
+    const records = storage.getActivitiesByTimeRange(start.toISOString(), end.toISOString()).filter(a => a.kind !== 'idle');
+    return { inputTokens: records.length ? estimateTokens(this._systemPrompt() + this.buildPrompt(records)) : 0,
+      outputLimit: this.config.summary.maxTokens || 500, records: records.length };
+  }
+
+  _recordUsage(prompt, output, usage) {
+    try {
+      const file = this._usageFile();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      let rows = [];
+      try { rows = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { /* first call */ }
+      if (!Array.isArray(rows)) rows = [];
+      const input = Number(usage?.prompt_tokens ?? usage?.input_tokens ?? usage?.promptTokenCount);
+      const result = Number(usage?.completion_tokens ?? usage?.output_tokens ?? usage?.candidatesTokenCount);
+      rows.push({ at: new Date().toISOString(), provider: this.config.api?.provider,
+        model: this.config.api?.modelName,
+        inputTokens: Number.isFinite(input) && input > 0 ? input : estimateTokens(this._systemPrompt() + prompt),
+        outputTokens: Number.isFinite(result) && result > 0 ? result : estimateTokens(output),
+        estimated: !(input > 0 && result > 0) });
+      writeFileAtomic(file, JSON.stringify(rows.slice(-500), null, 2));
+    } catch (error) { console.error('保存 AI 用量失败:', error); }
+  }
+
+  saveSummary(summary, activities, date, kind) {
     const storage = this._createStorage();
     const summaryData = {
       id: Date.now(),
       ...(date ? { date } : {}),
+      kind: kind || 'manual',
       timestamp: new Date().toISOString(),
       startTime: activities.length > 0 ? activities[0].timestamp : new Date().toISOString(),
       endTime: activities.length > 0 ? activities[activities.length - 1].timestamp : new Date().toISOString(),
@@ -363,7 +419,7 @@ ${activityText}
         timestamp: a.timestamp
       }))
     };
-    storage.saveSummary(summaryData);
+    if (!storage.saveSummary(summaryData)) throw new Error('模型回顾生成成功，但保存到本地失败');
   }
 
   updateConfig(newConfig) {

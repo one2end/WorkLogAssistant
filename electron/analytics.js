@@ -800,6 +800,10 @@ function buildDayReport(dataDir, dateStr, options) {
   // 消解之后 atoms 才代表「这一段时间到底算谁的」，后面的会话与统计都基于它
   const resolvedAtoms = resolveByPriority([...workAtoms, ...focusAtoms]);
   const allSessions = foldSessions(resolvedAtoms, opts);
+  // 应用排行只反映录制器看到的软件；人工补记、导入与专注是解释层。
+  const recordedSessions = foldSessions(resolveByPriority(workAtoms.filter(a => a.source === 'auto')), opts)
+    .filter(s => !classify.isExcluded(s.category));
+  const recordedApps = aggregate(recordedSessions).apps;
 
   // 旧数据里锁屏会被记成普通活动，这里也归入「空档」
   const sessions = [];
@@ -854,6 +858,7 @@ function buildDayReport(dataDir, dateStr, options) {
       sessionCount: sessions.length,
       uniqueApps: apps.length,
       trackedMs: totalMs,
+      recordedMs: agg.totalMs,
       lifeMs,
       sleepMs,
       idleMs,
@@ -867,6 +872,7 @@ function buildDayReport(dataDir, dateStr, options) {
     categories,
     categoriesGrouped,
     apps,
+    recordedApps,
     // 展示层：15 分钟一格的主要事件，UI 与 AI 回顾都读这一层
     slots,
     dayBalance: buildDayBalance(slots),
@@ -980,9 +986,9 @@ function buildRangeReport(dataDir, from, to, options) {
 }
 
 // ---------------------------------------------------------------------------
-// 轻量：逐日「有效时长」(供前端热力图使用)
+// 轻量：逐日「全部已记录时长」(供前端热力图使用)
 //
-// 口径必须与 buildDayReport().stats.trackedMs 完全一致：该值经过
+// 口径必须与 buildDayReport().stats.recordedMs 完全一致：该值经过
 // normalizeRaw（丢弃忽略应用/非法时间戳）、idle 段分离、inferDurations
 // （gap 封顶与末条兜底）、foldSessions、锁屏排除与 aggregate。
 // 不要为了「更快」改成累加 jsonl 的 dur 字段——那会把 idle / 忽略应用 /
@@ -1007,7 +1013,7 @@ function buildDailyTrackedMs(dataDir, from, to, options) {
     } else {
       try {
         const report = buildDayReport(dataDir, dateStr, opts);
-        out.push({ date: dateStr, trackedMs: report.stats.trackedMs });
+        out.push({ date: dateStr, trackedMs: report.stats.recordedMs });
       } catch (e) {
         out.push({ date: dateStr, trackedMs: 0 });
       }

@@ -28,7 +28,8 @@
           AI 回顾
           <span class="ai-chip">{{ providerLabel }}</span>
         </span>
-        <button
+        <span v-if="autoReview" class="ai-meta">{{ scheduledReview ? '定时段自动回顾' : `自动回顾 · 每 ${reviewInterval} 分钟` }}</span>
+        <button v-else
           class="btn btn-ghost btn-sm"
           :disabled="generating || !hasData"
           :title="hasData ? '把这一天整理成结构化回顾' : '这一天还没有可总结的记录'"
@@ -47,6 +48,7 @@
           <span class="ai-meta">
             <Icon name="clock" :size="10" />
             {{ timeRange(latest) }}
+            <template v-if="latest.kind === 'auto'"> · 自动评估</template>
             <template v-if="latest.activityCount"> · {{ latest.activityCount }} 个片段</template>
           </span>
           <button v-if="clamped" class="ai-more" @click="expanded = !expanded">
@@ -70,7 +72,7 @@
 
       <p v-else class="ai-empty">
         {{ hasData
-          ? '这一天还没有回顾。点右上角生成，AI 会把它整理成「做了什么、卡在哪、接下来做什么」。'
+          ? (autoReview ? '自动回顾已开启；完成一个记录周期后会在这里显示。' : '这一天还没有回顾，可按需生成。')
           : '这一天没有记录，暂时没有可回顾的内容。' }}
       </p>
     </section>
@@ -115,7 +117,10 @@ export default {
     generating: { type: Boolean, default: false },
     selectedDate: { type: String, default: '' },
     hasData: { type: Boolean, default: false },
-    provider: { type: String, default: '' }
+    provider: { type: String, default: '' },
+    autoReview: { type: Boolean, default: false },
+    reviewInterval: { type: Number, default: 60 },
+    scheduledReview: { type: Boolean, default: false }
   },
   emits: ['generate', 'open-settings'],
   data() {

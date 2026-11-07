@@ -261,7 +261,7 @@ class ActivityRecorder {
     this._buffer = [];
 
     try {
-      this.storage.appendActivityRecords(batch);
+      if (!this.storage.appendActivityRecords(batch)) throw new Error('数据文件写入失败');
       return batch.length;
     } catch (error) {
       this.onLog('写入活动记录失败: ' + error.message, 'error');

@@ -82,6 +82,9 @@
           :ai-enabled="aiEnabled"
           :ai-ready="aiReady"
           :ai-provider="config.api && config.api.provider"
+          :auto-review="config.summary?.autoGenerate === true"
+          :review-interval="config.summary?.intervalMinutes || 60"
+          :scheduled-review="(config.summary?.schedules || []).length > 0"
           :generating-summary="isGeneratingSummary"
           @generate-summary="generateSummary"
           @accept-suggestion="acceptSuggestion"
@@ -124,6 +127,7 @@
           :accent-options="accentOptions"
           :active-section="settingsSection"
           :provider-presets="providerPresets"
+          :ai-usage="aiUsage"
           :dida-status="didaStatus"
           :bridge="bridge"
           :bridge-loading="bridgeLoading"
@@ -215,12 +219,13 @@ function emptyReport(date) {
     kind: 'day',
     date,
     stats: {
-      recordCount: 0, sessionCount: 0, uniqueApps: 0, trackedMs: 0,
+      recordCount: 0, sessionCount: 0, uniqueApps: 0, trackedMs: 0, recordedMs: 0,
       idleMs: 0, idleSessionCount: 0, spanMs: 0, coverage: 0,
       firstAt: null, lastAt: null, bigGapCount: 0
     },
     categories: [],
     apps: [],
+    recordedApps: [],
     sessions: [],
     focus: { arhatSessions: [], notes: [] },
     dataNotes: []
@@ -241,6 +246,7 @@ export default {
       activities: [],
       summaries: [],
       annotationSuggestions: [],
+      aiUsage: { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCalls: 0, next: { inputTokens: 0, outputLimit: 500, records: 0 } },
       datesWithData: new Set(),
       heatDaily: [],
       heatFrom: '',
@@ -253,7 +259,7 @@ export default {
       config: {
         monitoring: { interval: 60, idleThresholdSec: 180, minSegmentSec: 3 },
         api: { provider: 'deepseek', apiKey: '', baseUrl: '', modelName: '' },
-        summary: { lookbackMinutes: 60, maxTokens: 500, compressActivities: true, prompt: '', schedules: [] },
+        summary: { autoGenerate: false, intervalMinutes: 60, lookbackMinutes: 60, maxTokens: 500, compressActivities: true, prompt: '', schedules: [] },
         focus: {
           pomodoro: { workMin: 25, breakMin: 5, rounds: 4 },
           immersive: { workMin: 15, breakMin: 15, rounds: 0 }
@@ -421,6 +427,7 @@ export default {
         this.loadReport().then(() => this.loadAnnotationSuggestions()),
         this.loadActivities(),
         this.loadSummaries(),
+        this.loadAiUsage(),
         this.loadDatesWithData(),
         this.loadDailyTracked(forceHeat)
       ]);
@@ -452,6 +459,10 @@ export default {
       } catch (error) {
         this.summaries = [];
       }
+    },
+
+    async loadAiUsage() {
+      try { this.aiUsage = await ipcRenderer.invoke('get-ai-usage'); } catch (_) { /* keep last value */ }
     },
 
     async loadAnnotationSuggestions() {
@@ -1134,6 +1145,7 @@ export default {
         },
         'summary-generated': () => {
           this.loadSummaries();
+          this.loadAiUsage();
           this.loadReport();
         },
         'monitoring-status-changed': (event, status) => {

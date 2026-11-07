@@ -53,7 +53,7 @@
       </div>
 
       <div class="hm-foot">
-        <span class="hm-hint">每格一天 · 仅计有效工作</span>
+        <span class="hm-hint">每格一天 · 包含生活与睡眠记录</span>
         <span class="hm-legend">
           <span>0</span>
           <i v-for="l in [0, 1, 2, 3, 4]" :key="l" class="hm-cell" :data-level="l" :title="['无记录', '少于 1.5 小时', '1.5–3.5 小时', '3.5–6 小时', '至少 6 小时'][l]"></i>

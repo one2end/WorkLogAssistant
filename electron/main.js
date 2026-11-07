@@ -25,6 +25,8 @@ const { ApiServer, generateToken } = require('./apiServer');
 const analytics = require('./analytics');
 const { categorySuggestions } = require('./annotationAdvisor');
 const { DidaSync } = require('./didaSync');
+const { writeFileAtomic } = require('./atomicFile');
+const { reviewWindow } = require('./aiReview');
 
 /**
  * 图标资源路径。打包后放在 resources 目录（见 package.json extraResources），
@@ -63,6 +65,7 @@ let monitorInterval = null;
 let summaryInterval = null;
 let scheduleCheckerInterval = null;
 let triggeredSchedules = new Set();
+let autoReviewBusy = false;
 let lastSummaryTime = null;
 let currentAppName = '';
 let currentAppStartTime = null;
@@ -562,13 +565,51 @@ function updateTrayMenu() {
   tray.setContextMenu(contextMenu);
 }
 
+async function runAutomaticReview(intervalMinutes) {
+  if (autoReviewBusy || !isMonitoring) return;
+  autoReviewBusy = true;
+  try {
+    activityRecorder.flush();
+    if (activityRecorder.getStatus().pendingRecords > 0) return;
+    const stateFile = path.join(storageManager.getDataDir(), 'ai', 'review-state.json');
+    let previous = null;
+    try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (_) { /* first run */ }
+    // 当前前台片段尚未落盘；只处理它开始之前的稳定区间，避免把未保存的活动当作空白跳过。
+    const liveSince = activityRecorder.getStatus().current?.since;
+    const boundary = liveSince ? new Date(Math.min(Date.now(), new Date(liveSince).getTime())) : new Date();
+    if (!Number.isFinite(boundary.getTime())) return;
+    const { start, end } = reviewWindow(previous?.lastEnd, boundary, intervalMinutes);
+    if (end <= start) return;
+    let cursor = start;
+    while (cursor < end) {
+      const midnight = new Date(cursor);
+      midnight.setHours(24, 0, 0, 0);
+      const next = midnight <= end ? midnight : end;
+      const queryEnd = midnight <= end ? new Date(next.getTime() - 1) : next;
+      const records = storageManager.getActivitiesByTimeRange(cursor.toISOString(), queryEnd.toISOString())
+        .filter(a => a.kind !== 'idle');
+      const result = records.length
+        ? await summarizer.generateSummaryForRange(cursor.toISOString(), queryEnd.toISOString(), { kind: 'auto' })
+        : null;
+      // 没有活动也是已处理区间；有活动却没有模型结果时留待下次重试。
+      if (records.length && !result) break;
+      fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+      writeFileAtomic(stateFile, JSON.stringify({ lastEnd: next.toISOString() }));
+      if (result && mainWindow) mainWindow.webContents.send('summary-generated');
+      cursor = next;
+    }
+  } catch (error) {
+    logManager.addLog('自动回顾失败: ' + error.message, 'error');
+  } finally { autoReviewBusy = false; }
+}
+
 function startMonitoring() {
   const config = configManager.getConfig();
 
   logManager.addLog('开始记录', 'info');
   activityRecorder.start();
 
-  // 模型调用默认仅由用户手动触发；自动回顾必须单独开启。
+  // 自动回顾须由用户开启，并且模型配置就绪。
   // 运行时开启插件会由 save-config 重启监控，这里会重新走到这一步。
   if (!config.ai?.enabled || !config.api?.apiKey || !config.summary?.autoGenerate) {
     logManager.addLog('自动回顾未启用或模型未就绪，跳过后台调用', 'info');
@@ -602,7 +643,11 @@ function startMonitoring() {
           if (lookbackMinutes > 0) {
             try {
               logManager.addLog(`正在生成 ${schedule.startTime}-${schedule.endTime} 时段摘要...`, 'info');
-              await summarizer.generateSummaryForLookback(lookbackMinutes);
+              const start = new Date(now);
+              start.setHours(sh, sm, 0, 0);
+              const end = new Date(now);
+              end.setHours(eh, em, 0, 0);
+              await summarizer.generateSummaryForRange(start.toISOString(), end.toISOString(), { kind: 'auto' });
               logManager.addLog(`${schedule.startTime}-${schedule.endTime} 时段摘要生成成功`, 'info');
               if (mainWindow) {
                 mainWindow.webContents.send('summary-generated');
@@ -621,19 +666,7 @@ function startMonitoring() {
       const summaryIntervalTime = summaryIntervalMinutes * 60 * 1000;
       logManager.addLog('摘要间隔: ' + summaryIntervalMinutes + '分钟', 'info');
 
-      summaryInterval = setInterval(async () => {
-        try {
-          logManager.addLog('正在自动生成摘要...', 'info');
-          await summarizer.generateSummary();
-          logManager.addLog('自动摘要生成完成', 'info');
-          if (mainWindow) {
-            mainWindow.webContents.send('summary-generated');
-          }
-        } catch (error) {
-          console.error('自动摘要生成失败:', error);
-          logManager.addLog('自动摘要生成失败: ' + error.message, 'error');
-        }
-      }, summaryIntervalTime);
+      summaryInterval = setInterval(() => runAutomaticReview(summaryIntervalMinutes), summaryIntervalTime);
     }
   }
 }
@@ -910,7 +943,7 @@ ipcMain.handle('get-range-analytics', (event, payload) => {
   }
 });
 
-// 热力图专用：只返回逐日有效时长，口径与单日 report.stats.trackedMs 一致
+// 热力图专用：逐日全部已记录时长，包含生活与睡眠。
 ipcMain.handle('get-daily-tracked', (event, payload) => {
   try {
     const p = payload || {};
@@ -1000,6 +1033,11 @@ ipcMain.handle('flush-recorder', () => {
 ipcMain.handle('get-summaries', (event, date) => {
   return storageManager.getSummaries(date);
 });
+
+ipcMain.handle('get-ai-usage', () => ({
+  ...summarizer.getUsageStats(),
+  next: summarizer.estimateNextReview(configManager.getConfig().summary?.intervalMinutes || 60)
+}));
 
 ipcMain.handle('generate-summary', async () => {
   return await summarizer.generateSummary();

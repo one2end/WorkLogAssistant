@@ -73,14 +73,19 @@
         </button>
       </div>
       <div v-if="aiOn && !folded.ai" class="sec-body">
-        <p class="sec-desc">当前可用：按需生成模型回顾。模型请求会包含相关时段的应用名和窗口标题。首页「记录提示」来自本地规则，与此开关无关。</p>
+        <p class="sec-desc">开启自动回顾后，后台按时间段增量评估记录。模型会看到相关应用名、窗口标题，以及人工解释与窗口重叠的线索；结果显示在首页 AI 回顾中。</p>
         <div class="row">
-          <span class="row-label">自动生成回顾<span class="row-desc">默认关闭；开启后才会按设定间隔在后台向模型发送记录</span></span>
+          <span class="row-label">自动评估与回顾<span class="row-desc">开启后才会定期发送记录；空时段不会调用模型</span></span>
           <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.summary?.autoGenerate === true" @change="set('summary.autoGenerate', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
         </div>
         <div v-if="config.summary?.autoGenerate === true" class="row">
-          <span class="row-label">自动回顾间隔<span class="row-desc">建议先手动检查回顾内容，再决定是否启用后台生成</span></span>
-          <div class="row-control sm"><input type="number" min="15" max="1440" step="15" :value="config.summary?.intervalMinutes || 30" @change="num('summary.intervalMinutes', $event.target.value, 15, 1440)"><span class="unit">分钟</span></div>
+          <span class="row-label">评估间隔<span class="row-desc">每段仅处理新增记录；建议 60–240 分钟</span></span>
+          <div class="row-control sm"><input type="number" min="30" max="300" step="30" :value="config.summary?.intervalMinutes || 60" @change="num('summary.intervalMinutes', $event.target.value, 30, 300)"><span class="unit">分钟</span></div>
+        </div>
+        <div class="row-block">
+          <span class="row-label">Token 用量<span class="row-desc">以最近一个间隔的记录估算单次输入；实际用量优先取服务商返回值</span></span>
+          <p class="hint">{{ aiUsage.next?.records ? `参考单次约 ${aiUsage.next.inputTokens} 输入 Token + 最多 ${aiUsage.next.outputLimit} 输出 Token（${aiUsage.next.records} 条记录）` : '最近一个评估间隔没有已保存记录，暂不预计模型调用' }}。</p>
+          <p class="hint">本机最近 {{ aiUsage.calls || 0 }} 次：输入 {{ aiUsage.inputTokens || 0 }}、输出 {{ aiUsage.outputTokens || 0 }} Token<span v-if="aiUsage.estimatedCalls">；其中 {{ aiUsage.estimatedCalls }} 次由字符数估算</span>。不同模型分词不同，估算仅供控制调用量。</p>
         </div>
         <div class="row">
           <span class="row-label">服务商</span>
@@ -515,6 +520,7 @@ export default {
     accentOptions: { type: Array, default: () => ACCENTS },
     activeSection: { type: String, default: 'pomodoro' },
     providerPresets: { type: Object, default: () => ({}) },
+    aiUsage: { type: Object, default: () => ({}) },
     didaStatus: { type: Object, default: () => ({}) },
     bridge: { type: Object, default: null },
     bridgeLoading: { type: Boolean, default: false },

@@ -109,7 +109,7 @@ class ConfigManager {
       },
       summary: {
         autoGenerate: false,
-        intervalMinutes: 30,
+        intervalMinutes: 60,
         lookbackMinutes: 60,
         maxTokens: 500,
         compressActivities: true,

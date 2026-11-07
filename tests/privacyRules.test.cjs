@@ -30,3 +30,10 @@ test('recorder does not open a segment for an excluded window', async () => {
   assert.equal(recorder._cur, null);
   assert.equal(recorder._buffer.length, 0);
 });
+
+test('recorder keeps pending segments when storage reports a failed write', () => {
+  const recorder = new ActivityRecorder({ storage: { appendActivityRecords: () => false } });
+  recorder._buffer = [{ t: '2026-11-08T09:00:00.000Z', dur: 60000, app: 'editor' }];
+  assert.equal(recorder.flush(), 0);
+  assert.equal(recorder._buffer.length, 1);
+});
