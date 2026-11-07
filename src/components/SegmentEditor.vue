@@ -51,7 +51,7 @@
         </div>
 
         <div class="seg-foot">
-          <button v-if="deletable" class="seg-del" @click="$emit('delete')">删除</button>
+          <button v-if="deletable" class="seg-del" @click="$emit('delete')">删除这一段</button>
           <span class="seg-hint">保存后覆盖展示</span>
           <button class="seg-btn" @click="$emit('close')">取消</button>
           <button class="seg-btn primary" :disabled="saving" @click="submit">
@@ -333,16 +333,19 @@ export default {
 }
 
 .seg-del {
-  padding: 4px 8px;
+  padding: 5px 10px;
   border-radius: 6px;
-  background: none;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+  background: var(--danger-soft);
   font-size: var(--fs-11);
-  color: var(--text-tertiary);
+  font-weight: var(--fw-medium);
+  color: var(--danger);
 }
 
 .seg-del:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
+  color: var(--text-inverse);
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 .seg-btn {

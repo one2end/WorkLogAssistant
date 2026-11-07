@@ -8,10 +8,16 @@
         @shift="$emit('shift-date', $event)"
         @today="$emit('go-today')"
       />
-      <button class="focus-launch" @click="$emit('start-focus')">
-        <Icon name="zen" :size="14" />
-        <span>开始专注</span>
-      </button>
+      <div class="head-actions">
+        <button class="custom-launch" title="自定义首页卡片" @click="$emit('open-plugin-settings', 'dashboard')">
+          <Icon name="settings" :size="13" />
+          <span>自定义首页</span>
+        </button>
+        <button v-if="pomodoroOn" class="focus-launch" @click="$emit('start-focus')">
+          <Icon name="zen" :size="14" />
+          <span>开始专注</span>
+        </button>
+      </div>
     </div>
 
     <!-- 首屏：核心数字 + 一天的时间带 -->
@@ -99,10 +105,27 @@
     />
     </div>
 
-    <!-- 近 12 周活跃度 -->
-    <section class="card heat-card">
+    <!-- AI 分析与提示：开启 AI 后出现。
+         目前是本地确定性线索，不是模型输出；候选标注接入后会替换成可确认的建议。 -->
+    <section v-if="cards.aiInsights && aiEnabled" class="card insight-card">
       <div class="card-head">
-        <span class="card-title">活跃度 · 12 周</span>
+        <span class="card-title">AI 分析与提示</span>
+        <span class="insight-tag">待确认线索</span>
+      </div>
+      <div class="insight-list">
+        <div v-for="(it, i) in insights" :key="i" class="insight-item">
+          <span class="insight-dot" :style="{ background: it.color }" />
+          <span class="insight-text">{{ it.text }}</span>
+          <span class="insight-meta">{{ it.meta }}</span>
+        </div>
+      </div>
+      <p class="insight-note">这些线索直接从记录层算出；候选标注、差异提醒与自动分类接入后，这里会变成可一键确认的 AI 建议。</p>
+    </section>
+
+    <!-- 活跃度：跨度由设置页的热力图周数决定 -->
+    <section v-if="cards.heatmap" class="card heat-card">
+      <div class="card-head">
+        <span class="card-title">活跃度 · {{ heatWeeks }} 周</span>
         <span class="head-note">{{ selectedDate }} · {{ heatSummary }}</span>
       </div>
       <ActivityHeatmap
@@ -111,6 +134,7 @@
         :range-from="heatFrom"
         :range-to="heatTo"
         :can-go-forward="heatCanGoForward"
+        :weeks="heatWeeks"
         @select-date="$emit('select-date', $event)"
         @shift-range="$emit('shift-range', $event)"
         @pick-month="$emit('pick-month', $event)"
@@ -119,7 +143,7 @@
     </section>
 
     <!-- 当前会话 -->
-    <section v-if="current" class="session card" :class="{ idle: current.idle }">
+    <section v-if="current && cards.session" class="session card" :class="{ idle: current.idle }">
       <div class="session-icon">
         <Icon :name="current.idle ? 'moon' : 'activity'" :size="15" />
       </div>
@@ -136,7 +160,7 @@
     </section>
 
     <!-- 分类分布 -->
-    <section class="card">
+    <section v-if="cards.composition" class="card">
       <div class="card-head">
         <span class="card-title">时间构成</span>
         <span class="head-note">{{ catList.length }} 类</span>
@@ -174,7 +198,7 @@
     </section>
 
     <!-- 应用排行 -->
-    <section class="card">
+    <section v-if="cards.apps" class="card">
       <div class="card-head">
         <span class="card-title">应用排行</span>
         <span class="head-note">自动采集 · Top {{ rankedApps.length }}</span>
@@ -213,7 +237,7 @@
     </section>
 
     <!-- 数据质量提示 -->
-    <section v-if="report.dataNotes && report.dataNotes.length" class="card note-card">
+    <section v-if="cards.dataNotes && report.dataNotes && report.dataNotes.length" class="card note-card">
       <div class="note-head">
         <Icon name="alert" :size="14" />
         <span>数据说明</span>
@@ -224,7 +248,7 @@
     </section>
 
     <!-- 专注与随手记 -->
-    <section v-if="hasFocus" class="card">
+    <section v-if="hasFocus && cards.focusNotes" class="card">
       <div class="card-head">
         <span class="card-title">专注与随手记</span>
         <span class="head-note">{{ focus.sessions.length }} 次专注 · {{ focus.notes.length }} 条记录</span>
@@ -245,6 +269,15 @@
         </li>
       </ul>
     </section>
+
+    <!-- 插件坞固定在首页最底部：不抢主视觉，作为整机的「能力底座」 -->
+    <PluginDock
+      :config="config"
+      :dida-status="didaStatus"
+      :insight-count="insights.length"
+      @toggle="$emit('toggle-plugin', $event)"
+      @settings="$emit('open-plugin-settings', $event)"
+    />
   </div>
 </template>
 
@@ -254,12 +287,15 @@ import DateNav from '../components/DateNav.vue';
 import ActivityHeatmap from '../components/ActivityHeatmap.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
 import AiPanel from '../components/AiPanel.vue';
+import PluginDock from '../components/PluginDock.vue';
 import { colorForCategory } from '../styles/palette.js';
+import { readPath } from '../plugins/registry.js';
 
 export default {
   name: 'TodayView',
-  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel },
+  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock },
   props: {
+    config: { type: Object, default: () => ({}) },
     report: { type: Object, required: true },
     recorder: { type: Object, default: null },
     isToday: { type: Boolean, default: true },
@@ -270,6 +306,8 @@ export default {
     heatFrom: { type: String, default: '' },
     heatTo: { type: String, default: '' },
     heatCanGoForward: { type: Boolean, default: false },
+    heatWeeks: { type: Number, default: 12 },
+    didaStatus: { type: Object, default: () => ({}) },
     // AI 是能力层：关闭时这里只显示一条提示，开启后才变成一张卡片
     summaries: { type: Array, default: () => [] },
     aiEnabled: { type: Boolean, default: false },
@@ -279,11 +317,55 @@ export default {
   },
   emits: ['jump-to-time', 'select-date', 'shift-date', 'go-today',
     'shift-range', 'pick-month', 'heat-today', 'start-focus',
-    'generate-summary', 'open-ai-settings'],
+    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings'],
   data() {
     return { tick: 0, timer: null };
   },
   computed: {
+    /** 首页卡片显隐：配置缺字段时默认全开，旧配置不用迁移 */
+    cards() {
+      const all = {};
+      ['heatmap', 'session', 'composition', 'apps', 'dataNotes', 'focusNotes', 'aiInsights']
+        .forEach(k => { all[k] = true; });
+      return { ...all, ...((this.config && this.config.dashboard && this.config.dashboard.cards) || {}) };
+    },
+    pomodoroOn() {
+      const v = readPath(this.config || {}, 'focus.enabled');
+      return v === undefined ? true : !!v;
+    },
+    /**
+     * 首页 AI 提示：目前是从记录层直接算出的确定性线索，不是模型输出。
+     * 等候选标注 / 差异提醒接入后，这里换成可一键确认的 AI 建议。
+     */
+    insights() {
+      const r = this.report || {};
+      const st = r.stats || {};
+      const sessions = r.sessions || [];
+      const out = [];
+      const short = sessions.filter(s => {
+        const d = Number(s.durationMs) || 0;
+        return d > 0 && d < 15 * 60000;
+      }).length;
+      if (short >= 3) {
+        out.push({ text: `有 ${short} 段短于 15 分钟的记录，可能是在同一件事里来回切换`, meta: '合并候选', color: '#3b7ddd' });
+      }
+      const idleMin = Math.round((Number(st.idleMs) || 0) / 60000);
+      if (idleMin >= 60) {
+        out.push({ text: `${(idleMin / 60).toFixed(1)} 小时空档没有说明，可以补记成睡觉或外出`, meta: '补记候选', color: '#d99a2b' });
+      }
+      const cov = Number(st.coverage) || 0;
+      if (cov > 0 && cov < 0.6 && (Number(st.trackedMs) || 0) > 0) {
+        out.push({ text: `展示层覆盖 ${Math.round(cov * 100)}%，其余时段仍是记录层汇总`, meta: '待归类', color: '#8374c9' });
+      }
+      const didaToday = Number(this.didaStatus && this.didaStatus.todayFocusCount) || 0;
+      if (didaToday > 0) {
+        out.push({ text: `滴答同步来 ${didaToday} 条专注，已作为第二层级参与消解`, meta: '已同步', color: '#2f9c73' });
+      }
+      if (!out.length) {
+        out.push({ text: '今天的记录比较完整，暂无明显待确认线索', meta: '已就绪', color: '#2f9c73' });
+      }
+      return out.slice(0, 4);
+    },
     /** 时间构成用 7 个展示分组；后端没给分组时退回细分分类 */
     catList() {
       const r = this.report || {};
@@ -440,8 +522,8 @@ export default {
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   align-items: start;
-  gap: var(--sp-4);
-  padding: var(--sp-5);
+  gap: var(--sp-5);
+  padding: var(--sp-6);
   width: 100%;
   /* 不再锁死 max-width：窗口拉宽时内容跟着重排，而不是两侧留白 */
 }
@@ -462,6 +544,30 @@ export default {
   justify-content: space-between;
   gap: var(--sp-3);
   flex-wrap: wrap;
+}
+
+.head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.custom-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.custom-launch:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .focus-launch {
@@ -511,16 +617,13 @@ export default {
   }
 }
 
-/* Hero：首屏主视觉 */
+/* Hero：首屏主视觉。纯表面 + 一层柔影，靠数字本身建立层级；
+   之前叠了径向光、线性渐变和彩色描边，反而像一条系统提示横幅。 */
 .hero {
   padding: var(--sp-6);
-  background:
-    radial-gradient(520px 220px at 6% 0%,
-      color-mix(in srgb, var(--accent) 15%, transparent), transparent 72%),
-    linear-gradient(160deg,
-      color-mix(in srgb, var(--bg-surface) 88%, #ffffff 12%),
-      var(--bg-surface) 76%);
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-default));
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-md);
 }
 
 .hero-top {
@@ -560,7 +663,7 @@ export default {
   display: flex;
   align-items: baseline;
   gap: 1px;
-  margin-top: 10px;
+  margin-top: 14px;
   font-size: var(--fs-56);
   font-weight: var(--fw-semibold);
   letter-spacing: -0.04em;
@@ -612,7 +715,7 @@ export default {
   top: 2px;
   bottom: 2px;
   width: 1px;
-  background: var(--border-default);
+  background: var(--border-subtle);
 }
 
 .mini-value {
@@ -625,6 +728,25 @@ export default {
 .mini-label {
   font-size: var(--fs-11);
   color: var(--text-tertiary);
+}
+
+/* 窄窗口（贴边竖条）时把迷你统计挪到数字下方。
+   字号上调后左右两块会互相挤压，「31 应用」「覆盖率 58%」被挤成断行，
+   与其缩字号，不如让它们各占一行。必须放在基础规则之后才能覆盖 align-items。 */
+@media (max-width: 860px) {
+  .hero-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-4);
+  }
+  .hero-side {
+    align-items: flex-start;
+    gap: var(--sp-4);
+    padding-bottom: 0;
+  }
+  .mini-stat { align-items: flex-start; white-space: nowrap; }
+  .mini-stat + .mini-stat { padding-left: var(--sp-4); }
+  .hero-sub { white-space: nowrap; }
 }
 
 .hero-illustration {
@@ -1040,4 +1162,26 @@ export default {
 .note-text {
   color: var(--text-secondary);
 }
+
+/* ---------- AI 分析与提示 ---------- */
+.insight-tag {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.insight-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.insight-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.insight-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.insight-text { flex: 1; min-width: 0; font-size: var(--fs-13); color: var(--text-primary); }
+.insight-meta { flex: none; font-size: var(--fs-11); color: var(--text-tertiary); }
+.insight-note { margin-top: var(--sp-3); font-size: var(--fs-11); color: var(--text-tertiary); line-height: 1.6; }
 </style>

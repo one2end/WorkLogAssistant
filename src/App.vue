@@ -59,11 +59,12 @@
     />
 
     <div class="shell">
-      <NavRail v-model="view" />
+      <NavRail :model-value="view" @update:model-value="onViewChange" />
 
-      <main class="content">
+      <main ref="content" class="content">
         <TodayView
           v-if="view === 'today'"
+          :config="config"
           :report="report"
           :recorder="recorder"
           :is-today="isToday"
@@ -74,6 +75,8 @@
           :heat-from="heatFrom"
           :heat-to="heatTo"
           :heat-can-go-forward="heatCanGoForward"
+          :heat-weeks="heatWeeks"
+          :dida-status="didaStatus"
           :summaries="summaries"
           :ai-enabled="aiEnabled"
           :ai-ready="aiReady"
@@ -89,6 +92,8 @@
           @pick-month="pickHeatMonth"
           @heat-today="heatGoToday"
           @start-focus="showArhatStart"
+          @toggle-plugin="togglePlugin"
+          @open-plugin-settings="openPluginSettings"
         />
 
         <TimelineView
@@ -116,6 +121,7 @@
           :accent-options="accentOptions"
           :active-section="settingsSection"
           :provider-presets="providerPresets"
+          :dida-status="didaStatus"
           :bridge="bridge"
           :bridge-loading="bridgeLoading"
           :bridge-testing="bridgeTesting"
@@ -153,6 +159,7 @@
           @open-download="openDownloadLink"
           @clear-logs="clearLogs"
           @open-logs="openLogsFolder"
+          @dida-sync="syncDida"
         />
       </main>
     </div>
@@ -174,6 +181,7 @@ import TodayView from './views/TodayView.vue';
 import TimelineView from './views/TimelineView.vue';
 import SettingsView from './views/SettingsView.vue';
 import { ACCENTS } from './styles/accents.js';
+import { pluginById, pluginOn, writePath } from './plugins/registry.js';
 
 function pad(n) {
   return String(n).padStart(2, '0');
@@ -254,7 +262,8 @@ export default {
       accent: 'blue',
       // 外观 = 明暗模式 × 强调色。不再有「整套染成草绿色」这类主题。
       accentOptions: ACCENTS,
-      settingsSection: 'record',
+      settingsSection: 'pomodoro',
+      didaStatus: {},
       autoLaunch: false,
       storagePath: '',
 
@@ -289,6 +298,7 @@ export default {
     await this.reloadDate();
     await this.loadLogs();
     await this.loadBridgeStatus();
+    await this.loadDidaStatus();
     this.appVersion = await ipcRenderer.invoke('get-app-version');
     this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
     this.isMonitoring = await ipcRenderer.invoke('get-monitoring-status');
@@ -321,6 +331,11 @@ export default {
     aiReady() {
       return this.aiEnabled && !!(this.config.api && this.config.api.apiKey);
     },
+    /** 热力图周数来自设置页，改了就要真正改变天数跨度 */
+    heatWeeks() {
+      const n = parseInt(this.config?.dashboard?.heatmapWeeks, 10);
+      return Number.isFinite(n) ? Math.max(4, Math.min(52, n)) : 12;
+    },
     heatCanGoForward() {
       return this.heatOffset < 0;
     },
@@ -331,7 +346,70 @@ export default {
         .filter(Boolean);
     }
   },
+  watch: {
+    // 设置页改热力图周数后，首页必须真的按新跨度重拉
+    'config.dashboard.heatmapWeeks'() {
+      this.loadDailyTracked(true);
+    }
+  },
   methods: {
+    /** 首页插件坞：整块点击切换开关。
+     *  MCP 插件还要同步主进程的接口启停，否则配置改了服务没停。 */
+    async togglePlugin(id) {
+      const plugin = pluginById(id);
+      if (!plugin) return;
+      const next = !pluginOn(this.config, plugin);
+      writePath(this.config, plugin.path, next);
+      if (id === 'mcp') {
+        try {
+          await ipcRenderer.invoke('set-bridge-config', { enabled: next });
+          await this.loadBridgeStatus();
+        } catch (e) { /* 配置已落盘，状态刷新失败不阻塞切换 */ }
+      }
+      await this.saveConfig();
+      this.showToast(`${plugin.name}已${next ? '开启' : '关闭'}`, 'success');
+    },
+    /** 首页齿轮直接定位到对应插件分区，不再统一跳到「插件与首页」 */
+    openPluginSettings(id) {
+      const plugin = pluginById(id);
+      this.settingsSection = plugin ? plugin.section : (id || 'dashboard');
+      this.view = 'settings';
+    },
+
+    async loadDidaStatus() {
+      try {
+        const st = await ipcRenderer.invoke('dida-status');
+        if (st) this.didaStatus = st;
+      } catch (_) { /* 插件未加载时保持空状态 */ }
+    },
+
+    /** 设置页「立即拉取 / 立即推送」：只走主进程通道，推送仍需三重保护 */
+    async syncDida(direction) {
+      try {
+        const res = await ipcRenderer.invoke('dida-sync-now', { direction: direction || 'pull' });
+        const r = direction === 'push' ? res : (res && res.pull) || res;
+        if (r && r.error) this.showToast(r.error, 'error');
+        else if (r && r.skipped) this.showToast(r.reason || '该通道未开启', 'error');
+        else if (direction === 'push') this.showToast(`已推送 ${(r && r.count) || 0} 条`, 'success');
+        else this.showToast(`拉取完成 · 新增 ${(r && r.added) || 0} 条专注`, 'success');
+        await this.loadDidaStatus();
+        this.reloadDate(true);
+      } catch (e) {
+        this.showToast('同步失败: ' + e.message, 'error');
+      }
+    },
+
+    /** 点侧栏换页时回到顶部。
+     *  从今日页「跳到某个时段」不经过这里，那边需要保留定位滚动。 */
+    onViewChange(next) {
+      if (next === this.view) return;
+      this.view = next;
+      this.$nextTick(() => {
+        const el = this.$refs.content;
+        if (el) el.scrollTop = 0;
+      });
+    },
+
     // ============ 数据加载 ============
 
     async reloadDate(forceHeat = false) {
@@ -383,7 +461,7 @@ export default {
       const now = Date.now();
       if (!force && now - (this._lastHeatLoad || 0) < 60000) return;
       this._lastHeatLoad = now;
-      const { from, to } = heatRange(12, this.heatOffset);
+      const { from, to } = heatRange(this.heatWeeks, this.heatOffset);
       try {
         const res = await ipcRenderer.invoke('get-daily-tracked', { from, to });
         this.heatDaily = (res && res.ok) ? res.days : [];
@@ -600,8 +678,9 @@ export default {
       const now = new Date();
       now.setHours(0, 0, 0, 0);
       const back = Math.round((mondayOf(now) - mondayOf(target)) / (7 * 86400000));
-      // 窗口覆盖 [本周-11周, 本周]，超出就把末尾对齐到目标所在周
-      return back > 11 ? -(back - 11) : 0;
+      // 窗口覆盖 [本周-(weeks-1)周, 本周]，超出就把末尾对齐到目标所在周
+      const span = this.heatWeeks - 1;
+      return back > span ? -(back - span) : 0;
     },
 
     /** 日期条同步：只在窗口真的变了时返回 true，避免重复拉取 */
@@ -670,7 +749,11 @@ export default {
       if (this.isGeneratingSummary) return;
       this.isGeneratingSummary = true;
       try {
-        await ipcRenderer.invoke('generate-summary');
+        const result = await ipcRenderer.invoke('generate-summary');
+        if (!result) {
+          this.showToast('最近这段时间没有可总结的记录', 'error');
+          return;
+        }
         await this.loadSummaries();
         this.showToast('摘要已生成', 'success');
       } catch (error) {
@@ -688,10 +771,14 @@ export default {
       }
       this.isGeneratingSummary = true;
       try {
-        await ipcRenderer.invoke('generate-summary-range', {
+        const result = await ipcRenderer.invoke('generate-summary-range', {
           startTime: new Date(this.summaryStartTime).toISOString(),
           endTime: new Date(this.summaryEndTime).toISOString()
         });
+        if (!result) {
+          this.showToast('所选时间段没有可总结的记录', 'error');
+          return;
+        }
         await this.loadSummaries();
         this.showToast('摘要已生成', 'success');
       } catch (error) {
@@ -717,6 +804,10 @@ export default {
     },
 
     showArhatStart() {
+      if (this.config.focus && this.config.focus.enabled === false) {
+        this.showToast('番茄钟插件已关闭，可在首页插件坞开启', 'info');
+        return;
+      }
       this.focusDialog = true;
       this.focusInput = '';
     },
@@ -784,6 +875,9 @@ export default {
 
     async toggleBridge(enabled) {
       this.bridgeLoading = true;
+      // 主进程会落盘并重启服务，渲染层也要同步同一个开关，
+      // 否则设置页标题开关和首页插件坞会显示两个不同状态
+      this.config.bridge = { ...(this.config.bridge || {}), enabled };
       try {
         await ipcRenderer.invoke('set-bridge-config', { enabled });
         await this.loadBridgeStatus();
@@ -1003,6 +1097,8 @@ export default {
           this.loadSummaries();
         },
         'log-message': (event, message) => this.addLog(message),
+        'dida-status': (event, status) => { this.didaStatus = status || {}; },
+        'data-changed': () => { this.reloadDate(true); },
         'error-message': (event, message) => {
           this.addLog('错误: ' + message, 'error');
           this.showToast(message, 'error');
@@ -1055,10 +1151,7 @@ export default {
   min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background:
-    radial-gradient(760px 320px at 16% -6%,
-      color-mix(in srgb, var(--accent) 9%, transparent), transparent 72%),
-    var(--bg-canvas);
+  background: var(--bg-canvas);
 }
 
 /* ---------- 弹窗 ---------- */

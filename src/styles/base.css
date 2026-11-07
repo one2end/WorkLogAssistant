@@ -203,8 +203,8 @@ input[type="checkbox"]:focus-visible {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -214,7 +214,7 @@ input[type="checkbox"]:focus-visible {
 ::-webkit-scrollbar-thumb {
   background: var(--border-default);
   border-radius: var(--r-full);
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   background-clip: content-box;
 }
 
@@ -234,8 +234,8 @@ input[type="checkbox"]:focus-visible {
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
-  height: 32px;
-  padding: 0 var(--sp-3);
+  height: 34px;
+  padding: 0 var(--sp-4);
   border-radius: var(--r-sm);
   font-size: var(--fs-13);
   font-weight: var(--fw-medium);
@@ -289,8 +289,8 @@ input[type="checkbox"]:focus-visible {
 }
 
 .btn-sm {
-  height: 26px;
-  padding: 0 var(--sp-2);
+  height: 28px;
+  padding: 0 var(--sp-3);
   font-size: var(--fs-12);
   border-radius: var(--r-xs);
 }
@@ -319,15 +319,18 @@ input[type="checkbox"]:focus-visible {
 
 /* ---------- 卡片 ---------- */
 
+/* 卡片：纯色表面 + 极轻描边 + 一层柔影。
+   之前叠了渐变、inset 高光和阴影三层装饰，是「塑料感」的主要来源。 */
 .card {
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--bg-surface) 90%, #ffffff 10%),
-    var(--bg-surface) 68%);
-  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--r-lg);
-  padding: var(--sp-5);
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--surface-sheen);
+  padding: var(--sp-6);
+  box-shadow: var(--shadow-sm);
 }
+
+/* 浅色下白卡与画布本就有明度差，描边再淡一档，避免「框套框」 */
+.theme-light .card { border-color: rgba(15, 23, 42, 0.03); }
 
 .card-flush {
   padding: 0;
@@ -335,8 +338,8 @@ input[type="checkbox"]:focus-visible {
 }
 
 .card-quiet {
-  background: color-mix(in srgb, var(--bg-surface) 55%, transparent);
-  border-color: var(--border-subtle);
+  background: var(--bg-inset);
+  border-color: transparent;
   box-shadow: none;
 }
 
@@ -345,15 +348,14 @@ input[type="checkbox"]:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
-  margin-bottom: var(--sp-4);
+  margin-bottom: var(--sp-5);
 }
 
 .card-title {
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
   font-weight: var(--fw-semibold);
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
-  text-transform: none;
 }
 
 /* ---------- 空状态 ---------- */
@@ -397,7 +399,7 @@ input[type="checkbox"]:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  height: 20px;
+  height: 22px;
   padding: 0 var(--sp-2);
   border-radius: var(--r-full);
   font-size: var(--fs-11);

@@ -1,14 +1,14 @@
 <template>
   <div ref="wrap" class="hm-wrap">
     <div class="hm-nav">
-      <button class="hm-nav-btn" title="往前 12 周" aria-label="往前 12 周" @click="$emit('shift-range', -1)">
+      <button class="hm-nav-btn" :title="`往前 ${weeks} 周`" :aria-label="`往前 ${weeks} 周`" @click="$emit('shift-range', -1)">
         <svg width="12" height="12" viewBox="0 0 12 12"><path d="M7.5 2.5 4 6l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
       </button>
       <span class="hm-range">{{ rangeLabel }}</span>
       <button
         class="hm-nav-btn"
-        title="往后 12 周"
-        aria-label="往后 12 周"
+        :title="`往后 ${weeks} 周`"
+        :aria-label="`往后 ${weeks} 周`"
         :disabled="!canGoForward"
         @click="$emit('shift-range', 1)"
       >
@@ -83,6 +83,7 @@ export default {
   props: {
     // 84 项 dense 升序：周一开头、每 7 项一列，由 App 的 heatRange() 生成
     days: { type: Array, default: () => [] },
+    weeks: { type: Number, default: 12 },
     selectedDate: { type: String, default: '' },
     thresholds: { type: Array, default: () => [90, 210, 360] }, // 分钟
     rangeFrom: { type: String, default: '' },
@@ -98,7 +99,7 @@ export default {
   },
   computed: {
     rangeLabel() {
-      if (!this.rangeFrom || !this.rangeTo) return '最近 12 周';
+      if (!this.rangeFrom || !this.rangeTo) return `最近 ${this.weeks} 周`;
       const short = (s) => `${s.slice(2, 4)}/${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}`;
       return `${short(this.rangeFrom)} – ${short(this.rangeTo)}`;
     },

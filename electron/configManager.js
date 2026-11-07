@@ -22,7 +22,7 @@ class ConfigManager {
         try {
           const configData = fs.readFileSync(this.configPath, 'utf8');
           // 与默认值合并，兼容旧版本配置缺少新增字段的情况
-          baseConfig = this.mergeDeep(defaults, this.migrateLegacyAppearance(JSON.parse(configData)));
+          baseConfig = this.mergeDeep(defaults, this.migrateLegacyModel(this.migrateLegacyAppearance(JSON.parse(configData))));
         } catch (e) {
           console.error('解析 config.json 失败，回退到默认配置:', e);
         }
@@ -56,6 +56,15 @@ class ConfigManager {
    *   forest → 暗色/绿　rose → 暗色/玫红
    * 只在明显是旧配置（有 theme、无 mode）时迁移，不覆盖用户已设置的新字段。
    */
+  /** deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用，旧配置自动迁移 */
+  migrateLegacyModel(raw) {
+    if (!raw || !raw.api) return raw;
+    if (raw.api.modelName === 'deepseek-chat' || raw.api.modelName === 'deepseek-reasoner') {
+      raw.api.modelName = 'deepseek-flash';
+    }
+    return raw;
+  }
+
   migrateLegacyAppearance(raw) {
     const MAP = {
       dark: ['dark', 'blue'],
@@ -83,14 +92,18 @@ class ConfigManager {
         minSegmentSec: 3
       },
       focus: {
+        // 番茄钟是以「插件」形式存在的能力，可整体开关（首页方块上的开关）
+        enabled: true,
         pomodoro: { workMin: 25, breakMin: 5, rounds: 4 },
         immersive: { workMin: 15, breakMin: 15, rounds: 0 }
       },
       api: {
         provider: 'deepseek',
         apiKey: '',
+        // 2026-07-24 起 deepseek-chat / deepseek-reasoner 已停用。
+        // 当前官方推荐 deepseek-flash（V4.1 Flash），深度推理用 deepseek-v4-pro。
         baseUrl: 'https://api.deepseek.com/chat/completions',
-        modelName: 'deepseek-chat'
+        modelName: 'deepseek-flash'
       },
       summary: {
         intervalMinutes: 30,
@@ -116,6 +129,40 @@ class ConfigManager {
       ai: {
         enabled: false
       },
+
+      // 滴答清单同步插件：拉取与推送是两条完全独立的通道，各有自己的开关和间隔。
+      // 拉取把滴答的专注记录喂进展示层第二层级（只读镜像，不写 activities/）。
+      // 推送把展示层内容写回滴答：默认且长期保持关闭，只有显式开启 pushEnabled
+      // 且填写 pushProjectId 才会执行，避免写乱用户已有的清单。
+      // 同步统计（条数、时间、错误）单独存 Data/dida/sync-status.json，不写进配置。
+      dida: {
+        enabled: false,
+        token: '',
+        pullFocus: true,
+        pushEnabled: false,
+        pullIntervalMin: 30,
+        pushIntervalMin: 60,
+        syncDays: 30,
+        autoSyncOnStart: true,
+        pushProjectId: ''
+      },
+
+      // 首页布局：每个插件一块状态卡；统计类卡片可单独开关，并留自定义项。
+      // 插件本身的开关放在各自的配置块里（focus.enabled / ai.enabled /
+      // bridge.enabled / dida.enabled），避免出现两个真相来源。
+      dashboard: {
+        showPluginDock: true,
+        cards: {
+          heatmap: true,
+          composition: true,
+          apps: true,
+          session: true,
+          dataNotes: true,
+          focusNotes: true,
+          aiInsights: true
+        },
+        heatmapWeeks: 12
+      },
       ui: {
         // 外观 = 明暗模式 × 强调色（theme 字段仅保留用于旧配置迁移）
         mode: 'dark',
@@ -138,8 +185,10 @@ class ConfigManager {
           localConfig = JSON.parse(fs.readFileSync(this.localConfigPath, 'utf8')) || {};
         } catch (_) { /* 损坏则重建 */ }
       }
+      // 敏感信息只进 config.local.json，不写进 config.json（后者可能被同步/备份）
       localConfig = this.mergeDeep(localConfig, {
-        api: { apiKey: config.api?.apiKey || '' }
+        api: { apiKey: config.api?.apiKey || '' },
+        dida: { token: config.dida?.token || '' }
       });
       fs.writeFileSync(this.localConfigPath, JSON.stringify(localConfig, null, 2), 'utf8');
 
@@ -147,6 +196,9 @@ class ConfigManager {
       const safeConfig = JSON.parse(JSON.stringify(config));
       if (safeConfig.api) {
         safeConfig.api.apiKey = '';
+      }
+      if (safeConfig.dida) {
+        safeConfig.dida.token = '';
       }
       fs.writeFileSync(this.configPath, JSON.stringify(safeConfig, null, 2), 'utf8');
 

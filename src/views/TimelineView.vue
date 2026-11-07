@@ -11,48 +11,39 @@
       />
     </div>
 
-    <!-- 四格统计（UpTimer 风格） -->
+    <!-- 四格统计（UpTimer 风格）：展示层看工作量，记录层看原始采样 -->
     <div class="stat-strip">
-      <div class="stat-cell">
-        <b>{{ fmtCN(trackedMs) }}</b>
-        <span><Icon name="timer" :size="11" /> 有效</span>
-      </div>
-      <i class="stat-div" />
-      <div class="stat-cell">
-        <b>{{ fmtCN(gapTotalMs) }}</b>
-        <span><Icon name="moon" :size="11" /> 空闲</span>
-      </div>
-      <i class="stat-div" />
-      <div class="stat-cell">
-        <b>{{ sessionCount }}</b>
-        <span><Icon name="activity" :size="11" /> 段数</span>
-      </div>
-      <i class="stat-div" />
-      <div class="stat-cell">
-        <b>{{ coveragePct }}%</b>
-        <span><Icon name="chart" :size="11" /> 覆盖</span>
-      </div>
+      <template v-for="(cell, i) in statCells" :key="cell.label">
+        <i v-if="i" class="stat-div" />
+        <div class="stat-cell">
+          <b>{{ cell.value }}</b>
+          <span><Icon :name="cell.icon" :size="11" /> {{ cell.label }}</span>
+        </div>
+      </template>
     </div>
 
-    <!-- 视图切换 + 日期分组标题 -->
+    <!-- 视图切换：时间轴 / 日历 / 记录层收在同一个下拉里，工具栏只留一个入口 -->
     <div class="view-head">
       <div class="view-switch" @click.stop>
         <button class="view-trigger" @click="menuOpen = !menuOpen">
+          <Icon :name="viewIcon" :size="14" />
           {{ viewLabel }}
           <Icon name="chevronDown" :size="13" />
         </button>
         <div v-if="menuOpen" class="view-menu">
-          <button
-            v-for="opt in viewOptions"
-            :key="opt.id"
-            :class="{ active: mode === opt.id }"
-            @click="setMode(opt.id)"
-          >{{ opt.label }}</button>
+          <template v-for="opt in viewOptions" :key="opt.id">
+            <i v-if="opt.divider" class="view-menu-sep" />
+            <button
+              :class="{ active: mode === opt.id }"
+              :title="opt.title || opt.label"
+              @click="setMode(opt.id)"
+            >
+              <Icon :name="opt.icon" :size="13" />
+              <span class="vm-label">{{ opt.label }}</span>
+              <small v-if="opt.hint">{{ opt.hint }}</small>
+            </button>
+          </template>
         </div>
-      </div>
-      <div class="layer-switch">
-        <button :class="{ active: layerMode === 'display' }" @click="layerMode = 'display'">展示层</button>
-        <button :class="{ active: layerMode === 'record' }" @click="layerMode = 'record'">记录层</button>
       </div>
       <span class="view-date">{{ dateLabel }}</span>
       <button
@@ -66,8 +57,8 @@
       </button>
     </div>
 
-    <!-- 手工补记 -->
-    <div v-if="manualOpen" class="manual-panel">
+    <!-- 手工补记（记录层是只读事实层，不提供写入入口） -->
+    <div v-if="manualOpen && mode !== 'record'" class="manual-panel">
       <div class="manual-fields">
         <label class="mf">
           <span>开始</span>
@@ -101,24 +92,47 @@
       </div>
     </div>
 
-    <!-- 记录层：原始采样，只读 -->
-    <div v-if="layerMode === 'record'" class="record-layer">
+    <!-- 记录层：原始采样，只读；按小时分组 + 可筛选，避免一天几百行平铺 -->
+    <div v-if="mode === 'record'" class="record-layer">
       <div class="rl-head">
         <Icon name="shield" :size="12" />
         <span>记录层 · {{ rawRows.length }} 条原始采样</span>
         <em>只读：这是事实，能看不能改</em>
       </div>
+      <div class="rl-tools">
+        <label class="rl-search">
+          <Icon name="search" :size="12" />
+          <input v-model="rawQuery" type="search" placeholder="筛应用或窗口标题">
+        </label>
+        <button class="rl-order" :title="rawDesc ? '切换为从早到晚' : '切换为最新在上'" @click="rawDesc = !rawDesc">
+          <Icon name="filter" :size="12" />
+          {{ rawDesc ? '最新在上' : '从早到晚' }}
+        </button>
+      </div>
       <div v-if="!rawRows.length" class="empty">
         <span class="empty-title">这一天没有自动录制</span>
-        <span class="empty-desc">只有你补记或导入的标注，切回展示层查看</span>
+        <span class="empty-desc">只有你补记或导入的标注，切回时间轴查看</span>
+      </div>
+      <div v-else-if="!filteredRawRows.length" class="empty">
+        <span class="empty-title">没有匹配的采样</span>
+        <span class="empty-desc">换个关键词试试</span>
       </div>
       <div v-else class="rl-list">
-        <div v-for="(r, i) in rawRows" :key="i" class="rl-row">
-          <span class="rl-time">{{ clock(minOfDay(r.timestamp)) }}</span>
-          <span class="rl-app">{{ r.processName || r.app || '—' }}</span>
-          <span class="rl-title" :title="r.windowTitle || r.title">{{ r.windowTitle || r.title || '(无标题)' }}</span>
-          <span class="rl-dur">{{ r.durationMs ? fmtCN(r.durationMs) : '—' }}</span>
-        </div>
+        <template v-for="g in rawHourGroups" :key="g.label + '-' + g.rows[0].timestamp">
+          <div class="rl-hour">
+            <span>{{ g.label }}</span>
+            <em>{{ g.rows.length }} 条</em>
+          </div>
+          <div v-for="(r, i) in g.rows" :key="(r.timestamp || '') + '-' + i" class="rl-row">
+            <span class="rl-time">{{ clock(minOfDay(r.timestamp)) }}</span>
+            <span class="rl-app">{{ r.processName || r.app || '—' }}</span>
+            <span class="rl-title" :title="r.windowTitle || r.title">{{ r.windowTitle || r.title || '(无标题)' }}</span>
+            <span class="rl-dur">{{ r.durationMs ? fmtCN(r.durationMs) : '—' }}</span>
+          </div>
+        </template>
+        <button v-if="rawHiddenCount" class="rl-more" @click="rawLimit += 300">
+          还有 {{ rawHiddenCount }} 条采样，再加载 {{ Math.min(300, rawHiddenCount) }} 条
+        </button>
       </div>
     </div>
 
@@ -147,7 +161,7 @@
               v-if="b.type === 'activity'"
               class="tl-card"
               :style="{ borderLeftColor: colorOf(b.category), background: cardBg(b.category) }"
-              @click="openSegment(b, $event)"
+              @contextmenu.prevent.stop="openCtx($event, selectedDate, b)"
             >
               <div class="card-top">
                 <span class="card-badge" :style="{ color: colorOf(b.category), background: softColor(b.category, 0.22) }">
@@ -155,7 +169,7 @@
                 </span>
                 <span class="card-app" :title="cardTitle(b)">{{ cardTitle(b) }}</span>
                 <span class="card-dur"><Icon name="clock" :size="11" /> {{ fmtCN(b.durationMs) }}</span>
-                <button class="card-more" title="编辑这一段" @click.stop="openSegment(b, $event)">⋯</button>
+                <button class="card-more" title="编辑或删除这一段" @click.stop="openSegment(b, $event)">⋯</button>
               </div>
               <div v-if="cardNote(b)" class="card-note" :title="cardNote(b)">{{ cardNote(b) }}</div>
               <div class="card-meta">
@@ -170,14 +184,12 @@
               </div>
             </div>
 
-            <!-- 空闲卡片 -->
-            <div v-else class="tl-card is-gap">
+            <!-- 空闲卡片：整卡可点补记。
+                 原先右侧那个圆形 + 会和右下角 FAB 撞在一起，像两个重复按钮。 -->
+            <div v-else class="tl-card is-gap" @click="openManualFor(b)">
               <span class="gap-mark">?</span>
               <span class="gap-label">空闲：{{ fmtCN(b.durationMin * 60000) }}</span>
-              <span class="gap-hint">未记录</span>
-              <button class="gap-add" title="补记这段时间在做什么" @click="openManualFor(b)">
-                <Icon name="plus" :size="13" />
-              </button>
+              <span class="gap-hint">点击补记 ›</span>
             </div>
           </div>
         </template>
@@ -226,7 +238,7 @@
               class="cal-track"
               :data-date="d.date"
               @pointerdown.self="startDraft($event, d.date)"
-              @contextmenu.prevent
+              @contextmenu.self.prevent="openTrackCtx($event, d.date)"
             >
               <div
                 v-for="(b, i) in d.blocks"
@@ -236,14 +248,15 @@
                   'is-selected': selectedBlock && selectedBlock.key === b.key,
                   'is-manual': b.manual,
                   'is-dim': dragState && dragState.block && dragState.block.key === b.key && dragState.moved,
-                  'is-thin': b.height < 1.8
+                  'is-thin': b.height < 1.2
                 }"
-                :style="{ top: b.top + '%', height: `calc(${b.height}% - 3px)`, background: colorOf(b.category) }"
+                :style="calBlockStyle(b)"
                 :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${b.category}${b.manual ? ' · 标注' : ''}`"
                 @pointerdown.stop="startBlockDrag($event, d.date, b)"
                 @contextmenu.prevent.stop="openCtx($event, d.date, b)"
               >
                 <span class="cal-block-title">{{ blockLabel(b) }}</span>
+                <span class="cal-block-range">{{ clock(b.startMin) }}–{{ clock(b.endMin) }}</span>
                 <span v-if="blockSub(b) && b.height >= 6" class="cal-block-note">{{ blockSub(b) }}</span>
                 <span class="cal-resize" @pointerdown.stop="startResize($event, d.date, b)" />
               </div>
@@ -266,8 +279,8 @@
       </div>
     </template>
 
-    <!-- 悬浮补记按钮 -->
-    <button class="fab" title="手工补记" @click="toggleManual">
+    <!-- 悬浮补记按钮：记录层是只读事实层，不出现写操作入口 -->
+    <button v-if="mode !== 'record'" class="fab" title="手工补记" @click="toggleManual">
       <Icon name="plus" :size="20" />
     </button>
 
@@ -279,15 +292,20 @@
         :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
         @pointerdown.stop
       >
-        <button @click="ctxDo('edit')">编辑</button>
-        <button @click="ctxDo('copy')">复制这一段时间</button>
-        <button
-          v-if="ctxMenu.block.manual"
-          class="danger"
-          @click="ctxDo('delete')"
-        >删除这一段</button>
-        <i class="ctx-sep" />
-        <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ ctxMenu.block.category }}</span>
+        <template v-if="!ctxMenu.empty">
+          <button @click="ctxDo('edit')">编辑这一段</button>
+          <button @click="ctxDo('copy')">复制这一段时间</button>
+          <i class="ctx-sep" />
+          <button class="danger" @click="ctxDo('delete')">删除这一段</button>
+          <i class="ctx-sep" />
+          <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ ctxMenu.block.category }}</span>
+        </template>
+        <template v-else>
+          <button @click="ctxDo('new')">在这里新建 15 分钟</button>
+          <button v-if="clipBlock" @click="ctxDo('paste')">粘贴已复制的段</button>
+          <i class="ctx-sep" />
+          <span class="ctx-hint">{{ clock(ctxMenu.minute) }} · {{ ctxMenu.date }}</span>
+        </template>
       </div>
     </transition>
 
@@ -317,8 +335,6 @@ const { ipcRenderer } = require('electron');
 
 /** 小于这个分钟数的缝隙不单独画空闲块，避免碎片刷屏 */
 const GAP_MIN = 5;
-const HOUR_PX = 44;
-const PX_PER_MIN = HOUR_PX / 60;
 
 const CAT_ICONS = {
   // 展示分组（日历/时间轴用）
@@ -328,7 +344,7 @@ const CAT_ICONS = {
   '娱乐': 'play',
   '睡眠': 'moon',
   '专注': 'target',
-  '其他': 'search',
+  '其他': 'activity',
   '沟通协作': 'plug',
   'AI 助手': 'cpu',
   '开发编码': 'terminal',
@@ -339,9 +355,7 @@ const CAT_ICONS = {
   '文件系统': 'folder',
   '系统工具': 'settings',
   '生活事务': 'home',
-  '睡眠': 'moon',
-  '空档': 'pause',
-  '其他': 'activity'
+  '空档': 'pause'
 };
 
 export default {
@@ -359,17 +373,21 @@ export default {
     'manual-error', 'focus-consumed', 'focus-missed'],
   data() {
     return {
-      HOUR_PX,
-      PX_PER_MIN,
+      // mode 同时表达「视图」和「层」：timeline/calendar 是展示层，record 是只读事实层。
+      // 三者互斥，所以只用一个下拉，不再并排两套切换控件。
       mode: 'timeline',
-      // 时间轴分两层：展示层（会话/标注，可改可删）/ 记录层（原始采样，只读）
-      layerMode: 'display',
       menuOpen: false,
       sortDesc: true,
       viewOptions: [
-        { id: 'timeline', label: '时间轴' },
-        { id: 'calendar', label: '日历' }
+        { id: 'timeline', label: '时间轴', icon: 'timeline', title: '按 15 分钟归并的卡片流' },
+        { id: 'calendar', label: '日历', icon: 'calendar', title: '1/3/7 天自适应，可拖拽编辑' },
+        { id: 'record', label: '记录层', icon: 'database', hint: '只读', divider: true,
+          title: '原始采样：这是事实，能看不能改' }
       ],
+      // 记录层一天可能几百条采样：默认倒序（最新在上）、每次只加 300 条
+      rawQuery: '',
+      rawLimit: 300,
+      rawDesc: true,
       // 日历显示几天，由窗口宽度决定：窄窗口看一天，拉宽看三天，全屏看一周
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       calDays: [],
@@ -407,6 +425,9 @@ export default {
       if (val === 'calendar') this.loadCalendar();
     },
     selectedDate() {
+      // 换天时清掉记录层的筛选与分页，否则新的一天会沿用旧状态
+      this.rawQuery = '';
+      this.rawLimit = 300;
       if (this.mode === 'calendar') this.loadCalendar();
     },
     // 拉宽/收窄窗口时自动切换 日 / 三日 / 周
@@ -447,9 +468,75 @@ export default {
         .filter(a => a.source === 'auto')
         .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     },
+    /** 应用名 / 窗口标题模糊筛选，纯前端，不碰数据 */
+    filteredRawRows() {
+      const q = (this.rawQuery || '').trim().toLowerCase();
+      if (!q) return this.rawRows;
+      return this.rawRows.filter(r => {
+        const app = String(r.processName || r.app || '').toLowerCase();
+        const title = String(r.windowTitle || r.title || '').toLowerCase();
+        return app.includes(q) || title.includes(q);
+      });
+    },
+    /** 最新在上，且按批加载：打开记录层第一眼就是刚才在做什么，而不是凌晨的采样 */
+    rawVisibleRows() {
+      const rows = this.rawDesc ? [...this.filteredRawRows].reverse() : this.filteredRawRows;
+      return rows.slice(0, this.rawLimit);
+    },
+    rawHiddenCount() {
+      return Math.max(0, this.filteredRawRows.length - this.rawVisibleRows.length);
+    },
+    /** 按小时切小节，找某条采样不用在几百行里肉眼扫 */
+    rawHourGroups() {
+      const groups = [];
+      for (const r of this.rawVisibleRows) {
+        const hour = Math.floor(this.minOfDay(r.timestamp) / 60);
+        const last = groups[groups.length - 1];
+        if (last && last.hour === hour) last.rows.push(r);
+        else groups.push({ hour, label: `${this.pad(hour)}:00`, rows: [r] });
+      }
+      return groups;
+    },
     viewLabel() {
       const hit = this.viewOptions.find(o => o.id === this.mode);
       return hit ? hit.label : '时间轴';
+    },
+    viewIcon() {
+      const hit = this.viewOptions.find(o => o.id === this.mode);
+      return hit ? hit.icon : 'timeline';
+    },
+    /**
+     * 四格统计随层切换口径：展示层看「有效/空闲/段数/覆盖」，
+     * 记录层看「采样条数/首条/末条/跨度」。以前在记录层也显示工时覆盖率，
+     * 会让人误以为那些数字是原始事实。
+     */
+    statCells() {
+      if (this.mode !== 'record') {
+        return [
+          { value: this.fmtCN(this.trackedMs), label: '有效', icon: 'timer' },
+          { value: this.fmtCN(this.gapTotalMs), label: '空闲', icon: 'moon' },
+          { value: this.sessionCount, label: '段数', icon: 'activity' },
+          { value: `${this.coveragePct}%`, label: '覆盖', icon: 'chart' }
+        ];
+      }
+      const rows = this.rawRows;
+      if (!rows.length) {
+        return [
+          { value: '0', label: '采样', icon: 'database' },
+          { value: '—', label: '首条', icon: 'clock' },
+          { value: '—', label: '末条', icon: 'clock' },
+          { value: '—', label: '跨度', icon: 'timer' }
+        ];
+      }
+      const mins = rows.map(r => this.minOfDay(r.timestamp));
+      const first = Math.min(...mins);
+      const last = Math.max(...mins);
+      return [
+        { value: rows.length, label: '采样', icon: 'database' },
+        { value: this.clock(first), label: '首条', icon: 'clock' },
+        { value: this.clock(last), label: '末条', icon: 'clock' },
+        { value: this.fmtCN((last - first) * 60000), label: '跨度', icon: 'timer' }
+      ];
     },
     stats() {
       return (this.report && this.report.stats) || {};
@@ -468,21 +555,10 @@ export default {
       const [y, m, d] = this.selectedDate.split('-').map(Number);
       return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0).getTime();
     },
-    /**
-     * 把 sessions 摊到 0–1440 分钟，并在中间插入「空闲」块。
-     * 这是全部视图共用的唯一数据源：既保证卡片流和日视图一致，
-     * 也让「空白的时候」第一次成为可见、可补记的实体。
-     */
+    /** 今天只画到当前时刻，免得未来时间变成一块巨型「空闲」 */
     dayEndMin() {
       return this.isToday ? Math.max(1, Math.min(1440, this.nowMin)) : 1440;
     },
-    /**
-     * 展示层的时间轴：以 15 分钟格为最小单位。
-     *
-     * 记录层里一分钟可能切了三次窗口，直接画会得到一堆 0～3 分钟的碎片
-     * （11-07 就是 71 段，看起来像「全是空的」）。展示层按 15 分钟归并：
-     * 相邻同分类、同应用的格合成一段，一段就是「这段时间主要在做什么」。
-     */
     /**
      * 展示层的时间轴：以 15 分钟格为最小单位。
      *
@@ -507,7 +583,7 @@ export default {
             last.appMin = slot.filledMin || 0;
           }
           if (slot.note && !last.titles.includes(slot.note)) last.titles.push(slot.note);
-          if (slot.focusId && !last.focusId) last.focusId = slot.focusId;
+          if (slot.layer === 'focus' && slot.focusId && !last.focusId) last.focusId = slot.focusId;
           last.endMin = endMin;
           last.durationMin = endMin - last.startMin;
           last.durationMs = (last.endMin - last.startMin) * 60000;
@@ -583,19 +659,20 @@ export default {
       void this.tick;
       const d = new Date();
       return d.getHours() * 60 + d.getMinutes();
-    },
-    futureStyle() {
-      return {
-        top: (this.dayEndMin * PX_PER_MIN) + 'px',
-        height: Math.max(0, (1440 - this.dayEndMin) * PX_PER_MIN) + 'px'
-      };
     }
   },
   mounted() {
     this.timer = setInterval(() => { this.tick += 1; }, 60000);
     document.addEventListener('click', this.closeMenu);
     this._onResize = () => { this.windowWidth = window.innerWidth; };
-    this._onDocDown = () => { if (this.ctxMenu) this.ctxMenu = null; };
+    // 捕获阶段的 pointerdown 用来「点外部关菜单」。但必须放过菜单自身：
+    // 否则点菜单项时先把 ctxMenu 清空，Vue 会在 click 触发前移除 DOM，
+    // 所有菜单项都点不动（表现为「编辑这一段按不了」）。
+    this._onDocDown = (e) => {
+      if (!this.ctxMenu) return;
+      if (e.target && e.target.closest && e.target.closest('.ctx-menu')) return;
+      this.ctxMenu = null;
+    };
     document.addEventListener('pointerdown', this._onDocDown, true);
     this._onKey = (e) => {
       if (e.key === 'Escape' && this.ctxMenu) { this.ctxMenu = null; return; }
@@ -613,6 +690,7 @@ export default {
     this.$nextTick(() => this.consumeFocus());
   },
   beforeUnmount() {
+    this.endDrag();
     document.removeEventListener('click', this.closeMenu);
     window.removeEventListener('resize', this._onResize);
     if (this._onDocDown) document.removeEventListener('pointerdown', this._onDocDown, true);
@@ -651,8 +729,14 @@ export default {
           this.$emit('manual-error', (res && res.error) || '删除专注失败');
           return;
         }
-        this.$emit('refresh');
-        if (this.mode === 'calendar') await this.loadCalendar();
+        await this.refreshAfterWrite();
+        return;
+      }
+
+      // 记录层是事实，不允许删除。但按钮不能凭空消失：
+      // 明确告诉用户「先改一次生成标注」，否则会以为删除坏了。
+      if (!b.manual && !b.focusId) {
+        this.$emit('manual-error', '这一段来自记录层（只读）：先编辑保存一次生成标注，之后就能删除');
         return;
       }
 
@@ -670,10 +754,16 @@ export default {
         this.$emit('manual-error', (res && res.error) || '这一段没有可删的标注');
         return;
       }
-      this.$emit('refresh');
+      await this.refreshAfterWrite();
     },
-    /** 日历：按当前窗口宽度拉 1 / 3 / 7 天 */
-    async loadCalendar() {
+    /**
+     * 日历：按当前窗口宽度拉 1 / 3 / 7 天。
+     * 并发保护：mode、日期、窗口宽度可能连着变，只让最后一次请求写 calDays，
+     * 否则慢的旧请求会覆盖新结果，出现「换了日期还显示上一天」。
+     * keepScroll 用于写操作后的刷新——保住视野，别把刚拖完的块弹走。
+     */
+    async loadCalendar({ keepScroll = false } = {}) {
+      const token = (this._calToken = (this._calToken || 0) + 1);
       this.calLoading = true;
       try {
         const span = this.calSpan;
@@ -692,21 +782,33 @@ export default {
             const res = await ipcRenderer.invoke('get-day-analytics', date);
             report = res && res.ok ? res.report : null;
           } catch (e) { /* 单天失败不影响整体 */ }
+          if (token !== this._calToken) return;
           rows.push(this.buildCalDay(date, d, report));
         }
+        if (token !== this._calToken) return;
         this.calDays = rows;
         await this.$nextTick();
-        this.scrollCalTo();
+        if (!keepScroll) this.scrollCalTo();
       } finally {
-        this.calLoading = false;
+        if (token === this._calToken) this.calLoading = false;
       }
+    },
+
+    /**
+     * 写操作后的统一刷新。
+     * report 由父组件重载；但 calDays 是本组件从 IPC 拉的本地数据，
+     * 不会跟着 report 变——漏掉这一步就会出现「删了块，界面还在」。
+     */
+    async refreshAfterWrite() {
+      this.$emit('refresh');
+      if (this.mode === 'calendar') await this.loadCalendar({ keepScroll: true });
     },
 
     /** 打开日历时滚到「有意义的位置」：今天滚到当前时刻，其它天滚到早上 */
     scrollCalTo() {
       const el = this.$refs.calScroll;
       if (!el) return;
-      const hourH = 54;
+      const hourH = 96;
       const isToday = this.calDays.some(d => d.date === this.todayStr);
       const focusHour = isToday ? new Date().getHours() : 8;
       el.scrollTop = Math.max(0, (focusHour - 1) * hourH);
@@ -721,7 +823,7 @@ export default {
           last.endMin = slot.startMin + 15;
           last.minutes += slot.filledMin;
           if (slot.note && !last.notes.includes(slot.note)) last.notes.push(slot.note);
-          if (slot.focusId && !last.focusId) last.focusId = slot.focusId;
+          if (slot.layer === 'focus' && slot.focusId && !last.focusId) last.focusId = slot.focusId;
         } else {
           merged.push({
             category: slot.category,
@@ -730,7 +832,9 @@ export default {
             endMin: slot.startMin + 15,
             minutes: slot.filledMin,
             notes: slot.note ? [slot.note] : [],
-            focusId: slot.focusId || null,
+            // 只有「这一格真由专注主导」才把 focusId 交给前端。
+            // 否则删除一个标注主导、但格内带 focusId 的块，会误删专注会话。
+            focusId: slot.layer === 'focus' ? (slot.focusId || null) : null,
             manual: slot.layer !== 'auto'
           });
         }
@@ -823,6 +927,33 @@ export default {
     },
 
     /**
+     * 统一登记拖拽监听。切视图或组件卸载时主动解绑，
+     * 否则「拖到一半切走、回来松手」仍会落一条标注，很难查。
+     */
+    beginDrag(onMove, onUp) {
+      this.endDrag();
+      const cleanup = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        if (this._dragCleanup === cleanup) this._dragCleanup = null;
+      };
+      this._dragCleanup = cleanup;
+      // 这里必须是真的注册监听。之前批量替换拖拽样板时把这两行
+      // 误换成了 this.beginDrag(...)，变成无限递归 → 日历点块直接栈溢出，
+      // 编辑浮层、右键菜单、拖拽全都不出来。
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+    endDrag() {
+      if (this._dragCleanup) {
+        this._dragCleanup();
+        this._dragCleanup = null;
+      }
+      this.ghost = null;
+      this.dragState = null;
+    },
+
+    /**
      * 空白处按住拖动 = 划一段时间，松开后打开编辑器让你填内容。
      * 只单击不拖动不会创建任何东西——新建必须先经过编辑器确认。
      */
@@ -845,10 +976,8 @@ export default {
         this.ghost = this.ghostOf(date, a, Math.max(b, a + 15), true);
       };
       const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
         const g = this.ghost;
-        this.ghost = null;
+        this.endDrag();
         if (!moved || !g) return;      // 只是点了一下：什么都不做
         // 用「刚划出来的那一段」作为锚点，浮层就会贴在那儿
         const anchorRect = {
@@ -874,8 +1003,7 @@ export default {
           focusId: null
         }, { currentTarget: null, _rect: anchorRect });
       };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      this.beginDrag(onMove, onUp);
     },
 
     /**
@@ -910,10 +1038,7 @@ export default {
         this.ghost = this.ghostOf(date, targetStart, targetStart + dur, false);
       };
       const onUp = async () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        this.dragState = null;
-        this.ghost = null;
+        this.endDrag();
         if (!moved) {
           this.openSegment(this.blockOf(date, b), { currentTarget: el });
           return;
@@ -925,8 +1050,7 @@ export default {
         }
         await this.moveBlock(date, b, targetStart, dur);
       };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      this.beginDrag(onMove, onUp);
     },
 
     async moveBlock(date, b, newStart, dur) {
@@ -945,11 +1069,35 @@ export default {
     openCtx(e, date, b) {
       this.editorOpen = false;
       this.ghost = null;
+      // 记下被右键的那块，菜单里点「编辑这一段」时浮层贴着它弹，
+      // 而不是掉到屏幕左上角让人以为没反应
+      const el = e.currentTarget && e.currentTarget.closest
+        ? (e.currentTarget.closest('.tl-card, .cal-block') || e.currentTarget)
+        : null;
+      const r = el ? el.getBoundingClientRect() : null;
       this.ctxMenu = {
-        x: Math.min(e.clientX, window.innerWidth - 168),
-        y: Math.min(e.clientY, window.innerHeight - 132),
+        x: Math.min(e.clientX, window.innerWidth - 190),
+        y: Math.min(e.clientY, window.innerHeight - 150),
         date,
-        block: b
+        block: b,
+        empty: false,
+        rect: r ? { top: r.top, left: r.left, width: r.width, height: r.height, bottom: r.bottom } : null
+      };
+    },
+    /** 轨道空白处右键：这里没有块，给「新建 / 粘贴」而不是什么都不做 */
+    openTrackCtx(e, date) {
+      const track = e.currentTarget;
+      const rect = track.getBoundingClientRect();
+      const minute = this.minuteAt(track, e.clientY);
+      this.editorOpen = false;
+      this.ghost = null;
+      this.ctxMenu = {
+        x: Math.min(e.clientX, window.innerWidth - 190),
+        y: Math.min(e.clientY, window.innerHeight - 120),
+        date,
+        minute,
+        empty: true,
+        rect: { top: e.clientY - 10, left: rect.left, width: rect.width, height: 20, bottom: e.clientY + 10 }
       };
     },
     closeCtx() {
@@ -959,9 +1107,28 @@ export default {
       const menu = this.ctxMenu;
       this.closeCtx();
       if (!menu) return;
+      if (menu.empty) {
+        if (action === 'new') {
+          const startMin = Math.min(1425, menu.minute);
+          this.openSegment({
+            type: 'activity',
+            key: `new-${menu.date}-${startMin}`,
+            date: menu.date,
+            isNew: true,
+            startMin,
+            endMin: startMin + 15,
+            durationMin: 15,
+            durationMs: 15 * 60000,
+            app: '', category: '工作', titles: [], manual: true, focusId: null
+          }, { currentTarget: null, _rect: menu.rect });
+        } else if (action === 'paste') {
+          this.pasteAt(menu.date, menu.minute);
+        }
+        return;
+      }
       const block = this.blockOf(menu.date, menu.block);
       if (action === 'edit') {
-        this.openSegment(block, null);
+        this.openSegment(block, { currentTarget: null, _rect: menu.rect });
       } else if (action === 'copy') {
         this.copyBlock(block);
       } else if (action === 'delete') {
@@ -969,7 +1136,7 @@ export default {
       }
     },
 
-    /** 把日历块转成编辑器用的对象（时间轴块与日历块字段不同） */
+    /** 把日历块 / 时间轴块统一转成编辑器用的对象（两者字段不同） */
     blockOf(date, b) {
       const startMin = b.startMin;
       const endMin = b.endMin;
@@ -984,7 +1151,7 @@ export default {
         durationMs: Math.max(15, endMin - startMin) * 60000,
         app: b.app || b.category || '',
         category: b.category || '其他',
-        titles: b.note ? [b.note] : [],
+        titles: b.titles ? [...b.titles] : (b.note ? [b.note] : []),
         manual: !!b.manual,
         focusId: b.focusId || null
       };
@@ -997,12 +1164,12 @@ export default {
         ? (ev.currentTarget.closest('.tl-card, .cal-block') || ev.currentTarget)
         : null;
       const rect = (ev && ev._rect) || (el ? el.getBoundingClientRect() : null);
-      this.editorTarget = b;
       this.editorAnchor = rect
         ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom }
         : null;
-      // 新建的块还不能删；其余能删的前提是它来自标注层/专注
-      this.editorDeletable = !b.isNew && !!(b.manual || b.focusId);
+      // 删除按钮始终可见（红色高亮），记录层的段点下去会解释为什么不能删，
+      // 比「按钮凭空消失」更容易理解，也不破坏记录层只读约束。
+      this.editorDeletable = !b.isNew;
       this.editorTarget = { ...b, date: b.date || this.selectedDate };
       this.editorForm = {
         range: `${this.clock(b.startMin)} – ${this.clock(b.endMin)}`,
@@ -1053,9 +1220,7 @@ export default {
           return;
         }
         this.closeSegment();
-        this.$emit('refresh');
-        if (this.mode === 'calendar') await this.loadCalendar();
-        void b;
+        await this.refreshAfterWrite();
       } finally {
         this.editSaving = false;
       }
@@ -1098,15 +1263,11 @@ export default {
         this.ghost = this.ghostOf(date, b.startMin, b.startMin + newDur, false);
       };
       const onUp = async () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        this.dragState = null;
-        this.ghost = null;
+        this.endDrag();
         if (!moved || newDur === baseDur) return;
         await this.writeAnnotation(date, b.startMin, newDur, b);
       };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      this.beginDrag(onMove, onUp);
     },
 
     /** 写一条标注覆盖 [startMin, startMin+durationMin)，先清掉同区间的旧标注 */
@@ -1127,23 +1288,26 @@ export default {
         title: '',
         category: b.category
       });
-      this.$emit('refresh');
-      await this.loadCalendar();
+      await this.refreshAfterWrite();
     },
 
     async pasteBlock() {
       if (!this.clipBlock) return;
+      await this.pasteAt(this.selectedDate, this.clipBlock.startMin);
+    },
+    /** 把剪贴板里的段写到指定日期的某个 15 分钟刻度（轨道右键粘贴用） */
+    async pasteAt(date, startMin) {
       const c = this.clipBlock;
+      if (!c) return;
       await ipcRenderer.invoke('add-manual-record', {
-        date: this.selectedDate,
-        startTime: this.clock(c.startMin),
+        date,
+        startTime: this.clock(Math.min(1425, startMin)),
         durationMin: c.durationMin,
         app: c.app || '标注',
         title: '',
         category: c.category
       });
-      this.$emit('refresh');
-      if (this.mode === 'calendar') this.loadCalendar();
+      await this.refreshAfterWrite();
     },
 
     minOfDay(ts) {
@@ -1158,8 +1322,19 @@ export default {
       this.menuOpen = false;
     },
     setMode(id) {
+      if (!this.viewOptions.some(o => o.id === id)) return;
       this.mode = id;
       this.menuOpen = false;
+      // 切视图时收掉所有临时浮层：拖拽预览、右键菜单、编辑器、补记面板
+      // 都不该跟着飘到下一个视图上（拖拽监听也必须在这里解绑）
+      this.endDrag();
+      this.ctxMenu = null;
+      this.editorOpen = false;
+      this.manualOpen = false;
+      if (id === 'record') {
+        this.rawQuery = '';
+        this.rawLimit = 300;
+      }
     },
     iconOf(cat) {
       return CAT_ICONS[cat] || 'activity';
@@ -1174,23 +1349,29 @@ export default {
       const b = parseInt(hex.slice(5, 7), 16);
       return `rgba(${r}, ${g}, ${b}, ${alpha || 0.14})`;
     },
+    /**
+     * 日历色块：分类色只做「语义边条」和一层极淡的底色。
+     * 之前整块铺高饱和纯色 + 白字 + 文字阴影，像 Excel 甘特图，
+     * 也是整个界面最显廉价的一处。
+     */
+    calBlockStyle(b) {
+      const cat = b.category;
+      // 15 分钟的块只有一格高，块间缝要收窄，否则文字被挤没
+      const gap = b.height < 1.2 ? 2 : 4;
+      return {
+        top: b.top + '%',
+        height: `calc(${b.height}% - ${gap}px)`,
+        '--cat': this.colorOf(cat),
+        background: this.softColor(cat, this.theme === 'light' ? 0.11 : 0.16),
+        color: 'var(--text-primary)'
+      };
+    },
     cardBg(cat) {
       return this.softColor(cat, 0.07);
     },
     noteOf(b) {
       if (b.titles && b.titles.length) return b.titles.join(' · ');
       return b.category || '—';
-    },
-    segStyle(b) {
-      const style = {
-        top: (b.startMin * PX_PER_MIN) + 'px',
-        height: Math.max(3, b.durationMin * PX_PER_MIN) + 'px'
-      };
-      if (b.type === 'activity') {
-        style.background = this.softColor(b.category, 0.32);
-        style.borderLeft = `3px solid ${this.colorOf(b.category)}`;
-      }
-      return style;
     },
     consumeFocus() {
       const t = this.focusTarget;
@@ -1258,7 +1439,7 @@ export default {
         if (res && res.ok) {
           this.manualOpen = false;
           this.manualTitle = '';
-          this.$emit('refresh');
+          await this.refreshAfterWrite();
         } else {
           this.$emit('manual-error', (res && res.error) || '保存失败');
         }
@@ -1315,22 +1496,24 @@ export default {
 .stat-strip {
   display: flex;
   align-items: center;
-  padding: var(--sp-3) var(--sp-2);
+  padding: var(--sp-4) var(--sp-3);
   border-radius: var(--r-lg);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm);
 }
 .stat-cell {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 5px;
   min-width: 0;
 }
 .stat-cell b {
   font-size: var(--fs-20);
   font-weight: var(--fw-semibold);
+  letter-spacing: -0.025em;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1344,8 +1527,8 @@ export default {
 }
 .stat-div {
   width: 1px;
-  height: 28px;
-  background: var(--border-default);
+  height: 24px;
+  background: var(--border-subtle);
   flex: none;
 }
 
@@ -1379,7 +1562,7 @@ export default {
   top: calc(100% + 6px);
   left: 0;
   z-index: 20;
-  min-width: 168px;
+  min-width: 196px;
   padding: 5px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
@@ -1387,7 +1570,9 @@ export default {
   box-shadow: var(--shadow-lg);
 }
 .view-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 8px 10px;
   text-align: left;
@@ -1400,6 +1585,20 @@ export default {
 }
 .view-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .view-menu button.active { color: var(--accent); background: var(--accent-soft); }
+.view-menu .vm-label { flex: 1; }
+.view-menu small {
+  font-size: var(--fs-10);
+  color: var(--text-tertiary);
+  padding: 1px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-full);
+}
+.view-menu-sep {
+  display: block;
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border-subtle);
+}
 .view-date {
   flex: 1;
   text-align: center;
@@ -1479,20 +1678,22 @@ export default {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
+  padding: 12px 14px;
+  border: 1px solid transparent;
   border-left: 3px solid var(--accent);
   border-radius: var(--r-md);
+  transition: box-shadow var(--dur-1) var(--ease), transform var(--dur-1) var(--ease);
 }
-.card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tl-card:hover { box-shadow: var(--shadow-sm); }
+.card-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .card-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: var(--r-sm);
   flex: none;
 }
@@ -1515,6 +1716,25 @@ export default {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
+/* 三点按钮是时间轴卡片唯一的编辑入口，得让人一眼看见 */
+.card-more {
+  flex: none;
+  width: 28px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-xs);
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 1px;
+  color: var(--text-tertiary);
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.card-more:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
 .card-note {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1527,9 +1747,9 @@ export default {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: var(--r-full);
-  font-size: var(--fs-10);
+  font-size: var(--fs-11);
 }
 .mini-tag { color: var(--text-tertiary); background: var(--bg-active); }
 .mini-tag.warn { color: var(--warning); background: var(--warning-soft); }
@@ -1558,46 +1778,18 @@ export default {
   font-weight: var(--fw-semibold);
 }
 .gap-label { flex: 1; font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text-secondary); }
-.gap-hint { font-size: var(--fs-11); color: var(--text-tertiary); }
-.gap-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  flex: none;
-  border: 0;
-  border-radius: 50%;
-  color: var(--on-accent);
-  background: var(--accent);
-  cursor: pointer;
-  transition: transform var(--dur-1) var(--ease);
-}
-.gap-add:hover { transform: scale(1.08); background: var(--accent-hover); }
-
-/* ---------- 日视图 ---------- */
-/* 记录层 / 展示层切换 */
-.layer-switch {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-sm);
-  background: var(--bg-inset);
-  border: 1px solid var(--border-subtle);
-}
-
-.layer-switch button {
-  padding: 3px 9px;
-  border-radius: var(--r-xs);
+.gap-hint {
   font-size: var(--fs-11);
   color: var(--text-tertiary);
+  white-space: nowrap;
+  transition: color var(--dur-1) var(--ease);
 }
-
-.layer-switch button.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
+.tl-card.is-gap {
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
 }
+.tl-card.is-gap:hover { border-color: var(--accent-border); }
+.tl-card.is-gap:hover .gap-hint { color: var(--accent); }
 
 /* ============ 日历 ============ */
 .cal-view {
@@ -1627,7 +1819,7 @@ export default {
 
 /* 日历本体：按「小时高度」排版并纵向滚动，15 分钟才有足够空间 */
 .cal-scroll {
-  --hour-h: 54px;
+  --hour-h: 96px;
   max-height: calc(100vh - 286px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -1691,9 +1883,9 @@ export default {
   position: relative;
   height: calc(var(--hour-h) * 24);
   border-radius: var(--r-sm);
-  background: var(--bg-inset);
+  /* 轨道用纯表面色，小时线只留极淡的一根，色块才是主角 */
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  /* 每两小时一条浅刻度，块之间才有「时间感」 */
   background-image: repeating-linear-gradient(
     to bottom,
     var(--border-subtle) 0 1px,
@@ -1705,22 +1897,24 @@ export default {
 
 .cal-block {
   position: absolute;
-  left: 3px;
-  right: 3px;
+  left: 4px;
+  right: 4px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 4px 7px;
+  gap: 2px;
+  padding: 6px 9px;
   box-sizing: border-box;
-  border-radius: 5px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--cat) 16%, transparent);
+  border-left: 3px solid var(--cat);
   overflow: hidden;
   cursor: grab;
-  transition: box-shadow 120ms var(--ease), transform 120ms var(--ease), opacity 120ms var(--ease);
+  transition: box-shadow var(--dur-1) var(--ease), transform var(--dur-1) var(--ease),
+    opacity var(--dur-1) var(--ease);
 }
 
 .cal-block:hover {
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-md);
   transform: translateY(-1px);
   z-index: 3;
 }
@@ -1730,24 +1924,50 @@ export default {
 .cal-block.is-selected {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+  box-shadow: var(--shadow-md);
+  z-index: 4;
 }
 
 /* 拖动中把原块压暗，视线跟着预览块走 */
-.cal-block.is-dim { opacity: 0.35; }
+.cal-block.is-dim { opacity: 0.4; }
 
-/* 半小时以内的块：只留一条色带，文字放不下就不放 */
-.cal-block.is-thin { padding: 0 5px; border-radius: 4px; }
-.cal-block.is-thin .cal-block-title { display: none; }
+/* 15 分钟的块：参考滴答清单改成单行横条，标题和时间都看得见。
+   之前这里直接 display:none 把标题藏了，正是「15 分钟任务看不见」的根因。 */
+.cal-block.is-thin {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--r-xs);
+}
+.cal-block.is-thin .cal-block-title {
+  flex: 1;
+  min-width: 0;
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cal-block.is-thin .cal-block-note { display: none; }
 
-/* 标注过的段用左边一条实线区分，比斜纹安静 */
-.cal-block.is-manual { border-left: 3px solid rgba(255, 255, 255, 0.85); }
+/* 块内时间范围：大块在标题下方一行，短块贴在右侧 */
+.cal-block-range {
+  flex: none;
+  font-size: var(--fs-10);
+  line-height: 1.3;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cal-block.is-thin .cal-block-range { margin-left: auto; }
+
+/* 人工标注过的段用虚线描边区分，比整块斜纹安静 */
+.cal-block.is-manual { border-style: dashed; border-left-style: solid; }
 
 .cal-block-title {
   font-size: var(--fs-12);
   font-weight: var(--fw-medium);
-  line-height: 1.35;
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  line-height: 1.4;
+  color: var(--text-primary);
   /* 允许两行：一行往往只能看到三五个字，等于什么都没写 */
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1758,8 +1978,8 @@ export default {
 
 .cal-block-note {
   font-size: var(--fs-11);
-  line-height: 1.4;
-  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.45;
+  color: var(--text-secondary);
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
@@ -1784,7 +2004,7 @@ export default {
   left: 1px;
   right: 1px;
   z-index: 6;
-  border-radius: 5px;
+  border-radius: var(--r-sm);
   border: 2px dashed var(--accent);
   background: var(--accent-soft);
   pointer-events: none;
@@ -1794,7 +2014,7 @@ export default {
   overflow: hidden;
 }
 
-.cal-ghost.is-new { background: rgba(255, 255, 255, 0.12); }
+.cal-ghost.is-new { background: var(--bg-elevated); }
 
 .ghost-label {
   font-size: var(--fs-10);
@@ -1821,11 +2041,11 @@ export default {
 .ctx-menu {
   position: fixed;
   z-index: 2100;
-  min-width: 152px;
-  padding: 4px;
+  min-width: 190px;
+  padding: 5px;
   display: flex;
   flex-direction: column;
-  border-radius: 9px;
+  border-radius: var(--r-md);
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
@@ -1845,9 +2065,18 @@ export default {
   color: var(--text-primary);
 }
 
-.ctx-menu button.danger:hover {
+/* 删除是破坏性操作，默认就该是红的，不能只在 hover 才显形 */
+.ctx-menu button.danger {
+  margin-top: 2px;
   color: var(--danger);
   background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  font-weight: var(--fw-medium);
+}
+
+.ctx-menu button.danger:hover {
+  color: var(--text-inverse);
+  background: var(--danger);
 }
 
 .ctx-sep {
@@ -1900,11 +2129,74 @@ export default {
   opacity: 0.75;
 }
 
+.rl-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.rl-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  max-width: 320px;
+  padding: 0 9px;
+  height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+
+.rl-search:focus-within { border-color: var(--accent); color: var(--accent); }
+
+.rl-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: var(--fs-11);
+  color: var(--text-primary);
+}
+
+.rl-order {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  flex: none;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+}
+
+.rl-order:hover { background: var(--bg-hover); color: var(--text-primary); }
+
 .rl-list {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   overflow: hidden;
 }
+
+.rl-hour {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px var(--sp-3);
+  background: var(--bg-inset);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  color: var(--text-tertiary);
+  letter-spacing: .04em;
+}
+
+.rl-hour:first-child { border-top: none; }
+.rl-hour em { font-style: normal; font-weight: normal; opacity: .7; }
 
 .rl-row {
   display: grid;
@@ -1916,144 +2208,21 @@ export default {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.rl-row:last-child { border-bottom: none; }
-.rl-row:nth-child(odd) { background: var(--bg-inset); }
+.rl-row:hover { background: var(--bg-hover); }
 .rl-time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .rl-app { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rl-dur { text-align: right; color: var(--text-tertiary); }
 
-.day-view {
-  position: relative;
-  padding: var(--sp-2) 0 0;
-  overflow-x: auto;
-}
-.day-grid { display: flex; align-items: flex-start; min-width: 320px; }
-.day-ruler {
-  position: relative;
-  width: 52px;
-  flex: none;
-}
-.hour-tick {
-  position: absolute;
-  left: 0;
-  width: 52px;
-  transform: translateY(-50%);
-  font-family: var(--font-mono);
-  font-size: var(--fs-10);
-  color: var(--text-tertiary);
-  text-align: right;
-  padding-right: 8px;
-}
-.hour-tick.is-last { transform: translateY(-100%); }
-.day-track {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  border-radius: var(--r-sm);
-  background: var(--bg-inset);
-  border: 1px solid var(--border-subtle);
-}
-.hour-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: var(--border-subtle);
-  pointer-events: none;
-}
-.day-seg {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  border-radius: 3px;
-  overflow: hidden;
-  cursor: default;
-}
-.seg-label {
-  display: block;
-  padding: 3px 7px;
-  font-size: var(--fs-10);
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.day-gap {
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed var(--border-strong);
-  border-radius: 3px;
-  color: var(--text-tertiary);
-  font-size: var(--fs-10);
-  background: repeating-linear-gradient(
-    -45deg, transparent, transparent 6px, var(--bg-hover) 6px, var(--bg-hover) 12px
-  );
-  cursor: pointer;
-}
-.day-gap:hover { border-color: var(--accent); color: var(--accent); }
-.future-mask {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-overlay);
-  border-radius: 0 0 var(--r-sm) var(--r-sm);
-  color: var(--text-tertiary);
+.rl-more {
+  width: 100%;
+  padding: 9px;
   font-size: var(--fs-11);
-  pointer-events: none;
+  color: var(--accent);
+  background: var(--bg-elevated);
 }
-.now-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--danger);
-  z-index: 5;
-  pointer-events: none;
-}
-.now-line span {
-  position: absolute;
-  right: 4px;
-  top: -16px;
-  font-size: var(--fs-10);
-  color: var(--danger);
-}
-.day-legend {
-  display: flex;
-  gap: var(--sp-4);
-  flex-wrap: wrap;
-  margin: var(--sp-3) 0 0 52px;
-  font-size: var(--fs-11);
-  color: var(--text-tertiary);
-}
-.day-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.lg-dot { width: 10px; height: 10px; border-radius: 2px; background: var(--accent); opacity: .6; }
-.lg-gap { width: 10px; height: 10px; border-radius: 2px; border: 1px dashed var(--border-strong); }
 
-/* ---------- 明细 ---------- */
-.tl-list.raw { display: flex; flex-direction: column; }
-.raw-row {
-  display: grid;
-  grid-template-columns: 46px 100px 1fr auto;
-  gap: var(--sp-2);
-  align-items: center;
-  padding: 7px 4px;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-11);
-}
-.raw-time { font-family: var(--font-mono); color: var(--text-tertiary); }
-.raw-app { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
-.raw-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
-.raw-dur { font-family: var(--font-mono); color: var(--text-tertiary); }
-.raw-badge { margin-left: 4px; color: var(--warning); }
+.rl-more:hover { background: var(--accent-soft); }
 
 /* ---------- 悬浮按钮 ---------- */
 .fab {

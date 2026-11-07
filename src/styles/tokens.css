@@ -15,19 +15,21 @@
   --sp-8: 32px;
   --sp-10: 40px;
 
-  /* 字号 */
-  --fs-10: 10px;
-  --fs-11: 11px;
-  --fs-12: 12px;
-  --fs-13: 13px;
-  --fs-14: 14px;
-  --fs-16: 16px;
-  --fs-20: 20px;
-  --fs-26: 26px;
-  --fs-32: 32px;
-  --fs-40: 40px;
-  --fs-48: 48px;
-  --fs-56: 56px;
+  /* 字号：整体上移一档。
+     之前 10/11px 占了绝大多数，正文基准只有 13px，在 100% DPI 的 Windows 上
+     显得又小又挤。正文 14、辅助 12、微标签 11，是成熟桌面工具常见的下限。 */
+  --fs-10: 11px;
+  --fs-11: 12px;
+  --fs-12: 13px;
+  --fs-13: 14px;
+  --fs-14: 15px;
+  --fs-16: 17px;
+  --fs-20: 22px;
+  --fs-26: 28px;
+  --fs-32: 34px;
+  --fs-40: 42px;
+  --fs-48: 50px;
+  --fs-56: 58px;
 
   --lh-tight: 1.25;
   --lh-snug: 1.4;
@@ -37,13 +39,14 @@
   --fw-medium: 500;
   --fw-semibold: 600;
 
-  /* 圆角 */
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
+  /* 圆角：收敛到少数几档。之前 4/6/10/14/20/26 混用，
+     同一屏里出现五种弧度会显得没章法。 */
+  --r-xs: 5px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
   --r-xl: 20px;
-  --r-2xl: 26px;
+  --r-2xl: 24px;
   --r-full: 999px;
 
   /* 表面增强：让卡片从画布上浮起来（跨主题通用） */
@@ -84,22 +87,22 @@
 .theme-dark {
   color-scheme: dark;
 
-  --bg-canvas: #0b0c0e;
-  --bg-surface: #121418;
-  --bg-elevated: #191c21;
-  --bg-inset: #0e1013;
-  --bg-hover: rgba(255, 255, 255, 0.045);
-  --bg-active: rgba(255, 255, 255, 0.075);
-  --bg-overlay: rgba(8, 9, 11, 0.72);
+  --bg-canvas: #0d0f12;
+  --bg-surface: #15181d;
+  --bg-elevated: #1b1f25;
+  --bg-inset: #101318;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --bg-overlay: rgba(8, 9, 11, 0.7);
 
-  --text-primary: #eceef2;
-  --text-secondary: #9aa1ad;
-  --text-tertiary: #6b7280;
+  --text-primary: #eef0f4;
+  --text-secondary: #a2aab6;
+  --text-tertiary: #767e8c;
   --text-inverse: #0b0c0e;
 
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.1);
-  --border-strong: rgba(255, 255, 255, 0.18);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-default: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.16);
 
   --surface-sheen: rgba(255, 255, 255, 0.055);
 
@@ -110,9 +113,10 @@
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.14);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+  /* 阴影分层：一层贴地的细线 + 一层散开的环境影，比单层重影干净 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.3), 0 10px 28px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.44), 0 2px 8px rgba(0, 0, 0, 0.3);
 
   /* 强调色的明度基准（每种强调色只提供色相与饱和度） */
   --accent-l: 52%;
@@ -126,22 +130,22 @@
 .theme-light {
   color-scheme: light;
 
-  --bg-canvas: #f7f8fa;
+  --bg-canvas: #f6f7f9;
   --bg-surface: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-inset: #f1f3f6;
+  --bg-inset: #f1f3f7;
   --bg-hover: rgba(15, 23, 42, 0.04);
   --bg-active: rgba(15, 23, 42, 0.07);
-  --bg-overlay: rgba(15, 23, 42, 0.3);
+  --bg-overlay: rgba(15, 23, 42, 0.28);
 
-  --text-primary: #0f172a;
-  --text-secondary: #5b6472;
-  --text-tertiary: #8a929e;
+  --text-primary: #141b26;
+  --text-secondary: #556072;
+  --text-tertiary: #939cab;
   --text-inverse: #ffffff;
 
-  --border-subtle: rgba(15, 23, 42, 0.07);
-  --border-default: rgba(15, 23, 42, 0.12);
-  --border-strong: rgba(15, 23, 42, 0.2);
+  --border-subtle: rgba(15, 23, 42, 0.055);
+  --border-default: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.16);
 
   --surface-sheen: rgba(255, 255, 255, 0.9);
 
@@ -152,9 +156,9 @@
   --danger: #dc2626;
   --danger-soft: rgba(220, 38, 38, 0.09);
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.14);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 2px 8px rgba(15, 23, 42, 0.05), 0 10px 28px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.04);
 
   --accent-l: 42%;
   --accent-hover-delta: -7%;
@@ -164,14 +168,14 @@
 }
 
 /* ---------- 强调色：只给色相/饱和度，明度由明暗模式决定 ---------- */
-.accent-blue   { --accent-h: 222; --accent-sat: 82%; }
-.accent-violet { --accent-h: 262; --accent-sat: 76%; }
-.accent-rose   { --accent-h: 344; --accent-sat: 72%; }
+.accent-blue   { --accent-h: 222; --accent-sat: 72%; }
+.accent-violet { --accent-h: 262; --accent-sat: 68%; }
+.accent-rose   { --accent-h: 344; --accent-sat: 64%; }
 
 /* 绿/青/琥珀偏亮，白字读不清，改用深色文字 */
-.accent-green  { --accent-h: 158; --accent-sat: 58%; --on-accent: #05120c; }
-.accent-teal   { --accent-h: 190; --accent-sat: 78%; --on-accent: #04141a; }
-.accent-amber  { --accent-h: 34;  --accent-sat: 88%; --accent-l: 50%; --on-accent: #1a1206; }
+.accent-green  { --accent-h: 158; --accent-sat: 52%; --on-accent: #05120c; }
+.accent-teal   { --accent-h: 190; --accent-sat: 68%; --on-accent: #04141a; }
+.accent-amber  { --accent-h: 34;  --accent-sat: 78%; --accent-l: 50%; --on-accent: #1a1206; }
 
 /* ---------- 强调色派生变量（必须在上面两组之后声明） ---------- */
 .theme-dark, .theme-light {

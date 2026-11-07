@@ -23,6 +23,7 @@ const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
 const { ApiServer, generateToken } = require('./apiServer');
 const analytics = require('./analytics');
+const { DidaSync } = require('./didaSync');
 
 /**
  * 图标资源路径。打包后放在 resources 目录（见 package.json extraResources），
@@ -73,6 +74,20 @@ const windowMonitor = new WindowMonitor();
 const summarizer = new Summarizer();
 const logManager = new LogManager(customPath);
 const arhatManager = new ArhatManager(customPath);
+
+/** 推给渲染层的统一出口；窗口可能还没创建或正在销毁 */
+function broadcast(channel, payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  } catch (_) { /* 窗口切换期忽略 */ }
+}
+
+const didaSync = new DidaSync({
+  getConfig: () => configManager.getConfig(),
+  getDataDir: () => storageManager.getDataDir(),
+  broadcast,
+  buildDayReport: (dir, date, options) => analytics.buildDayReport(dir, date, options)
+});
 
 // --- 专注助手（番茄 / 沉浸 / 罗汉） ---
 
@@ -550,8 +565,14 @@ function startMonitoring() {
   const config = configManager.getConfig();
 
   logManager.addLog('开始记录', 'info');
-
   activityRecorder.start();
+
+  // AI 是插件：关闭或没填 Key 时连定时摘要定时器都不启动，避免后台静默调模型 / 刷错误提示。
+  // 运行时开启插件会由 save-config 重启监控，这里会重新走到这一步。
+  if (!config.ai?.enabled || !config.api?.apiKey) {
+    logManager.addLog('AI 能力未启用或缺少 API Key，跳过自动摘要', 'info');
+    return;
+  }
 
   const schedules = config.summary?.schedules || [];
 
@@ -635,6 +656,7 @@ function stopMonitoring() {
 function quitApp() {
   app.isQuitting = true;
   stopMonitoring();
+  didaSync.stop();
   try {
     apiServer.stop();
   } catch (e) { /* ignore */ }
@@ -675,6 +697,9 @@ app.whenReady().then(() => {
   // 启动本地数据接口
   startBridge();
 
+  // 滴答同步插件：按各自间隔调度拉取 / 推送（推送默认关闭）
+  didaSync.start();
+
   // 浮窗计时每秒刷新
   setInterval(() => updateFloatWindow(), 1000);
 
@@ -708,10 +733,31 @@ ipcMain.handle('get-provider-presets', () => {
   return Summarizer.getProviderPresets();
 });
 
+// --- 滴答清单同步插件 ---
+ipcMain.handle('dida-status', () => didaSync.status());
+
+ipcMain.handle('dida-sync-now', async (event, payload) => {
+  const direction = (payload && payload.direction) || 'pull';
+  if (direction === 'push') return didaSync.push({ manual: true });
+  if (direction === 'both') {
+    const pull = await didaSync.pull({ manual: true });
+    const push = await didaSync.push({ manual: true });
+    return { pull, push };
+  }
+  return didaSync.pull({ manual: true });
+});
+
 ipcMain.handle('save-config', (event, config) => {
-  const prevPath = configManager.getConfig().storage?.customPath || '';
+  const prev = configManager.getConfig();
+  const prevPath = prev.storage?.customPath || '';
+  const didaJustEnabled = !prev.dida?.enabled && !!config.dida?.enabled;
   configManager.saveConfig(config);
   summarizer.updateConfig(config);
+
+  // 刚开启滴答同步时立即拉一次，不必等下一个定时窗口或手动点按钮
+  if (didaJustEnabled && config.dida?.pullFocus && config.dida?.token) {
+    setTimeout(() => { didaSync.pull({ manual: false }).catch(() => {}); }, 300);
+  }
 
   // 存储路径变化时立即切换数据目录，无需重启。
   // 三个管理器都是在启动时按 customPath 构造的，过去改路径只能重启才生效，
@@ -1209,6 +1255,10 @@ ipcMain.handle('focus-presets', () => {
 });
 
 ipcMain.handle('focus-start', (event, payload) => {
+  // 番茄钟插件关闭后，前端入口会隐藏；这里再挡一次，防止 IPC 被绕过
+  if (configManager.getConfig().focus?.enabled === false) {
+    return { active: false, error: '番茄钟插件已关闭' };
+  }
   const { mode, focusText, overrides } = payload || {};
   const state = focusManager.start(mode || 'pomodoro', focusText, overrides);
   createFocusWindow();

@@ -312,6 +312,12 @@ function readArhatSessions(dataDir, dateStr) {
   return Array.isArray(items) ? items : [];
 }
 
+/** 滴答专注只读镜像：由 electron/didaSync.js 落盘，删掉整个目录即可重拉 */
+function readDidaFocus(dataDir, dateStr) {
+  const items = safeReadJson(path.join(dataDir, 'dida', 'focus', `${dateStr}.json`), []);
+  return Array.isArray(items) ? items : [];
+}
+
 // ---------------------------------------------------------------------------
 // 分类
 // ---------------------------------------------------------------------------
@@ -750,27 +756,41 @@ function buildDayReport(dataDir, dateStr, options) {
 
   // 专注会话也是「一段时间里在做什么」的一种声明，必须参与同一套优先级消解，
   // 否则它和自动录制会各画一份，同一段时间被重复计算两次。
+  // 本地番茄钟与滴答清单拉来的专注属于同一层级（第二层级），合并成一份声明。
   const arhatSessions = readArhatSessions(dataDir, dateStr);
+  const didaSessions = readDidaFocus(dataDir, dateStr);
+  const focusClaims = [
+    ...arhatSessions.map(f => ({
+      from: new Date(f.startTime).getTime(),
+      dur: Number(f.durationMs) || 0,
+      text: f.focusText || '专注',
+      focusId: f.id
+    })),
+    ...didaSessions.map(f => ({
+      from: Number(f.startMs),
+      dur: Math.max(0, Number(f.durationMs) - Number(f.pauseMs || 0)),
+      text: f.title || '专注',
+      focusId: `dida:${f.id}`
+    }))
+  ];
   const focusAtoms = [];
-  for (const f of arhatSessions) {
-    const rawFrom = new Date(f.startTime).getTime();
-    const rawDur = Number(f.durationMs) || 0;
-    if (!Number.isFinite(rawFrom) || rawDur <= 0) continue;
+  for (const f of focusClaims) {
+    if (!Number.isFinite(f.from) || f.dur <= 0) continue;
     // 专注也服从「15 分钟一块」：起点向下对齐，时长至少一个块
-    const cv = new Date(rawFrom);
+    const cv = new Date(f.from);
     cv.setSeconds(0, 0);
     cv.setMinutes(Math.floor(cv.getMinutes() / 15) * 15);
     const from = cv.getTime();
-    const dur = Math.max(15, Math.round(rawDur / 60000 / 15) * 15) * 60000;
+    const dur = Math.max(15, Math.round(f.dur / 60000 / 15) * 15) * 60000;
     focusAtoms.push({
       ms: from,
       durationMs: dur,
       kind: 'active',
-      app: f.focusText || '专注',
-      title: f.focusText || '',
+      app: f.text,
+      title: f.text,
       category: '专注',
       source: 'focus',
-      focusId: f.id
+      focusId: f.focusId
     });
   }
 

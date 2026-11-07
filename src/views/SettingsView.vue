@@ -2,532 +2,448 @@
   <div class="settings">
     <div class="set-intro">
       <h2>设置</h2>
-      <p>记录方式、AI 模型与数据接口</p>
+      <p>插件能力、首页图表与数据</p>
     </div>
 
-    <section class="sec">
+    <div class="sec-nav">
+      <button
+        v-for="s in sections"
+        :key="s.id"
+        class="nav-chip"
+        :class="{ active: section === s.id }"
+        @click="goSection(s.id)"
+      >{{ s.label }}</button>
+    </div>
+
+    <p class="group-title">插件能力 <span>关闭开关后，该插件的全部设置会收起</span></p>
+
+    <!-- ---------------- 番茄钟 ---------------- -->
+    <section id="sec-pomodoro" class="sec plugin-sec">
       <div class="sec-head">
-        <Icon name="activity" :size="13" />
-        <span>记录</span>
+        <Icon name="target" :size="13" />
+        <span>番茄钟</span>
+        <span class="sec-badge" :class="{ on: pomodoroOn }">{{ pomodoroOn ? '已开启' : '已关闭' }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="pomodoroOn" @change="set('focus.enabled', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="pomodoroOn" class="chev" :class="{ open: !folded.pomodoro }" title="展开 / 收起" @click="toggleFold('pomodoro')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
       </div>
-      <div class="sec-body">
+      <div v-if="pomodoroOn && !folded.pomodoro" class="sec-body">
+        <p class="sec-desc">本地专注计时。若专注数据全部来自滴答清单，可以直接关闭这个插件。</p>
         <div class="row">
-          <span class="row-label">
-            空闲判定阈值
-            <span class="row-desc">连续无键鼠操作超过此时长记为空档，不计入有效工时</span>
-          </span>
+          <span class="row-label">专注时长</span>
           <div class="row-control sm">
-            <input
-              :value="monitoring.idleThresholdSec"
-              type="number" min="30" max="3600" step="30"
-              @change="num('monitoring.idleThresholdSec', $event.target.value, 30, 3600)"
-            >
-            <span class="unit">秒</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">
-            最短片段
-            <span class="row-desc">短于此时间的切换会并入上一段，避免时间线碎片化</span>
-          </span>
-          <div class="row-control sm">
-            <input
-              :value="monitoring.minSegmentSec"
-              type="number" min="0" max="60" step="1"
-              @change="num('monitoring.minSegmentSec', $event.target.value, 0, 60)"
-            >
-            <span class="unit">秒</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">
-            轮询间隔
-            <span class="row-desc">仅在无法常驻采样的平台生效</span>
-          </span>
-          <div class="row-control sm">
-            <input
-              :value="monitoring.interval"
-              type="number" min="5" max="300" step="5"
-              @change="num('monitoring.interval', $event.target.value, 5, 300)"
-            >
-            <span class="unit">秒</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="sec">
-      <div class="sec-head">
-        <Icon name="zen" :size="13" />
-        <span>专注模式</span>
-      </div>
-      <div class="sec-body">
-        <p class="sec-desc">番茄钟与沉浸模式的时长可自定义；罗汉模式不计时，只做当下这一件事。</p>
-
-        <div class="row">
-          <span class="row-label">番茄钟 · 专注</span>
-          <div class="row-control sm">
-            <input
-              :value="focus.pomodoro && focus.pomodoro.workMin"
-              type="number" min="5" max="120" step="5"
-              @change="num('focus.pomodoro.workMin', $event.target.value, 5, 120)"
-            >
+            <input type="number" min="5" max="120" step="5" :value="focus.pomodoro && focus.pomodoro.workMin" @change="num('focus.pomodoro.workMin', $event.target.value, 5, 120)">
             <span class="unit">分钟</span>
           </div>
         </div>
-
         <div class="row">
-          <span class="row-label">番茄钟 · 休息</span>
+          <span class="row-label">休息时长</span>
           <div class="row-control sm">
-            <input
-              :value="focus.pomodoro && focus.pomodoro.breakMin"
-              type="number" min="0" max="60" step="1"
-              @change="num('focus.pomodoro.breakMin', $event.target.value, 0, 60)"
-            >
+            <input type="number" min="0" max="60" step="1" :value="focus.pomodoro && focus.pomodoro.breakMin" @change="num('focus.pomodoro.breakMin', $event.target.value, 0, 60)">
             <span class="unit">分钟</span>
           </div>
         </div>
-
         <div class="row">
-          <span class="row-label">番茄钟 · 每组轮数</span>
+          <span class="row-label">每组轮数</span>
           <div class="row-control sm">
-            <input
-              :value="focus.pomodoro && focus.pomodoro.rounds"
-              type="number" min="0" max="12" step="1"
-              @change="num('focus.pomodoro.rounds', $event.target.value, 0, 12)"
-            >
+            <input type="number" min="0" max="12" step="1" :value="focus.pomodoro && focus.pomodoro.rounds" @change="num('focus.pomodoro.rounds', $event.target.value, 0, 12)">
             <span class="unit">轮</span>
           </div>
         </div>
-
-        <div class="row">
-          <span class="row-label">沉浸 · 专注</span>
-          <div class="row-control sm">
-            <input
-              :value="focus.immersive && focus.immersive.workMin"
-              type="number" min="5" max="120" step="5"
-              @change="num('focus.immersive.workMin', $event.target.value, 5, 120)"
-            >
-            <span class="unit">分钟</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">沉浸 · 休息</span>
-          <div class="row-control sm">
-            <input
-              :value="focus.immersive && focus.immersive.breakMin"
-              type="number" min="0" max="60" step="1"
-              @change="num('focus.immersive.breakMin', $event.target.value, 0, 60)"
-            >
-            <span class="unit">分钟</span>
-          </div>
-        </div>
       </div>
+      <div v-else-if="!pomodoroOn" class="sec-collapsed">已关闭 · 开启后可自定义计时</div>
     </section>
 
-    <section class="sec">
+    <!-- ---------------- AI 能力 ---------------- -->
+    <section id="sec-ai" class="sec plugin-sec">
       <div class="sec-head">
         <Icon name="zap" :size="13" />
         <span>AI 能力</span>
-        <span class="sec-badge" :class="{ on: aiOn }">{{ aiOn ? '已启用' : '未启用' }}</span>
+        <span class="sec-badge" :class="{ on: aiOn }">{{ aiOn ? '已开启' : '已关闭' }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="aiOn" @change="set('ai.enabled', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="aiOn" class="chev" :class="{ open: !folded.ai }" title="展开 / 收起" @click="toggleFold('ai')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
       </div>
-      <div class="sec-body">
-        <div class="ai-hero" :class="{ on: aiOn }">
-          <div class="ai-hero-main">
-            <strong class="ai-hero-title">
-              <Icon name="zap" :size="12" />
-              让记录越用越聪明
-            </strong>
-            <p class="ai-hero-desc">
-              <template v-if="aiOn">已开启：会把每天整理成「做了什么 / 时间去哪了 / 值得注意」，并可按设定时段自动生成。</template>
-              <template v-else>未开启：应用只在本机记录窗口活动、统计时长，不联网、不调用模型。</template>
-            </p>
-          </div>
-          <label class="switch">
-            <input
-              type="checkbox"
-              :checked="aiOn"
-              @change="set('ai.enabled', $event.target.checked)"
-            >
-            <span class="switch-track"><span class="switch-thumb"></span></span>
-          </label>
-        </div>
-
-        <p v-if="!aiOn" class="ai-model-hint">下面的模型配置可以先填好，开启后立即生效。</p>
-
-        <div class="ai-model" :class="{ 'is-off': !aiOn }">
+      <div v-if="aiOn && !folded.ai" class="sec-body">
+        <p class="sec-desc">开启后由模型做归类、汇总与回顾；关闭时应用只在本机记录与统计，不会联网调用模型。</p>
         <div class="row">
           <span class="row-label">服务商</span>
           <div class="row-control">
-            <select
-              :value="api.provider"
-              @change="$emit('provider-change', $event.target.value)"
-            >
-              <option v-for="(preset, key) in providerPresets" :key="key" :value="key">
-                {{ preset.name }}
-              </option>
+            <select :value="api.provider" @change="$emit('provider-change', $event.target.value)">
+              <option v-for="(preset, key) in providerPresets" :key="key" :value="key">{{ preset.name }}</option>
             </select>
           </div>
         </div>
-
         <div class="row">
           <span class="row-label">API Key</span>
-          <div class="row-control">
-            <input
-              :value="api.apiKey"
-              type="password"
-              placeholder="sk-..."
-              autocomplete="off"
-              @change="set('api.apiKey', $event.target.value)"
-            >
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">Base URL</span>
           <div class="row-control wide">
-            <input
-              :value="api.baseUrl"
-              type="text"
-              spellcheck="false"
-              @change="set('api.baseUrl', $event.target.value)"
-            >
+            <input :value="api.apiKey" type="password" placeholder="sk-..." autocomplete="off" @change="set('api.apiKey', $event.target.value)">
           </div>
         </div>
-
-        <div class="row">
-          <span class="row-label">模型名称</span>
-          <div class="row-control wide">
-            <input
-              :value="api.modelName"
-              type="text"
-              spellcheck="false"
-              @change="set('api.modelName', $event.target.value)"
-            >
+        <div class="row-block">
+          <span class="row-label">模型</span>
+          <div class="model-chips">
+            <button v-for="m in modelPresets" :key="m.id" class="chip" :class="{ active: api.modelName === m.id }" :title="m.note" @click="set('api.modelName', m.id)">{{ m.label }}</button>
           </div>
-        </div>
+          <div class="row-control wide model-custom">
+            <input type="text" :value="api.modelName" spellcheck="false" @change="set('api.modelName', $event.target.value)">
+          </div>
+          <p class="hint">deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用。当前推荐 deepseek-flash（V4.1 Flash），深度推理用 deepseek-v4-pro。</p>
         </div>
       </div>
+      <div v-else-if="!aiOn" class="sec-collapsed">已关闭 · 开启后可配置模型与 API Key</div>
     </section>
 
-    <section class="sec">
+    <!-- ---------------- MCP 接口 ---------------- -->
+    <section id="sec-bridge" class="sec plugin-sec">
       <div class="sec-head">
-        <Icon name="summary" :size="13" />
-        <span>摘要</span>
+        <Icon name="plug" :size="13" />
+        <span>MCP 接口</span>
+        <span class="sec-badge" :class="{ on: bridgeOn }">{{ bridgeOn ? '运行中' : (bridgeEnabled ? '未启动' : '已关闭') }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="bridgeEnabled" :disabled="bridgeLoading" @change="$emit('bridge-toggle', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="bridgeEnabled" class="chev" :class="{ open: !folded.bridge }" title="展开 / 收起" @click="toggleFold('bridge')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
       </div>
-      <div class="sec-body">
+      <div v-if="bridgeEnabled && !folded.bridge" class="sec-body">
+        <p class="sec-desc">把聚合后的工时数据开放给支持 MCP 的客户端，配一次即可用自然语言查询。</p>
         <div class="row">
-          <span class="row-label">回溯时长</span>
-          <div class="row-control sm">
-            <input
-              :value="summary.lookbackMinutes"
-              type="number" min="5" max="1440" step="5"
-              @change="num('summary.lookbackMinutes', $event.target.value, 5, 1440)"
-            >
-            <span class="unit">分钟</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">最大输出</span>
-          <div class="row-control sm">
-            <input
-              :value="summary.maxTokens"
-              type="number" min="100" max="8000" step="100"
-              @change="num('summary.maxTokens', $event.target.value, 100, 8000)"
-            >
-            <span class="unit">token</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">
-            压缩活动
-            <span class="row-desc">把同类窗口合并后再送给模型，省 token</span>
-          </span>
+          <span class="row-label">端口<span class="row-desc" v-if="bridgeOn">{{ bridge.url }}</span><span class="row-desc" v-else>端口被占用时会自动顺延</span></span>
           <div class="row-control">
-            <input
-              type="checkbox"
-              :checked="summary.compressActivities !== false"
-              @change="set('summary.compressActivities', $event.target.checked)"
-            >
+            <input :value="bridgePortInput" type="number" min="1024" max="65535" class="port-input" @input="$emit('update:bridgePortInput', $event.target.value)">
+            <button class="btn btn-secondary btn-sm" :disabled="bridgeLoading" @click="$emit('bridge-apply-port')">应用</button>
           </div>
         </div>
-
-        <div class="row-block">
-          <span class="row-label">自定义提示词</span>
-          <textarea
-            :value="summary.prompt"
-            rows="3"
-            placeholder="留空使用内置提示词"
-            @change="set('summary.prompt', $event.target.value)"
-          ></textarea>
-        </div>
-
-        <div class="row-block">
-          <span class="row-label">自动总结时段</span>
-          <div
-            v-for="(s, i) in scheduleList"
-            :key="i"
-            class="sched-row"
-          >
-            <input
-              :value="s.startTime"
-              type="time"
-              @change="set('summary.schedules.' + i + '.startTime', $event.target.value)"
-            >
-            <span class="sched-sep">→</span>
-            <input
-              :value="s.endTime"
-              type="time"
-              @change="set('summary.schedules.' + i + '.endTime', $event.target.value)"
-            >
-            <button class="btn-icon" title="删除" @click="$emit('remove-schedule', i)">
-              <Icon name="x" :size="13" />
-            </button>
+        <div class="row">
+          <span class="row-label">访问 Token</span>
+          <div class="row-control">
+            <code class="token-box">{{ bridge ? bridge.token : '' }}</code>
+            <button class="btn-icon" title="复制" @click="copy(bridge ? bridge.token : '', 'token')"><Icon :name="bridgeCopied === 'token' ? 'check' : 'copy'" :size="13" /></button>
+            <button class="btn-icon" title="重新生成" :disabled="bridgeLoading" @click="$emit('bridge-regen')"><Icon name="refresh" :size="13" /></button>
           </div>
-          <button class="btn btn-ghost btn-sm add-sched" @click="$emit('add-schedule')">
-            <Icon name="plus" :size="12" /> 添加时段
-          </button>
-          <p class="hint">到达结束时间时，自动生成该时段的摘要。</p>
+        </div>
+        <div class="row">
+          <span class="row-label">连通性</span>
+          <div class="row-control">
+            <button class="btn btn-secondary btn-sm" :disabled="bridgeTesting" @click="$emit('bridge-test')">{{ bridgeTesting ? '测试中' : '测试' }}</button>
+            <button v-if="bridgeOn" class="btn btn-ghost btn-sm" @click="$emit('bridge-open')">打开 <Icon name="external" :size="11" /></button>
+            <span v-if="bridgeTestResult" class="test-result" :class="{ ok: bridgeTestResult.ok }">{{ bridgeTestResult.ok ? 'HTTP ' + bridgeTestResult.statusCode : (bridgeTestResult.error || '失败') }}</span>
+          </div>
+        </div>
+        <div class="mcp-box">
+          <div class="mcp-head">
+            <span>MCP 配置</span>
+            <button class="btn btn-ghost btn-sm" @click="copy(bridge ? bridge.mcpConfig : '', 'mcp')"><Icon :name="bridgeCopied === 'mcp' ? 'check' : 'copy'" :size="11" /> {{ bridgeCopied === 'mcp' ? '已复制' : '复制' }}</button>
+          </div>
+          <pre class="mcp-pre">{{ bridge ? bridge.mcpConfig : '加载中…' }}</pre>
+          <p class="hint">粘贴到客户端的 <code>mcp.json</code> 后重启。可用工具：日报告、区间报告、应用排行、关键词检索、时间线。</p>
         </div>
       </div>
+      <div v-else-if="!bridgeEnabled" class="sec-collapsed">已关闭 · 本地数据服务已停止</div>
     </section>
 
-    <section class="sec">
+    <!-- ---------------- 滴答同步 ---------------- -->
+    <section id="sec-dida" class="sec plugin-sec">
+      <div class="sec-head">
+        <Icon name="refresh" :size="13" />
+        <span>滴答同步</span>
+        <span class="sec-badge" :class="{ on: didaOn }">{{ didaOn ? '已开启' : '已关闭' }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="didaOn" @change="set('dida.enabled', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="didaOn" class="chev" :class="{ open: !folded.dida }" title="展开 / 收起" @click="toggleFold('dida')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
+      </div>
+      <div v-if="didaOn && !folded.dida" class="sec-body">
+        <p class="sec-desc">拉取与推送是两条独立通道，各有自己的开关和同步间隔。</p>
+
+        <div class="stat-grid">
+          <div class="stat-item"><b>{{ didaStat.pulledTotal || 0 }}</b><span>累计拉取 · 条</span></div>
+          <div class="stat-item"><b>{{ didaStat.pushedTotal || 0 }}</b><span>累计推送 · 条</span></div>
+          <div class="stat-item"><b>{{ didaStat.todayFocusCount || 0 }}</b><span>今日专注 · {{ didaStat.todayFocusMinutes || 0 }} 分钟</span></div>
+        </div>
+
+        <div class="row">
+          <span class="row-label">API 口令<span class="row-desc">网页版滴答 → 设置 → 账户与安全 → API 口令；只保存在本机</span></span>
+          <div class="row-control wide">
+            <input type="password" :value="dida.token" placeholder="未填写" autocomplete="off" @change="set('dida.token', $event.target.value)">
+          </div>
+        </div>
+
+        <div class="hr"></div>
+        <div class="sub-head">
+          <span><strong>拉取专注</strong><em>把滴答的专注记录作为展示层第二层级</em></span>
+          <label class="switch">
+            <input type="checkbox" :checked="dida.pullFocus !== false" @change="set('dida.pullFocus', $event.target.checked)">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
+        <template v-if="dida.pullFocus !== false">
+          <div class="row">
+            <span class="row-label">同步间隔</span>
+            <div class="row-control sm">
+              <input type="number" min="5" max="1440" step="5" :value="dida.pullIntervalMin || 30" @change="num('dida.pullIntervalMin', $event.target.value, 5, 1440)">
+              <span class="unit">分钟</span>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-label">同步范围<span class="row-desc">超过 30 天会按月自动分页</span></span>
+            <div class="row-control sm">
+              <input type="number" min="1" max="365" :value="dida.syncDays || 30" @change="num('dida.syncDays', $event.target.value, 1, 365)">
+              <span class="unit">天</span>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-label">启动时自动同步</span>
+            <div class="row-control">
+              <label class="switch">
+                <input type="checkbox" :checked="dida.autoSyncOnStart !== false" @change="set('dida.autoSyncOnStart', $event.target.checked)">
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </label>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-label">状态<span class="row-desc">{{ lastPullText }}</span></span>
+            <div class="row-control">
+              <button class="btn btn-primary btn-sm" :disabled="syncing.pull" @click="syncDida('pull')">{{ syncing.pull ? '同步中…' : '立即拉取' }}</button>
+            </div>
+          </div>
+        </template>
+        <div class="hr"></div>
+        <div class="sub-head">
+          <span><strong>推送展示层</strong><em>把标注写成滴答任务；默认关闭，不会写入任何内容</em></span>
+          <label class="switch">
+            <input type="checkbox" :checked="dida.pushEnabled === true" @change="set('dida.pushEnabled', $event.target.checked)">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
+        <div v-if="dida.pushEnabled === true">
+          <p class="danger-note">这条通道会真的往滴答清单里创建任务。请先确认目标清单，评估好再开启。</p>
+          <div class="row">
+            <span class="row-label">推送间隔</span>
+            <div class="row-control sm">
+              <input type="number" min="5" max="1440" step="5" :value="dida.pushIntervalMin || 60" @change="num('dida.pushIntervalMin', $event.target.value, 5, 1440)">
+              <span class="unit">分钟</span>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-label">目标清单 ID<span class="row-desc">留空时推送不会执行</span></span>
+            <div class="row-control wide">
+              <input type="text" :value="dida.pushProjectId" placeholder="滴答清单项目 ID" spellcheck="false" @change="set('dida.pushProjectId', $event.target.value)">
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-label">状态<span class="row-desc">{{ lastPushText }}</span></span>
+            <div class="row-control">
+              <button class="btn btn-secondary btn-sm" :disabled="syncing.push" @click="syncDida('push')">{{ syncing.push ? '推送中…' : '立即推送' }}</button>
+            </div>
+          </div>
+        </div>
+        <p v-else class="hint">当前为「关闭」。两个方向相互独立，关掉推送不影响专注拉取。</p>
+        <p v-if="didaStat.lastError" class="danger-note">{{ didaStat.lastError }}</p>
+      </div>
+      <div v-else-if="!didaOn" class="sec-collapsed">已关闭 · 开启后可配置拉取与推送通道</div>
+    </section>
+
+    <!-- ---------------- 首页与图表 ---------------- -->
+    <section id="sec-dashboard" class="sec">
+      <div class="sec-head">
+        <Icon name="grid" :size="13" />
+        <span>首页与图表</span>
+        <button class="chev" :class="{ open: !folded.dashboard }" title="展开 / 收起" @click="toggleFold('dashboard')"><Icon name="chevronDown" :size="13" /></button>
+      </div>
+      <div v-if="!folded.dashboard" class="sec-body">
+        <div class="row">
+          <span class="row-label">首页插件坞<span class="row-desc">在首页最底部显示四个插件状态方块</span></span>
+          <div class="row-control">
+            <label class="switch">
+              <input type="checkbox" :checked="dashboard.showPluginDock !== false" @change="set('dashboard.showPluginDock', $event.target.checked)">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="row" v-for="c in dashboardCards" :key="c.key">
+          <span class="row-label">显示「{{ c.label }}」</span>
+          <div class="row-control">
+            <label class="switch">
+              <input type="checkbox" :checked="cardOn(c.key)" @change="set('dashboard.cards.' + c.key, $event.target.checked)">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="row">
+          <span class="row-label">热力图周数<span class="row-desc">同时改变首页热力图的跨度与标题</span></span>
+          <div class="row-control sm">
+            <input type="number" min="4" max="52" :value="dashboard.heatmapWeeks || 12" @change="num('dashboard.heatmapWeeks', $event.target.value, 4, 52)">
+            <span class="unit">周</span>
+          </div>
+        </div>
+      </div>
+      <div v-else class="sec-collapsed">已折叠</div>
+    </section>
+
+    <!-- ---------------- 外观 ---------------- -->
+    <section id="sec-appearance" class="sec">
       <div class="sec-head">
         <Icon name="palette" :size="13" />
         <span>外观</span>
+        <button class="chev" :class="{ open: !folded.appearance }" title="展开 / 收起" @click="toggleFold('appearance')"><Icon name="chevronDown" :size="13" /></button>
       </div>
-      <div class="sec-body">
+      <div v-if="!folded.appearance" class="sec-body">
         <div class="row-block">
-          <span class="row-label">
-            明暗
-            <span class="row-desc">决定背景与文字是深底还是浅底</span>
-          </span>
+          <span class="row-label">明暗</span>
           <div class="mode-row">
-            <button
-              v-for="m in modes"
-              :key="m.id"
-              class="mode-cell"
-              :class="[m.id, { active: theme === m.id }]"
-              @click="$emit('theme-change', m.id)"
-            >
+            <button v-for="m in modes" :key="m.id" class="mode-cell" :class="[m.id, { active: theme === m.id }]" @click="$emit('theme-change', m.id)">
               <span class="mode-preview"><span class="mp-bar"></span><span class="mp-line"></span></span>
               <span class="mode-name">{{ m.label }}</span>
               <Icon v-if="theme === m.id" name="check" :size="11" class="mode-check" />
             </button>
           </div>
         </div>
-
         <div class="row-block">
-          <span class="row-label">
-            强调色
-            <span class="row-desc">只改按钮、选中态与高亮的颜色，界面其余部分保持中性灰</span>
-          </span>
+          <span class="row-label">强调色</span>
           <div class="accent-row">
-            <button
-              v-for="a in accentOptions"
-              :key="a.id"
-              class="accent-cell"
-              :class="{ active: accent === a.id }"
-              :title="a.label"
-              @click="$emit('accent-change', a.id)"
-            >
-              <span class="accent-dot" :style="{ background: accentColor(a.id) }">
-                <Icon v-if="accent === a.id" name="check" :size="10" />
-              </span>
+            <button v-for="a in accentOptions" :key="a.id" class="accent-cell" :class="{ active: accent === a.id }" :title="a.label" @click="$emit('accent-change', a.id)">
+              <span class="accent-dot" :style="{ background: accentColor(a.id) }"><Icon v-if="accent === a.id" name="check" :size="10" /></span>
               <span class="accent-name">{{ a.label }}</span>
             </button>
           </div>
         </div>
-
         <div class="row">
-          <span class="row-label">
-            最小化时显示浮窗
-            <span class="row-desc">收起主窗口后，在桌面角落保留当前应用与计时</span>
-          </span>
+          <span class="row-label">最小化时显示浮窗</span>
           <div class="row-control">
-            <input
-              type="checkbox"
-              :checked="ui.floatWindow !== false"
-              @change="set('ui.floatWindow', $event.target.checked)"
-            >
+            <label class="switch">
+              <input type="checkbox" :checked="ui.floatWindow !== false" @change="set('ui.floatWindow', $event.target.checked)">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
           </div>
         </div>
-
         <div class="row">
           <span class="row-label">开机自启动</span>
           <div class="row-control">
-            <input
-              type="checkbox"
-              :checked="autoLaunch"
-              @change="$emit('toggle-auto-launch', $event.target.checked)"
-            >
+            <label class="switch">
+              <input type="checkbox" :checked="autoLaunch" @change="$emit('toggle-auto-launch', $event.target.checked)">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
           </div>
         </div>
       </div>
+      <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
-    <section class="sec">
-      <div class="sec-head">
-        <Icon name="plug" :size="13" />
-        <span>AI 数据接口</span>
-        <span class="sec-badge" :class="{ on: isBridgeOn }">
-          {{ isBridgeOn ? '运行中' : (bridgeEnabled ? '未启动' : '已关闭') }}
-        </span>
-      </div>
-      <div class="sec-body">
-        <p class="sec-desc">
-          把聚合后的工时数据开放给 WorkBuddy、Claude 等支持 MCP 的客户端。配一次即可用自然语言查询。
-        </p>
-
-        <div class="row">
-          <span class="row-label">启用本地 HTTP</span>
-          <div class="row-control">
-            <input
-              type="checkbox"
-              :checked="bridgeEnabled"
-              :disabled="bridgeLoading"
-              @change="$emit('bridge-toggle', $event.target.checked)"
-            >
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">
-            端口
-            <span class="row-desc" v-if="isBridgeOn">{{ bridge.url }}</span>
-            <span class="row-desc" v-else>端口被占用时会自动顺延</span>
-          </span>
-          <div class="row-control">
-            <input
-              :value="bridgePortInput"
-              type="number" min="1024" max="65535"
-              class="port-input"
-              @input="$emit('update:bridgePortInput', $event.target.value)"
-            >
-            <button class="btn btn-secondary btn-sm" :disabled="bridgeLoading" @click="$emit('bridge-apply-port')">
-              应用
-            </button>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">访问 Token</span>
-          <div class="row-control">
-            <code class="token-box">{{ bridge ? bridge.token : '' }}</code>
-            <button class="btn-icon" title="复制" @click="copy(bridge ? bridge.token : '', 'token')">
-              <Icon :name="bridgeCopied === 'token' ? 'check' : 'copy'" :size="13" />
-            </button>
-            <button class="btn-icon" title="重新生成" :disabled="bridgeLoading" @click="$emit('bridge-regen')">
-              <Icon name="refresh" :size="13" />
-            </button>
-          </div>
-        </div>
-
-        <div class="row">
-          <span class="row-label">连通性</span>
-          <div class="row-control">
-            <button class="btn btn-secondary btn-sm" :disabled="bridgeTesting" @click="$emit('bridge-test')">
-              {{ bridgeTesting ? '测试中' : '测试' }}
-            </button>
-            <button v-if="isBridgeOn" class="btn btn-ghost btn-sm" @click="$emit('bridge-open')">
-              打开 <Icon name="external" :size="11" />
-            </button>
-            <span
-              v-if="bridgeTestResult"
-              class="test-result"
-              :class="{ ok: bridgeTestResult.ok }"
-            >
-              {{ bridgeTestResult.ok ? 'HTTP ' + bridgeTestResult.statusCode : (bridgeTestResult.error || '失败') }}
-            </span>
-          </div>
-        </div>
-
-        <div class="mcp-box">
-          <div class="mcp-head">
-            <span>MCP 配置</span>
-            <button class="btn btn-ghost btn-sm" @click="copy(bridge ? bridge.mcpConfig : '', 'mcp')">
-              <Icon :name="bridgeCopied === 'mcp' ? 'check' : 'copy'" :size="11" />
-              {{ bridgeCopied === 'mcp' ? '已复制' : '复制' }}
-            </button>
-          </div>
-          <pre class="mcp-pre">{{ bridge ? bridge.mcpConfig : '加载中…' }}</pre>
-          <p class="hint">
-            粘贴到客户端的 <code>mcp.json</code> 后重启。可用工具：日报告、区间报告、应用排行、关键词检索、时间线。
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <section class="sec">
+    <!-- ---------------- 数据 ---------------- -->
+    <section id="sec-data" class="sec">
       <div class="sec-head">
         <Icon name="database" :size="13" />
         <span>数据</span>
+        <button class="chev" :class="{ open: !folded.data }" title="展开 / 收起" @click="toggleFold('data')"><Icon name="chevronDown" :size="13" /></button>
       </div>
-      <div class="sec-body">
+      <div v-if="!folded.data" class="sec-body">
         <div class="row-block">
           <span class="row-label">存储路径</span>
           <code class="path-box" :title="storagePath">{{ storagePath || '默认路径' }}</code>
           <div class="path-actions">
             <button class="btn btn-secondary btn-sm" @click="$emit('select-storage')">更改</button>
-            <button
-              v-if="config.storage && config.storage.customPath"
-              class="btn btn-danger btn-sm"
-              @click="$emit('reset-storage')"
-            >恢复默认</button>
+            <button v-if="config.storage && config.storage.customPath" class="btn btn-danger btn-sm" @click="$emit('reset-storage')">恢复默认</button>
           </div>
           <p class="hint">指向 iCloud / OneDrive / 坚果云 目录可实现跨设备同步；更改后立即生效，无需重启。</p>
         </div>
-
         <div class="row-block">
           <span class="row-label">导出</span>
           <div class="btn-row">
-            <button class="btn btn-secondary btn-sm" @click="$emit('export-day')">
-              <Icon name="download" :size="12" /> 当日 JSON
-            </button>
-            <button class="btn btn-secondary btn-sm" @click="$emit('export-full-json')">
-              <Icon name="download" :size="12" /> 全部 JSON
-            </button>
-            <button class="btn btn-secondary btn-sm" @click="$emit('export-csv')">
-              <Icon name="download" :size="12" /> CSV
-            </button>
+            <button class="btn btn-secondary btn-sm" @click="$emit('export-day')"><Icon name="download" :size="12" /> 当日 JSON</button>
+            <button class="btn btn-secondary btn-sm" @click="$emit('export-full-json')"><Icon name="download" :size="12" /> 全部 JSON</button>
+            <button class="btn btn-secondary btn-sm" @click="$emit('export-csv')"><Icon name="download" :size="12" /> CSV</button>
           </div>
         </div>
-
         <div class="row-block">
           <span class="row-label">导入</span>
           <div class="btn-row">
-            <button class="btn btn-secondary btn-sm" @click="$emit('import-merge')">
-              <Icon name="upload" :size="12" /> 合并
-            </button>
-            <button class="btn btn-danger btn-sm" @click="$emit('import-overwrite')">
-              <Icon name="upload" :size="12" /> 覆盖
-            </button>
+            <button class="btn btn-secondary btn-sm" @click="$emit('import-merge')"><Icon name="upload" :size="12" /> 合并</button>
+            <button class="btn btn-danger btn-sm" @click="$emit('import-overwrite')"><Icon name="upload" :size="12" /> 覆盖</button>
           </div>
-          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」（含 activities/ 的文件夹，如 iCloud 同步目录）。选目录会直接切换过去并立即生效，不覆盖已有数据；「覆盖」仅对单文件导入生效。</p>
+          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」。选目录会直接切换过去并立即生效，不覆盖已有数据；「覆盖」仅对单文件导入生效。</p>
         </div>
       </div>
+      <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
-    <section class="sec">
+    <!-- ---------------- 高级：内部技术参数 ---------------- -->
+    <section id="sec-advanced" class="sec">
       <div class="sec-head">
         <Icon name="terminal" :size="13" />
-        <span>诊断</span>
-        <span class="sec-badge">{{ logs.length }} 条</span>
+        <span>高级</span>
+        <button class="chev" :class="{ open: !folded.advanced }" title="展开 / 收起" @click="toggleFold('advanced')"><Icon name="chevronDown" :size="13" /></button>
       </div>
-      <div class="sec-body">
+      <div v-if="!folded.advanced" class="sec-body">
+        <p class="sec-desc">这些是采集与模型调用的内部参数，一般不用改。</p>
+        <div class="row">
+          <span class="row-label">空闲判定阈值</span>
+          <div class="row-control sm">
+            <input :value="monitoring.idleThresholdSec" type="number" min="30" max="3600" step="30" @change="num('monitoring.idleThresholdSec', $event.target.value, 30, 3600)">
+            <span class="unit">秒</span>
+          </div>
+        </div>
+        <div class="row">
+          <span class="row-label">最短片段</span>
+          <div class="row-control sm">
+            <input :value="monitoring.minSegmentSec" type="number" min="0" max="60" step="1" @change="num('monitoring.minSegmentSec', $event.target.value, 0, 60)">
+            <span class="unit">秒</span>
+          </div>
+        </div>
+        <div class="row">
+          <span class="row-label">轮询间隔<span class="row-desc">仅在无法常驻采样的平台生效</span></span>
+          <div class="row-control sm">
+            <input :value="monitoring.interval" type="number" min="5" max="300" step="5" @change="num('monitoring.interval', $event.target.value, 5, 300)">
+            <span class="unit">秒</span>
+          </div>
+        </div>
+        <div class="row">
+          <span class="row-label">Base URL<span class="row-desc">仅自定义服务商需要修改</span></span>
+          <div class="row-control wide">
+            <input :value="api.baseUrl" type="text" spellcheck="false" @change="set('api.baseUrl', $event.target.value)">
+          </div>
+        </div>
+      </div>
+      <div v-else class="sec-collapsed">已折叠 · 内部技术参数</div>
+    </section>
+
+    <!-- ---------------- 诊断与关于 ---------------- -->
+    <section id="sec-about" class="sec">
+      <div class="sec-head">
+        <Icon name="info" :size="13" />
+        <span>诊断与关于</span>
+        <span class="sec-badge">{{ logs.length }} 条日志</span>
+        <button class="chev" :class="{ open: !folded.about }" title="展开 / 收起" @click="toggleFold('about')"><Icon name="chevronDown" :size="13" /></button>
+      </div>
+      <div v-if="!folded.about" class="sec-body">
+        <div class="row">
+          <span class="row-label">WorkLog Assistant<span class="row-desc">自动追踪活动，可插拔地接入 AI 与外部数据</span></span>
+          <div class="row-control">
+            <button class="btn btn-secondary btn-sm" :disabled="checkingUpdate" @click="$emit('check-update')">{{ checkingUpdate ? '检查中' : '检查更新' }}</button>
+            <button v-if="updateInfo && updateInfo.hasUpdate" class="btn btn-primary btn-sm" @click="$emit('open-download')">v{{ updateInfo.latestVersion }}</button>
+            <span v-else-if="updateInfo && !updateInfo.error" class="test-result ok">已是最新</span>
+            <span class="tag">v{{ appVersion }}</span>
+          </div>
+        </div>
         <div class="log-toolbar">
-          <button class="btn btn-ghost btn-sm" @click="$emit('open-logs')">
-            <Icon name="folder" :size="12" /> 打开日志目录
-          </button>
-          <button class="btn btn-ghost btn-sm" @click="$emit('clear-logs')">
-            <Icon name="trash" :size="12" /> 清空
-          </button>
+          <button class="btn btn-ghost btn-sm" @click="$emit('open-logs')"><Icon name="folder" :size="12" /> 打开日志目录</button>
+          <button class="btn btn-ghost btn-sm" @click="$emit('clear-logs')"><Icon name="trash" :size="12" /> 清空</button>
         </div>
         <div class="log-box">
           <div v-for="(l, i) in logs.slice(0, 200)" :key="i" class="log-line" :class="l.type">
@@ -537,53 +453,16 @@
           <div v-if="!logs.length" class="log-empty">暂无日志</div>
         </div>
       </div>
+      <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
-    <section class="sec">
-      <div class="sec-head">
-        <Icon name="info" :size="13" />
-        <span>关于</span>
-      </div>
-      <div class="sec-body">
-        <div class="row">
-          <span class="row-label">
-            WorkLog Assistant
-            <span class="row-desc">自动追踪工作活动，AI 生成工作日志</span>
-          </span>
-          <div class="row-control">
-            <span class="tag">v{{ appVersion }}</span>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">版本更新</span>
-          <div class="row-control">
-            <button class="btn btn-secondary btn-sm" :disabled="checkingUpdate" @click="$emit('check-update')">
-              {{ checkingUpdate ? '检查中' : '检查更新' }}
-            </button>
-            <button
-              v-if="updateInfo && updateInfo.hasUpdate"
-              class="btn btn-primary btn-sm"
-              @click="$emit('open-download')"
-            >
-              v{{ updateInfo.latestVersion }}
-            </button>
-            <span v-if="updateInfo && !updateInfo.hasUpdate && !updateInfo.error" class="test-result ok">已是最新</span>
-            <span v-if="updateInfo && updateInfo.error" class="test-result">检查失败</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-
-    <div class="set-foot">
-      WorkLog Assistant v{{ appVersion }}
-    </div>
+    <div class="set-foot">WorkLog Assistant v{{ appVersion }}</div>
   </div>
 </template>
-
 <script>
 import Icon from '../components/Icon.vue';
 import { accentSwatch, ACCENTS, MODES } from '../styles/accents.js';
+import { DASHBOARD_CARDS, AI_MODELS } from '../plugins/registry.js';
 
 export default {
   name: 'SettingsView',
@@ -593,8 +472,9 @@ export default {
     theme: { type: String, default: 'dark' },
     accent: { type: String, default: 'blue' },
     accentOptions: { type: Array, default: () => ACCENTS },
-    activeSection: { type: String, default: 'record' },
+    activeSection: { type: String, default: 'pomodoro' },
     providerPresets: { type: Object, default: () => ({}) },
+    didaStatus: { type: Object, default: () => ({}) },
     bridge: { type: Object, default: null },
     bridgeLoading: { type: Boolean, default: false },
     bridgeTesting: { type: Boolean, default: false },
@@ -606,8 +486,7 @@ export default {
     updateInfo: { type: Object, default: null },
     checkingUpdate: { type: Boolean, default: false },
     logs: { type: Array, default: () => [] },
-    storagePath: { type: String, default: '' },
-    costEstimate: { type: Object, default: () => ({}) }
+    storagePath: { type: String, default: '' }
   },
   emits: [
     'save', 'provider-change', 'toggle-auto-launch', 'theme-change', 'accent-change',
@@ -615,60 +494,78 @@ export default {
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
     'update:bridgePortInput', 'add-schedule', 'remove-schedule',
-    'check-update', 'open-download', 'clear-logs', 'open-logs'
+    'check-update', 'open-download', 'clear-logs', 'open-logs', 'dida-sync'
   ],
   data() {
     return {
-      // 由父组件定位（例如从「AI 未启用」提示条跳过来时直接打开 AI 分区）
-      activeSection: this.activeSection || 'record',
+      // 注意：不能叫 activeSection —— 那会覆盖同名 prop，导致从首页跳分区永远失效
+      section: this.activeSection || 'pomodoro',
       modes: MODES,
       sections: [
-        { id: 'record', label: '记录', icon: 'activity' },
-        { id: 'ai', label: 'AI 能力', icon: 'zap' },
-        { id: 'appearance', label: '外观', icon: 'palette' },
-        { id: 'bridge', label: '接口', icon: 'plug' },
-        { id: 'data', label: '数据', icon: 'database' },
-        { id: 'about', label: '关于', icon: 'info' }
+        { id: 'pomodoro', label: '番茄钟' },
+        { id: 'ai', label: 'AI' },
+        { id: 'bridge', label: 'MCP' },
+        { id: 'dida', label: '滴答' },
+        { id: 'dashboard', label: '首页' },
+        { id: 'appearance', label: '外观' },
+        { id: 'data', label: '数据' },
+        { id: 'advanced', label: '高级' },
+        { id: 'about', label: '关于' }
       ],
-      schedules: []
+      // 插件相关默认展开，次要分区默认折叠
+      folded: {
+        pomodoro: false, ai: false, bridge: false, dida: false,
+        dashboard: false, appearance: true, data: true, advanced: true, about: true
+      }
     };
   },
   watch: {
     activeSection(val) {
-      if (val) this.activeSection = val;
+      if (val) this.goSection(val);
     }
   },
+  mounted() {
+    this.$nextTick(() => this.scrollTo(this.section));
+  },
   computed: {
-    aiOn() {
-      return !!(this.config.ai && this.config.ai.enabled);
+    dashboardCards() { return DASHBOARD_CARDS; },
+    modelPresets() { return AI_MODELS; },
+    dida() { return this.config.dida || {}; },
+    dashboard() { return this.config.dashboard || {}; },
+    didaStat() { return this.didaStatus || {}; },
+    didaOn() { return !!this.dida.enabled; },
+    aiOn() { return !!(this.config.ai && this.config.ai.enabled); },
+    pomodoroOn() {
+      const v = this.config.focus && this.config.focus.enabled;
+      return v === undefined ? true : !!v;
     },
-    monitoring() {
-      return this.config.monitoring || {};
-    },
-    api() {
-      return this.config.api || {};
-    },
-    summary() {
-      return this.config.summary || {};
-    },
-    ui() {
-      return this.config.ui || {};
-    },
-    focus() {
-      return this.config.focus || {};
-    },
-    scheduleList() {
-      return (this.config.summary && this.config.summary.schedules) || [];
-    },
-    isBridgeOn() {
-      return !!this.bridge && this.bridge.running;
-    },
+    monitoring() { return this.config.monitoring || {}; },
+    api() { return this.config.api || {}; },
+    ui() { return this.config.ui || {}; },
+    focus() { return this.config.focus || {}; },
+    bridgeOn() { return !!this.bridge && this.bridge.running; },
+    // 与首页插件坞读同一份配置，不再用 bridge 状态反推开关
     bridgeEnabled() {
-      return !this.bridge || this.bridge.enabled !== false;
+      const v = this.config.bridge && this.config.bridge.enabled;
+      return v === undefined ? true : !!v;
+    },
+    syncing() {
+      const busy = this.didaStat.busy || {};
+      return { pull: !!busy.pull, push: !!busy.push };
+    },
+    lastPullText() {
+      const s = this.didaStat;
+      if (!s.lastPullAt) return '尚未同步';
+      return `上次 ${this.fmtTime(s.lastPullAt)} · 新增 ${s.lastPullCount || 0} 条`;
+    },
+    lastPushText() {
+      const s = this.didaStat;
+      if (!s.lastPushAt) return '尚未推送';
+      return `上次 ${this.fmtTime(s.lastPushAt)} · 新增 ${s.lastPushCount || 0} 条`;
     }
   },
   methods: {
-    /** 写入配置并持久化。path 支持 "monitoring.interval" */
+    /** 写入配置并持久化。path 支持 "dida.pullIntervalMin" */
     set(path, value) {
       const keys = path.split('.');
       let target = this.config;
@@ -686,12 +583,28 @@ export default {
       if (typeof max === 'number') n = Math.min(max, n);
       this.set(path, n);
     },
-    copy(text, tag) {
-      this.$emit('bridge-copy', text, tag);
+    copy(text, tag) { this.$emit('bridge-copy', text, tag); },
+    accentColor(id) { return accentSwatch(id, this.theme); },
+    cardOn(key) {
+      const cards = (this.config.dashboard && this.config.dashboard.cards) || {};
+      return cards[key] === undefined ? true : !!cards[key];
     },
-    accentColor(id) {
-      return accentSwatch(id, this.theme);
-    }
+    toggleFold(id) { this.folded = { ...this.folded, [id]: !this.folded[id] }; },
+    goSection(id) {
+      this.section = id;
+      this.$nextTick(() => this.scrollTo(id));
+    },
+    scrollTo(id) {
+      const el = this.$el.querySelector(`#sec-${id}`);
+      if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    },
+    fmtTime(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '—';
+      const p = n => String(n).padStart(2, '0');
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+    syncDida(direction) { this.$emit('dida-sync', direction); }
   }
 };
 </script>
@@ -1265,5 +1178,130 @@ export default {
   text-align: center;
   font-size: var(--fs-10);
   color: var(--text-tertiary);
+}
+
+/* ---------- 折叠式设置页 ---------- */
+.sec-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--sp-4);
+}
+.nav-chip {
+  padding: 5px 11px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid transparent;
+}
+.nav-chip:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-chip.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.group-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+.group-title span {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  color: var(--text-tertiary);
+}
+.plugin-sec .sec-head { gap: var(--sp-2); }
+.sec-head .switch { margin-left: auto; }
+.chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  margin-left: var(--sp-1);
+  border-radius: var(--r-xs);
+  color: var(--text-tertiary);
+}
+.chev:hover { background: var(--bg-hover); color: var(--text-primary); }
+.chev svg { transition: transform var(--dur-1) var(--ease); }
+.chev.open svg { transform: rotate(180deg); }
+.sec-collapsed {
+  padding: 10px var(--sp-5) 14px;
+  font-size: var(--fs-12);
+  color: var(--text-tertiary);
+}
+.sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-2);
+}
+.sub-head strong {
+  display: block;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+.sub-head em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+}
+.stat-item {
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+.stat-item b {
+  display: block;
+  font-size: var(--fs-20);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.stat-item span { font-size: var(--fs-11); color: var(--text-tertiary); }
+.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.chip {
+  padding: 5px 10px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+}
+.chip:hover { color: var(--text-primary); }
+.chip.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.model-custom { margin-top: 4px; }
+.danger-note {
+  margin: var(--sp-2) 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-12);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+@media (max-width: 640px) {
+  .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stat-item { padding: 8px; }
+  .stat-item b { font-size: var(--fs-16); }
 }
 </style>

@@ -8,7 +8,8 @@ const PROVIDER_PRESETS = {
   deepseek: {
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com/chat/completions',
-    modelName: 'deepseek-chat',
+  // 2026-07-24 起 deepseek-chat / deepseek-reasoner 已停用
+    modelName: 'deepseek-flash',
     format: 'openai'
   },
   openai: {
@@ -73,7 +74,7 @@ class Summarizer {
         provider: 'deepseek',
         apiKey: '',
         baseUrl: 'https://api.deepseek.com/chat/completions',
-        modelName: 'deepseek-chat'
+        modelName: 'deepseek-flash'
       },
       summary: {
         lookbackMinutes: 60,
@@ -233,6 +234,10 @@ ${activityText}
   }
 
   async callAI(prompt) {
+    // AI 是插件：关闭后任何路径都不得联网调模型（定时摘要、托盘、手动按钮都走这里）
+    if (!this.config?.ai?.enabled) {
+      throw new Error('AI 能力未启用：请先在插件里开启 AI 能力');
+    }
     const format = this._getFormat();
     switch (format) {
       case 'claude':
@@ -261,7 +266,11 @@ ${activityText}
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${this.config.api.apiKey}`
-          }
+          },
+          timeout: 30000,
+          // 本机环境变量带代理时，axios 会把 https 请求以明文发到 443，
+          // DeepSeek 官方域名直连可用；其它服务商仍走系统代理。
+          ...(/api\.deepseek\.com/i.test(String(this.config.api.baseUrl || '')) ? { proxy: false } : {})
         }
       );
       if (response.data?.choices?.[0]?.message?.content) {
