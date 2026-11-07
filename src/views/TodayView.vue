@@ -36,7 +36,7 @@
           <div class="hero-sub">
             <span v-if="hasData">
               统计区间 {{ hm(report.stats.firstAt) }} – {{ hm(report.stats.lastAt) }}
-              · 覆盖率 {{ pct(report.stats.coverage) }}
+              · 工作占这段时间的 {{ pct(report.stats.coverage) }}
             </span>
             <span v-else>还没有记录</span>
           </div>
@@ -53,7 +53,7 @@
           </div>
           <div class="mini-stat">
             <span class="mini-value">{{ idleText }}</span>
-            <span class="mini-label">空档</span>
+            <span class="mini-label">离座</span>
           </div>
         </div>
       </div>
@@ -87,6 +87,32 @@
         <div class="band-ticks">
           <span v-for="t in bandTicks" :key="t.label" :style="{ left: t.left + '%' }">{{ t.label }}</span>
         </div>
+      </div>
+    </section>
+
+    <section v-if="hasData" class="card balance-card">
+      <div class="card-head">
+        <span class="card-title">一天的时间账本</span>
+        <span class="head-note">按 15 分钟格估算 · 未解释不等于休息</span>
+      </div>
+      <div class="balance-track" role="img" :aria-label="dayBalance.map(x => `${x.label} ${Math.round(x.minutes)} 分钟`).join('，')">
+        <span v-for="item in dayBalance" :key="item.label" :style="{ width: (item.minutes / 1440 * 100) + '%', background: item.color }" :title="`${item.label} ${Math.round(item.minutes)} 分钟`"></span>
+      </div>
+      <div class="balance-legend">
+        <div v-for="item in dayBalance" :key="item.label"><i :style="{ background: item.color }"></i><span>{{ item.label }}</span><strong>{{ fmt(item.minutes * 60000) }}</strong></div>
+      </div>
+    </section>
+
+    <section v-if="suggestions.length" class="card suggestion-card">
+      <div class="card-head">
+        <span class="card-title">可一键确认的分类</span>
+        <span class="head-note">根据过去 90 天的手工确认 · 仅存本机</span>
+      </div>
+      <div v-for="item in suggestions" :key="item.startMin" class="suggestion-row">
+        <span class="suggestion-time">{{ pad(Math.floor(item.startMin / 60)) }}:{{ pad(item.startMin % 60) }}</span>
+        <span class="suggestion-copy"><strong>{{ item.app }}</strong><small>{{ item.previousCategory || '未分类' }} → {{ item.category }} · {{ item.evidence }} 次历史确认</small></span>
+        <button class="btn btn-secondary btn-sm" :aria-label="`把 ${item.app} 的这一格标为 ${item.category}`" @click="$emit('accept-suggestion', item)">确认</button>
+        <button class="btn btn-ghost btn-sm" :aria-label="`忽略 ${item.app} 的这条建议`" @click="$emit('dismiss-suggestion', item)">忽略</button>
       </div>
     </section>
 
@@ -124,7 +150,7 @@
     <!-- 活跃度：跨度由设置页的热力图周数决定 -->
     <section v-if="cards.heatmap" class="card heat-card">
       <div class="card-head">
-        <span class="card-title">活跃度 · {{ heatWeeks }} 周</span>
+        <span class="card-title">工作时长 · {{ heatWeeks }} 周</span>
         <span class="head-note">{{ selectedDate }} · {{ heatSummary }}</span>
       </div>
       <ActivityHeatmap
@@ -154,15 +180,15 @@
         <div class="session-title">{{ current.idle ? '已有一段时间没有键鼠操作' : (current.title || '—') }}</div>
       </div>
       <span class="session-badge" :class="{ live: !current.idle }">
-        {{ current.idle ? '空档' : '进行中' }}
+        {{ current.idle ? '离座' : '进行中' }}
       </span>
     </section>
 
     <!-- 分类分布 -->
     <section v-if="cards.composition" class="card">
       <div class="card-head">
-        <span class="card-title">时间构成</span>
-        <span class="head-note">{{ catList.length }} 类</span>
+        <span class="card-title">已记录时间的构成</span>
+        <span class="head-note">不含未记录时段 · {{ catList.length }} 类</span>
       </div>
 
       <template v-if="hasData">
@@ -200,7 +226,7 @@
     <section v-if="cards.apps" class="card">
       <div class="card-head">
         <span class="card-title">应用排行</span>
-        <span class="head-note">自动采集 · Top {{ rankedApps.length }}</span>
+        <span class="head-note">不含手工补记 · Top {{ rankedApps.length }}</span>
       </div>
 
       <template v-if="rankedApps.length">
@@ -309,6 +335,7 @@ export default {
     didaStatus: { type: Object, default: () => ({}) },
     // AI 是能力层：关闭时这里只显示一条提示，开启后才变成一张卡片
     summaries: { type: Array, default: () => [] },
+    suggestions: { type: Array, default: () => [] },
     aiEnabled: { type: Boolean, default: false },
     aiReady: { type: Boolean, default: false },
     aiProvider: { type: String, default: '' },
@@ -316,7 +343,7 @@ export default {
   },
   emits: ['jump-to-time', 'select-date', 'shift-date', 'go-today',
     'shift-range', 'pick-month', 'heat-today', 'start-focus',
-    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings'],
+    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings', 'accept-suggestion', 'dismiss-suggestion'],
   data() {
     return { tick: 0, timer: null };
   },
@@ -331,6 +358,16 @@ export default {
     pomodoroOn() {
       const v = readPath(this.config || {}, 'focus.enabled');
       return v === undefined ? true : !!v;
+    },
+    dayBalance() {
+      const totals = this.report.dayBalance || { work: 0, life: 0, sleep: 0, other: 0, unknown: 1440 };
+      return [
+        { label: '工作/学习/专注', minutes: totals.work, color: 'var(--accent)' },
+        { label: '生活/娱乐', minutes: totals.life, color: 'var(--success)' },
+        { label: '睡眠', minutes: totals.sleep, color: '#8d80ba' },
+        { label: '已记录其他', minutes: totals.other, color: 'var(--text-tertiary)' },
+        { label: '未解释', minutes: Math.max(0, totals.unknown), color: 'var(--border-strong)' }
+      ];
     },
     /**
      * 本地规则提示独立于 AI 开关，避免将统计结果误称为模型建议。
@@ -353,7 +390,7 @@ export default {
       }
       const cov = Number(st.coverage) || 0;
       if (cov > 0 && cov < 0.6 && (Number(st.trackedMs) || 0) > 0) {
-        out.push({ text: `有效时长占记录跨度的 ${Math.round(cov * 100)}%；可查看时间线了解空档`, meta: '查看时间线', color: '#8374c9' });
+        out.push({ text: `有效时长占记录跨度的 ${Math.round(cov * 100)}%；可查看时间线了解未记录时段`, meta: '查看时间线', color: '#8374c9' });
       }
       if (!out.length) {
         out.push({ text: '今天的记录比较完整，暂无明显待确认线索', meta: '已就绪', color: '#2f9c73' });
@@ -479,6 +516,7 @@ export default {
     if (this.timer) clearInterval(this.timer);
   },
   methods: {
+    pad(n) { return String(n).padStart(2, '0'); },
     onBandClick(i, cell) {
       this.$emit('jump-to-time', {
         minutes: cell && Number.isFinite(cell.minutes) ? cell.minutes : i * 15,
@@ -530,6 +568,28 @@ export default {
 .today > .ai-row {
   grid-column: 1 / -1;
 }
+
+.today > .balance-card { grid-column: 1 / -1; }
+.balance-track { display: flex; height: 18px; overflow: hidden; border-radius: var(--r-sm); background: var(--bg-inset); }
+.balance-track span { min-width: 0; }
+.balance-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5); margin-top: var(--sp-4); }
+.balance-legend div { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-11); color: var(--text-secondary); }
+.balance-legend i { width: 8px; height: 8px; border-radius: 2px; }
+.balance-legend strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+.today > .suggestion-card { grid-column: 1 / -1; }
+.suggestion-card { border-color: var(--accent-border); }
+.suggestion-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.suggestion-time { font: var(--fs-12) var(--font-mono); color: var(--text-secondary); }
+.suggestion-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.suggestion-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-13); }
+.suggestion-copy small { color: var(--text-tertiary); font-size: var(--fs-11); }
 
 /* 顶部条：日期导航 + 专注入口 */
 .today-head {

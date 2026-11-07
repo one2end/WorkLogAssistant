@@ -32,6 +32,13 @@ body {
   height: 100%;
 }
 
+.app-root.surface-nocturne .content {
+  background-image: radial-gradient(circle at 92% 0%, rgba(90, 153, 220, 0.09), transparent 38%);
+}
+.app-root.surface-linen .content {
+  background-image: radial-gradient(circle at 8% 0%, rgba(193, 151, 85, 0.08), transparent 42%);
+}
+
 .app-root {
   background: var(--bg-canvas);
   color: var(--text-primary);

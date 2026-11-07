@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="['theme-' + theme, 'accent-' + accent, { 'theme-switching': themeSwitching }]">
+  <div class="app-root" :class="['theme-' + theme, 'accent-' + accent, 'surface-' + (config.ui?.surface || 'studio'), { 'theme-switching': themeSwitching }]">
     <FocusOverlay
       :state="focusState"
       @end="endFocus"
@@ -78,11 +78,14 @@
           :heat-weeks="heatWeeks"
           :dida-status="didaStatus"
           :summaries="summaries"
+          :suggestions="annotationSuggestions"
           :ai-enabled="aiEnabled"
           :ai-ready="aiReady"
           :ai-provider="config.api && config.api.provider"
           :generating-summary="isGeneratingSummary"
           @generate-summary="generateSummary"
+          @accept-suggestion="acceptSuggestion"
+          @dismiss-suggestion="dismissSuggestion"
           @open-ai-settings="openAiSettings"
           @jump-to-time="onJumpToTime"
           @select-date="selectHeatDate"
@@ -237,6 +240,7 @@ export default {
       report: emptyReport(localDateStr()),
       activities: [],
       summaries: [],
+      annotationSuggestions: [],
       datesWithData: new Set(),
       heatDaily: [],
       heatFrom: '',
@@ -414,7 +418,7 @@ export default {
 
     async reloadDate(forceHeat = false) {
       await Promise.all([
-        this.loadReport(),
+        this.loadReport().then(() => this.loadAnnotationSuggestions()),
         this.loadActivities(),
         this.loadSummaries(),
         this.loadDatesWithData(),
@@ -423,11 +427,12 @@ export default {
     },
 
     async loadReport() {
+      const date = this.selectedDate;
       try {
-        const res = await ipcRenderer.invoke('get-day-analytics', this.selectedDate);
-        this.report = (res && res.ok) ? res.report : emptyReport(this.selectedDate);
+        const res = await ipcRenderer.invoke('get-day-analytics', date);
+        if (date === this.selectedDate) this.report = (res && res.ok) ? res.report : emptyReport(date);
       } catch (error) {
-        this.report = emptyReport(this.selectedDate);
+        if (date === this.selectedDate) this.report = emptyReport(date);
       }
     },
 
@@ -447,6 +452,50 @@ export default {
       } catch (error) {
         this.summaries = [];
       }
+    },
+
+    async loadAnnotationSuggestions() {
+      const date = this.selectedDate;
+      if (this.report.date !== date) return;
+      try {
+        const result = await ipcRenderer.invoke('get-annotation-suggestions', { date, slots: this.report.slots || [] });
+        if (date === this.selectedDate) this.annotationSuggestions = Array.isArray(result) ? result : [];
+      } catch (_) {
+        if (date === this.selectedDate) this.annotationSuggestions = [];
+      }
+    },
+
+    async acceptSuggestion(suggestion) {
+      const date = this.selectedDate;
+      const startMin = suggestion.startMin;
+      const toIso = min => {
+        const d = new Date(`${date}T00:00:00`);
+        d.setMinutes(min);
+        return d.toISOString();
+      };
+      const res = await ipcRenderer.invoke('replace-display-ranges', {
+        ranges: [{ start: toIso(startMin), end: toIso(startMin + 15) }],
+        record: {
+          date,
+          startTime: `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`,
+          durationMin: 15,
+          app: suggestion.app,
+          title: suggestion.note || '',
+          category: suggestion.category
+        }
+      });
+      if (!res?.ok) {
+        this.showToast(res?.error || '标注失败', 'error');
+        return;
+      }
+      this.showToast('已记住这次分类', 'success');
+      await this.reloadDate(true);
+    },
+
+    async dismissSuggestion(suggestion) {
+      const date = this.selectedDate;
+      const ok = await ipcRenderer.invoke('dismiss-annotation-suggestion', { date, ...suggestion });
+      if (ok) this.annotationSuggestions = this.annotationSuggestions.filter(item => item.startMin !== suggestion.startMin);
     },
 
     async loadDatesWithData() {
@@ -749,13 +798,17 @@ export default {
       if (this.isGeneratingSummary) return;
       this.isGeneratingSummary = true;
       try {
-        const result = await ipcRenderer.invoke('generate-summary');
+        const date = this.selectedDate;
+        const result = await ipcRenderer.invoke('generate-summary-range', {
+          startTime: new Date(`${date}T00:00:00`).toISOString(),
+          endTime: new Date(`${date}T23:59:59.999`).toISOString()
+        });
         if (!result) {
-          this.showToast('最近这段时间没有可总结的记录', 'error');
+          this.showToast('这一天没有可总结的记录', 'error');
           return;
         }
         await this.loadSummaries();
-        this.showToast('摘要已生成', 'success');
+        this.showToast(`${date} 的回顾已生成`, 'success');
       } catch (error) {
         this.showToast('生成失败: ' + error.message, 'error');
       } finally {

@@ -28,3 +28,9 @@ export const MODES = [
   { id: 'dark', label: '深色' },
   { id: 'light', label: '浅色' }
 ];
+
+export const SURFACES = [
+  { id: 'studio', label: '静室', hint: '克制中性，专注数据' },
+  { id: 'nocturne', label: '夜航', hint: '蓝灰层次，沉静通透' },
+  { id: 'linen', label: '纸本', hint: '温暖纸感，适合回顾' }
+];

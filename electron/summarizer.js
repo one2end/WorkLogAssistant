@@ -136,7 +136,8 @@ class Summarizer {
       const prompt = this.buildPrompt(activities);
       const summary = await this.callAI(prompt);
       if (summary) {
-        this.saveSummary(summary, activities);
+        const date = new Date(startTime);
+        this.saveSummary(summary, activities, `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
         return summary;
       }
       return null;
@@ -346,10 +347,11 @@ ${activityText}
     }
   }
 
-  saveSummary(summary, activities) {
+  saveSummary(summary, activities, date) {
     const storage = this._createStorage();
     const summaryData = {
       id: Date.now(),
+      ...(date ? { date } : {}),
       timestamp: new Date().toISOString(),
       startTime: activities.length > 0 ? activities[0].timestamp : new Date().toISOString(),
       endTime: activities.length > 0 ? activities[activities.length - 1].timestamp : new Date().toISOString(),

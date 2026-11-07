@@ -186,3 +186,51 @@
   --accent-ring: hsl(var(--accent-h) var(--accent-sat) var(--accent-l) / 0.45);
 }
 
+/* 界面气质：改变整个材质与空间感，强调色仍由用户单独选择。 */
+.theme-dark.surface-nocturne {
+  --bg-canvas: #0b1422;
+  --bg-surface: #142033;
+  --bg-elevated: #1b2a40;
+  --bg-inset: #0d192a;
+  --bg-hover: rgba(142, 187, 231, 0.09);
+  --border-subtle: rgba(159, 197, 232, 0.09);
+  --border-default: rgba(159, 197, 232, 0.15);
+  --surface-sheen: rgba(169, 209, 245, 0.08);
+  --shadow-md: 0 3px 12px rgba(2, 9, 22, 0.3), 0 18px 38px rgba(2, 9, 22, 0.22);
+}
+.theme-light.surface-nocturne {
+  --bg-canvas: #eaf0f7;
+  --bg-surface: #f9fbff;
+  --bg-elevated: #ffffff;
+  --bg-inset: #e6edf6;
+  --border-subtle: rgba(43, 79, 117, 0.09);
+  --border-default: rgba(43, 79, 117, 0.16);
+  --shadow-md: 0 3px 12px rgba(28, 65, 108, 0.08), 0 18px 38px rgba(28, 65, 108, 0.06);
+}
+.theme-dark.surface-linen {
+  --bg-canvas: #171510;
+  --bg-surface: #242019;
+  --bg-elevated: #302a21;
+  --bg-inset: #1b1813;
+  --bg-hover: rgba(237, 202, 148, 0.09);
+  --border-subtle: rgba(237, 202, 148, 0.08);
+  --border-default: rgba(237, 202, 148, 0.14);
+  --surface-sheen: rgba(255, 225, 178, 0.06);
+  --text-primary: #f3ede3;
+  --text-secondary: #b7aa98;
+  --text-tertiary: #8e8172;
+}
+.theme-light.surface-linen {
+  --bg-canvas: #f2ecdf;
+  --bg-surface: #fffaf0;
+  --bg-elevated: #fffdf7;
+  --bg-inset: #ebe3d3;
+  --bg-hover: rgba(112, 80, 39, 0.06);
+  --border-subtle: rgba(112, 80, 39, 0.09);
+  --border-default: rgba(112, 80, 39, 0.16);
+  --text-primary: #30291f;
+  --text-secondary: #65594a;
+  --text-tertiary: #8b7c68;
+  --shadow-md: 0 3px 10px rgba(96, 71, 33, 0.06), 0 17px 36px rgba(96, 71, 33, 0.06);
+}
+

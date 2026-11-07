@@ -23,6 +23,7 @@ const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
 const { ApiServer, generateToken } = require('./apiServer');
 const analytics = require('./analytics');
+const { categorySuggestions } = require('./annotationAdvisor');
 const { DidaSync } = require('./didaSync');
 
 /**
@@ -868,6 +869,34 @@ ipcMain.handle('get-day-analytics', (event, date) => {
   }
 });
 
+ipcMain.handle('get-annotation-suggestions', (event, payload) => {
+  try {
+    const date = payload?.date;
+    const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : analytics.toDateStr(new Date());
+    const from = new Date(`${dateStr}T00:00:00`);
+    from.setDate(from.getDate() - 90);
+    const records = storageManager.getActivitiesByDateRange(from, new Date(`${dateStr}T23:59:59`));
+    const slots = Array.isArray(payload?.slots) ? payload.slots.slice(0, 96) : [];
+    const dismissed = new Set(configManager.getConfig().advice?.dismissed || []);
+    return categorySuggestions(records, slots, 12).filter(s =>
+      !dismissed.has(`${dateStr}:${s.startMin}:${s.app}:${s.category}`)).slice(0, 3);
+  } catch (error) {
+    logManager.addLog('生成标注建议失败: ' + error.message, 'error');
+    return [];
+  }
+});
+
+ipcMain.handle('dismiss-annotation-suggestion', (event, payload) => {
+  const { date, startMin, app, category } = payload || {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !Number.isInteger(startMin) ||
+      startMin < 0 || startMin >= 1440 || !app || !category) return false;
+  const existing = configManager.getConfig().advice?.dismissed || [];
+  const key = `${date}:${startMin}:${app}:${category}`;
+  const saved = configManager.updateConfig({ advice: { dismissed: [...new Set([...existing, key])].slice(-200) } });
+  if (saved) broadcast('config-updated', configManager.getConfig());
+  return saved;
+});
+
 ipcMain.handle('get-range-analytics', (event, payload) => {
   try {
     const to = (payload && payload.to) || analytics.toDateStr(new Date());
@@ -947,7 +976,7 @@ ipcMain.handle('add-manual-record', (event, payload) => {
   const ok = storageManager.appendActivityRecords([record]);
 
   if (ok) {
-    logManager.addLog(`手工补记 ${dateStr} ${p.startTime} · ${durationMin} 分钟`, 'info');
+    logManager.addLog(`手工补记 ${dateStr} ${payload.startTime} · ${durationMin} 分钟`, 'info');
   }
   return { ok, error: ok ? null : '写入失败' };
 });

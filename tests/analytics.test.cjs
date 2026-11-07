@@ -52,3 +52,12 @@ test('Dida focus overrides recorded time and is counted once', t => {
   assert.equal(report.layers.autoMs, 30 * 60000);
   assert.ok(report.sessions.some(s => s.category === '专注'));
 });
+
+test('AI prompt context respects manual overlap instead of adding both layers', () => {
+  const items = [
+    { timestamp: at('09:00'), durationMs: 60 * 60000, processName: 'chrome', windowTitle: 'Research', source: 'auto' },
+    { timestamp: at('09:15'), durationMs: 30 * 60000, processName: 'Meeting', windowTitle: 'Client', source: 'manual', category: '沟通协作' }
+  ];
+  const context = analytics.renderPromptContext(items);
+  assert.equal(context.totalMs, 60 * 60000);
+});

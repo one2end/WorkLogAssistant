@@ -132,6 +132,7 @@ class ConfigManager {
       ai: {
         enabled: false
       },
+      advice: { dismissed: [] },
 
       // 滴答清单同步插件：拉取与推送是两条完全独立的通道，各有自己的开关和间隔。
       // 拉取把滴答的专注记录喂进展示层第二层级（只读镜像，不写 activities/）。
@@ -170,6 +171,7 @@ class ConfigManager {
         // 外观 = 明暗模式 × 强调色（theme 字段仅保留用于旧配置迁移）
         mode: 'dark',
         accent: 'blue',
+        surface: 'studio',
         fontSize: 14,
         showTimestamps: true,
         floatWindow: true

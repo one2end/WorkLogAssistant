@@ -512,7 +512,7 @@ class StorageManager {
 
   saveSummary(summary) {
     try {
-      const dateStr = this._toDateStr(summary.timestamp);
+      const dateStr = summary.date || this._toDateStr(summary.timestamp);
       const filePath = this._summaryFile(dateStr);
       const summaries = this._readJsonFile(filePath);
       summaries.push(summary);
@@ -559,7 +559,8 @@ class StorageManager {
     if (!date) {
       return this._getAllFromDir(this.summariesDir);
     }
-    const dateStr = this._toDateStr(date);
+    const dateStr = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? date : this._toDateStr(date);
     return this._readJsonFile(this._summaryFile(dateStr));
   }
 

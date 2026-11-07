@@ -31,3 +31,21 @@ test('replacing a display range keeps raw facts and commits one new annotation',
   assert.equal(rows[0].title, 'Fact');
   assert.equal(rows[1].app, 'New');
 });
+
+test('summary for a past date is read from that date, not its generation date', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifelog-summary-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const originalLoad = Module._load;
+  Module._load = function (id, ...args) {
+    if (id === 'electron') return { app: { getPath: () => root } };
+    return originalLoad.call(this, id, ...args);
+  };
+  let StorageManager;
+  try { StorageManager = require('../electron/storageManager'); } finally { Module._load = originalLoad; }
+  const storage = new StorageManager();
+  const summary = { id: 1, date: '2026-10-01', timestamp: '2026-11-08T10:00:00.000Z',
+    summary: '回顾', activityCount: 0, activities: [] };
+  assert.equal(storage.saveSummary(summary), true);
+  assert.equal(storage.getSummaries('2026-10-01')[0].summary, '回顾');
+  assert.equal(storage.getSummaries('2026-11-08').length, 0);
+});

@@ -13,6 +13,7 @@
  */
 
 const fs = require('fs');
+const { buildDayBalance } = require('./timeBalance');
 const path = require('path');
 
 // ---------------------------------------------------------------------------
@@ -584,6 +585,8 @@ function buildSlots(atoms, dateStr, options = {}) {
       category: top ? top[0] : null,
       app: app ? app[0] : null,
       layer: layer ? layer[0] : null,
+      appPurity: app && slot.ms ? Number((app[1] / (slot.ms / 60000)).toFixed(2)) : 0,
+      layerPurity: layer && slot.ms ? Number((layer[1] / (slot.ms / 60000)).toFixed(2)) : 0,
       // 这一格最有代表性的备注（来自人工标注/导入的标题），给日历和时间轴显示
       note: title ? title[0] : '',
       // 专注会话 id：界面上要能单独删掉一条专注
@@ -841,6 +844,7 @@ function buildDayReport(dataDir, dateStr, options) {
     dataNotes.push(`有效记录仅占区间跨度的 ${pct(totalMs / spanMs)}，实际在岗时间可能更长`);
   }
 
+  const slots = buildSlots(resolvedAtoms, dateStr, opts);
   return {
     kind: 'day',
     date: dateStr,
@@ -864,7 +868,8 @@ function buildDayReport(dataDir, dateStr, options) {
     categoriesGrouped,
     apps,
     // 展示层：15 分钟一格的主要事件，UI 与 AI 回顾都读这一层
-    slots: buildSlots(resolvedAtoms, dateStr, opts),
+    slots,
+    dayBalance: buildDayBalance(slots),
     layers: {
       autoMs: resolvedAtoms.filter(a => a.source === 'auto').reduce((n, a) => n + (a.durationMs || 0), 0),
       importedMs: resolvedAtoms.filter(a => a.source === 'imported').reduce((n, a) => n + (a.durationMs || 0), 0),
@@ -1201,7 +1206,8 @@ function renderPromptContext(rawItems, options) {
   const idleAtoms = atoms.filter(a => a.kind === 'idle');
   const workAtoms = atoms.filter(a => a.kind !== 'idle');
   inferDurations(workAtoms, opts);
-  const allSessions = foldSessions(workAtoms, opts);
+  // 模型输入也使用展示层优先级，人工补记不能与同一时段的窗口采样相加。
+  const allSessions = foldSessions(resolveByPriority(workAtoms), opts);
 
   // 锁屏/登录界面归为空档，不参与工作内容
   const sessions = [];

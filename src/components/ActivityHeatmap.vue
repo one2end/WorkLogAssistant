@@ -53,11 +53,11 @@
       </div>
 
       <div class="hm-foot">
-        <span class="hm-hint">每格一天 · 点击查看当天</span>
+        <span class="hm-hint">每格一天 · 仅计有效工作</span>
         <span class="hm-legend">
-          <span>少</span>
-          <i v-for="l in [0, 1, 2, 3, 4]" :key="l" class="hm-cell" :data-level="l"></i>
-          <span>多</span>
+          <span>0</span>
+          <i v-for="l in [0, 1, 2, 3, 4]" :key="l" class="hm-cell" :data-level="l" :title="['无记录', '少于 1.5 小时', '1.5–3.5 小时', '3.5–6 小时', '至少 6 小时'][l]"></i>
+          <span>≥6h</span>
         </span>
       </div>
     </template>
@@ -111,12 +111,8 @@ export default {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     },
     cells() {
-      // 固定阈值 + 自适应兼底：数据充足时绝对可比，数据偏少时自动降档，
-      // 避免整片最浅色；scale 下限 0.2 防止单日极短记录被放大成满格。
-      const base = this.thresholds.length === 3 ? this.thresholds : [90, 210, 360];
-      const maxMin = this.days.reduce((m, d) => Math.max(m, (d.trackedMs || 0) / 60000), 0);
-      const scale = maxMin >= base[2] ? 1 : Math.min(1, Math.max(0.2, maxMin / base[2]));
-      const t = base.map((v) => v * scale);
+      // 固定阈值使不同月份的色阶可比；短时记录不被放大成「满格」。
+      const t = this.thresholds.length === 3 ? this.thresholds : [90, 210, 360];
       const today = localDateStr(new Date());
 
       return this.days.map((d, i) => {

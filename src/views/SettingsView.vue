@@ -332,6 +332,16 @@
             </button>
           </div>
         </div>
+        <div class="row-block">
+          <span class="row-label">界面气质<span class="row-desc">改变画布、卡片与层次；分类颜色仍保持含义</span></span>
+          <div class="surface-grid">
+            <button v-for="s in surfaces" :key="s.id" class="surface-choice" :class="[s.id, { active: (ui.surface || 'studio') === s.id }]"
+              :aria-pressed="(ui.surface || 'studio') === s.id" @click="set('ui.surface', s.id)">
+              <span class="surface-preview"><i></i><b></b><em></em></span>
+              <strong>{{ s.label }}</strong><small>{{ s.hint }}</small>
+            </button>
+          </div>
+        </div>
         <div class="row">
           <span class="row-label">最小化时显示浮窗</span>
           <div class="row-control">
@@ -464,7 +474,7 @@
       </div>
       <div v-if="!folded.about" class="sec-body">
         <div class="row">
-          <span class="row-label">WorkLog Assistant<span class="row-desc">自动追踪活动，可插拔地接入 AI 与外部数据</span></span>
+          <span class="row-label">LifeLog<span class="row-desc">自动记录实际时间，结合滴答清单回顾生活与工作</span></span>
           <div class="row-control">
             <button class="btn btn-secondary btn-sm" :disabled="checkingUpdate" @click="$emit('check-update')">{{ checkingUpdate ? '检查中' : '检查更新' }}</button>
             <button v-if="updateInfo && updateInfo.hasUpdate" class="btn btn-primary btn-sm" @click="$emit('open-download')">v{{ updateInfo.latestVersion }}</button>
@@ -487,12 +497,12 @@
       <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
-    <div class="set-foot">WorkLog Assistant v{{ appVersion }}</div>
+    <div class="set-foot">LifeLog v{{ appVersion }}</div>
   </div>
 </template>
 <script>
 import Icon from '../components/Icon.vue';
-import { accentSwatch, ACCENTS, MODES } from '../styles/accents.js';
+import { accentSwatch, ACCENTS, MODES, SURFACES } from '../styles/accents.js';
 import { DASHBOARD_CARDS, AI_MODELS } from '../plugins/registry.js';
 
 export default {
@@ -532,6 +542,7 @@ export default {
       // 注意：不能叫 activeSection —— 那会覆盖同名 prop，导致从首页跳分区永远失效
       section: this.activeSection || 'pomodoro',
       modes: MODES,
+      surfaces: SURFACES,
       sections: [
         { id: 'pomodoro', label: '番茄钟' },
         { id: 'ai', label: 'AI' },
@@ -1015,6 +1026,28 @@ export default {
   margin-left: auto;
   color: var(--accent);
 }
+
+.surface-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
+.surface-choice {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: var(--sp-2); text-align: left; color: var(--text-secondary);
+  background: var(--bg-inset); border: 1px solid var(--border-default);
+  border-radius: var(--r-md); cursor: pointer;
+}
+.surface-choice.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.surface-choice strong { font-size: var(--fs-12); color: var(--text-primary); }
+.surface-choice small { font-size: var(--fs-10); line-height: 1.3; }
+.surface-preview {
+  display: flex; align-items: flex-end; gap: 4px; width: 100%; height: 36px;
+  padding: 7px; margin-bottom: 4px; border-radius: var(--r-sm);
+}
+.surface-preview i { width: 7px; height: 100%; border-radius: 2px; background: rgba(255,255,255,.25); }
+.surface-preview b { flex: 1; height: 100%; border-radius: 3px; background: rgba(255,255,255,.18); }
+.surface-preview em { width: 25%; height: 65%; border-radius: 3px; background: rgba(255,255,255,.27); }
+.studio .surface-preview { background: #252b35; }
+.nocturne .surface-preview { background: linear-gradient(135deg, #0d192b, #31557e); }
+.linen .surface-preview { background: linear-gradient(135deg, #a77d51, #f3e6c9); }
+@media (max-width: 600px) { .surface-grid { grid-template-columns: 1fr; } }
 
 /* 强调色：一排圆点 */
 .accent-row {
