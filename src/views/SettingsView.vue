@@ -73,7 +73,15 @@
         </button>
       </div>
       <div v-if="aiOn && !folded.ai" class="sec-body">
-        <p class="sec-desc">开启后由模型做归类、汇总与回顾；关闭时应用只在本机记录与统计，不会联网调用模型。</p>
+        <p class="sec-desc">当前可用：按需生成模型回顾。模型请求会包含相关时段的应用名和窗口标题。首页「记录提示」来自本地规则，与此开关无关。</p>
+        <div class="row">
+          <span class="row-label">自动生成回顾<span class="row-desc">默认关闭；开启后才会按设定间隔在后台向模型发送记录</span></span>
+          <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.summary?.autoGenerate === true" @change="set('summary.autoGenerate', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
+        </div>
+        <div v-if="config.summary?.autoGenerate === true" class="row">
+          <span class="row-label">自动回顾间隔<span class="row-desc">建议先手动检查回顾内容，再决定是否启用后台生成</span></span>
+          <div class="row-control sm"><input type="number" min="15" max="1440" step="15" :value="config.summary?.intervalMinutes || 30" @change="num('summary.intervalMinutes', $event.target.value, 15, 1440)"><span class="unit">分钟</span></div>
+        </div>
         <div class="row">
           <span class="row-label">服务商</span>
           <div class="row-control">
@@ -383,6 +391,29 @@
       <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
+    <!-- ---------------- 采集前隐私排除 ---------------- -->
+    <section id="sec-privacy" class="sec">
+      <div class="sec-head">
+        <Icon name="shield" :size="13" />
+        <span>隐私与采集</span>
+        <button class="chev" :class="{ open: !folded.privacy }" title="展开 / 收起" @click="toggleFold('privacy')"><Icon name="chevronDown" :size="13" /></button>
+      </div>
+      <div v-if="!folded.privacy" class="sec-body">
+        <p class="sec-desc">以下规则在新片段形成前生效。命中时不写入应用名和窗口标题；已有历史记录不会自动删除。</p>
+        <div class="row-block">
+          <label class="row-label" for="exclude-apps">排除应用名</label>
+          <textarea id="exclude-apps" class="rule-input" :value="monitoring.excludeApps || ''" rows="3" placeholder="每行一个，例如 bankapp.exe" spellcheck="false" @change="set('monitoring.excludeApps', $event.target.value)"></textarea>
+          <p class="hint">与采集到的进程名完整匹配，不区分大小写；也可用逗号分隔。</p>
+        </div>
+        <div class="row-block">
+          <label class="row-label" for="exclude-titles">排除标题关键词</label>
+          <textarea id="exclude-titles" class="rule-input" :value="monitoring.excludeTitleContains || ''" rows="3" placeholder="每行一个，例如 客户资料" spellcheck="false" @change="set('monitoring.excludeTitleContains', $event.target.value)"></textarea>
+          <p class="hint">标题包含任一关键词即排除，不区分大小写。请避免填写过短的通用词。</p>
+        </div>
+      </div>
+      <div v-else class="sec-collapsed">已折叠 · 管理新记录的隐私排除规则</div>
+    </section>
+
     <!-- ---------------- 高级：内部技术参数 ---------------- -->
     <section id="sec-advanced" class="sec">
       <div class="sec-head">
@@ -509,13 +540,14 @@ export default {
         { id: 'dashboard', label: '首页' },
         { id: 'appearance', label: '外观' },
         { id: 'data', label: '数据' },
+        { id: 'privacy', label: '隐私' },
         { id: 'advanced', label: '高级' },
         { id: 'about', label: '关于' }
       ],
       // 插件相关默认展开，次要分区默认折叠
       folded: {
         pomodoro: false, ai: false, bridge: false, dida: false,
-        dashboard: false, appearance: true, data: true, advanced: true, about: true
+        dashboard: false, appearance: true, data: true, privacy: false, advanced: true, about: true
       }
     };
   },
@@ -727,6 +759,25 @@ export default {
 .row-block > .row-label {
   display: block;
   margin-bottom: var(--sp-2);
+}
+
+.rule-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 70px;
+  padding: var(--sp-3);
+  resize: vertical;
+  font: inherit;
+  font-size: var(--fs-12);
+  color: var(--text-primary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+}
+
+.rule-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .hint {

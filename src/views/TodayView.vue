@@ -68,20 +68,20 @@
       <div class="day-band">
         <div class="band-head">
           <span class="band-title">一天的时间分布</span>
-          <span class="band-legend">15 分钟一格 · 颜色对应分类</span>
+          <span class="band-legend">彩色有记录 · 深色无记录 · 白线为现在</span>
         </div>
         <div class="band-track">
-          <span
+          <button
             v-for="(cell, i) in bandCells"
             :key="i"
+            type="button"
             class="band-cell"
             :class="{ 'is-empty': !cell.hasData }"
             :style="{ background: cell.color, opacity: cell.opacity }"
             :title="cell.title"
             :aria-label="cell.title"
-            role="button"
             @click="onBandClick(i, cell)"
-          ></span>
+          ></button>
           <span v-if="isToday" class="band-now" :style="{ left: nowPercent + '%' }"></span>
         </div>
         <div class="band-ticks">
@@ -105,12 +105,11 @@
     />
     </div>
 
-    <!-- AI 分析与提示：开启 AI 后出现。
-         目前是本地确定性线索，不是模型输出；候选标注接入后会替换成可确认的建议。 -->
-    <section v-if="cards.aiInsights && aiEnabled" class="card insight-card">
+    <!-- 本地规则提示与模型回顾分开，避免把确定性统计误称为 AI 建议。 -->
+    <section v-if="cards.aiInsights && hasData" class="card insight-card">
       <div class="card-head">
-        <span class="card-title">AI 分析与提示</span>
-        <span class="insight-tag">待确认线索</span>
+        <span class="card-title">记录提示</span>
+        <span class="insight-tag">本地规则</span>
       </div>
       <div class="insight-list">
         <div v-for="(it, i) in insights" :key="i" class="insight-item">
@@ -119,7 +118,7 @@
           <span class="insight-meta">{{ it.meta }}</span>
         </div>
       </div>
-      <p class="insight-note">这些线索直接从记录层算出；候选标注、差异提醒与自动分类接入后，这里会变成可一键确认的 AI 建议。</p>
+      <p class="insight-note">依据当前记录计算，仅供检查；不会自动修改原始数据。</p>
     </section>
 
     <!-- 活跃度：跨度由设置页的热力图周数决定 -->
@@ -274,7 +273,7 @@
     <PluginDock
       :config="config"
       :dida-status="didaStatus"
-      :insight-count="insights.length"
+      :insight-count="insights.filter(item => item.meta !== '已就绪').length"
       @toggle="$emit('toggle-plugin', $event)"
       @settings="$emit('open-plugin-settings', $event)"
     />
@@ -334,8 +333,7 @@ export default {
       return v === undefined ? true : !!v;
     },
     /**
-     * 首页 AI 提示：目前是从记录层直接算出的确定性线索，不是模型输出。
-     * 等候选标注 / 差异提醒接入后，这里换成可一键确认的 AI 建议。
+     * 本地规则提示独立于 AI 开关，避免将统计结果误称为模型建议。
      */
     insights() {
       const r = this.report || {};
@@ -351,15 +349,11 @@ export default {
       }
       const idleMin = Math.round((Number(st.idleMs) || 0) / 60000);
       if (idleMin >= 60) {
-        out.push({ text: `${(idleMin / 60).toFixed(1)} 小时空档没有说明，可以补记成睡觉或外出`, meta: '补记候选', color: '#d99a2b' });
+        out.push({ text: `记录到 ${(idleMin / 60).toFixed(1)} 小时离座；如有需要，可补充这段时间在做什么`, meta: '可补充', color: '#d99a2b' });
       }
       const cov = Number(st.coverage) || 0;
       if (cov > 0 && cov < 0.6 && (Number(st.trackedMs) || 0) > 0) {
-        out.push({ text: `展示层覆盖 ${Math.round(cov * 100)}%，其余时段仍是记录层汇总`, meta: '待归类', color: '#8374c9' });
-      }
-      const didaToday = Number(this.didaStatus && this.didaStatus.todayFocusCount) || 0;
-      if (didaToday > 0) {
-        out.push({ text: `滴答同步来 ${didaToday} 条专注，已作为第二层级参与消解`, meta: '已同步', color: '#2f9c73' });
+        out.push({ text: `有效时长占记录跨度的 ${Math.round(cov * 100)}%；可查看时间线了解空档`, meta: '查看时间线', color: '#8374c9' });
       }
       if (!out.length) {
         out.push({ text: '今天的记录比较完整，暂无明显待确认线索', meta: '已就绪', color: '#2f9c73' });
@@ -797,6 +791,8 @@ export default {
   flex: 1 1 0;
   min-width: 0;
   height: 100%;
+  padding: 0;
+  border: 0;
   cursor: pointer;
   transition: opacity var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease),
     background-color 420ms var(--ease);
@@ -806,6 +802,7 @@ export default {
   opacity: 1 !important;
   box-shadow: inset 0 0 0 1px var(--accent);
 }
+.band-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .band-cell.is-empty:hover {
   box-shadow: inset 0 0 0 1px var(--border-strong);

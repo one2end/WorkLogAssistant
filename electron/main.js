@@ -567,10 +567,10 @@ function startMonitoring() {
   logManager.addLog('开始记录', 'info');
   activityRecorder.start();
 
-  // AI 是插件：关闭或没填 Key 时连定时摘要定时器都不启动，避免后台静默调模型 / 刷错误提示。
+  // 模型调用默认仅由用户手动触发；自动回顾必须单独开启。
   // 运行时开启插件会由 save-config 重启监控，这里会重新走到这一步。
-  if (!config.ai?.enabled || !config.api?.apiKey) {
-    logManager.addLog('AI 能力未启用或缺少 API Key，跳过自动摘要', 'info');
+  if (!config.ai?.enabled || !config.api?.apiKey || !config.summary?.autoGenerate) {
+    logManager.addLog('自动回顾未启用或模型未就绪，跳过后台调用', 'info');
     return;
   }
 
@@ -751,36 +751,39 @@ ipcMain.handle('save-config', (event, config) => {
   const prev = configManager.getConfig();
   const prevPath = prev.storage?.customPath || '';
   const didaJustEnabled = !prev.dida?.enabled && !!config.dida?.enabled;
-  configManager.saveConfig(config);
+  const nextPath = config.storage?.customPath || '';
+  const storageChanged = nextPath !== prevPath;
+  // 先把录制器的当前片段写回旧目录，再切换路径。
+  if (isMonitoring) stopMonitoring();
+  if (storageChanged) {
+    const result = storageManager.setDataDir(nextPath);
+    if (!result.success || !logManager.setDataDir(nextPath) || !arhatManager.setDataDir(nextPath)) {
+      storageManager.setDataDir(prevPath);
+      logManager.setDataDir(prevPath);
+      arhatManager.setDataDir(prevPath);
+      if (isMonitoring) startMonitoring();
+      return { success: false, error: result.error || '目录切换失败' };
+    }
+  }
+  if (!configManager.saveConfig(config)) {
+    if (storageChanged) {
+      storageManager.setDataDir(prevPath);
+      logManager.setDataDir(prevPath);
+      arhatManager.setDataDir(prevPath);
+    }
+    if (isMonitoring) startMonitoring();
+    return { success: false, error: '配置保存失败' };
+  }
   summarizer.updateConfig(config);
+  if (storageChanged) logManager.addLog(`数据目录已切换为: ${nextPath || '默认路径'}`, 'info');
 
   // 刚开启滴答同步时立即拉一次，不必等下一个定时窗口或手动点按钮
   if (didaJustEnabled && config.dida?.pullFocus && config.dida?.token) {
     setTimeout(() => { didaSync.pull({ manual: false }).catch(() => {}); }, 300);
   }
 
-  // 存储路径变化时立即切换数据目录，无需重启。
-  // 三个管理器都是在启动时按 customPath 构造的，过去改路径只能重启才生效，
-  // 而重启又会因配置被覆写而失效 —— 这里直接在原实例上重设路径。
-  const nextPath = config.storage?.customPath || '';
-  let storageChanged = false;
-  let storageError = '';
-  if (nextPath !== prevPath) {
-    const result = storageManager.setDataDir(nextPath);
-    if (result.success) {
-      logManager.setDataDir(nextPath);
-      arhatManager.setDataDir(nextPath);
-      storageChanged = true;
-      logManager.addLog(`数据目录已切换为: ${nextPath || '默认路径'}`, 'info');
-    } else {
-      storageError = result.error || '目录不可用';
-      logManager.addLog(`数据目录切换失败: ${storageError}`, 'error');
-    }
-  }
-
   // 重启监控定时器以使新配置生效
   if (isMonitoring) {
-    stopMonitoring();
     startMonitoring();
   }
 
@@ -803,7 +806,7 @@ ipcMain.handle('save-config', (event, config) => {
     focusWindow.webContents.send('focus-theme', config.ui?.mode || 'dark');
   }
 
-  return { success: !storageError, error: storageError || undefined };
+  return { success: true };
 });
 
 // ---------------------------------------------------------------------------
@@ -897,20 +900,20 @@ ipcMain.handle('get-recorder-status', () => {
   return activityRecorder.getStatus();
 });
 
-// 手工补记：录制器漏掉的时段，由用户补上（类似 RescueTime 的手动条目）
-ipcMain.handle('add-manual-record', (event, payload) => {
+// 手工补记与编辑共用同一套 15 分钟校验，避免两个入口写出不同口径。
+function manualRecordFromPayload(payload) {
   const p = payload || {};
   const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(p.date || '')
     ? p.date
     : analytics.toDateStr(new Date());
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(p.startTime || '').trim());
-  if (!m) {
-    return { ok: false, error: '开始时间格式应为 HH:mm' };
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+    return { error: '开始时间格式应为 HH:mm' };
   }
 
   const rawDuration = parseInt(p.durationMin, 10);
-  if (!rawDuration || rawDuration > 24 * 60) {
-    return { ok: false, error: '时长需在 15–1440 分钟之间' };
+  if (!Number.isFinite(rawDuration) || rawDuration < 1 || rawDuration > 24 * 60) {
+    return { error: '时长需在 15–1440 分钟之间' };
   }
 
   // 全系统统一以 15 分钟为一个块：不足 15 分钟按 15 分钟算，
@@ -922,10 +925,9 @@ ipcMain.handle('add-manual-record', (event, payload) => {
   const snappedMinute = Math.floor(parseInt(m[2], 10) / 15) * 15;
   const start = new Date(`${dateStr}T${pad(m[1])}:${pad(snappedMinute)}:00`);
   if (Number.isNaN(start.getTime())) {
-    return { ok: false, error: '时间无法解析' };
+    return { error: '时间无法解析' };
   }
-
-  const ok = storageManager.appendActivityRecords([{
+  return { dateStr, durationMin, record: {
     t: start.toISOString(),
     dur: durationMin * 60000,
     kind: 'active',
@@ -934,12 +936,31 @@ ipcMain.handle('add-manual-record', (event, payload) => {
     platform: 'manual',
     source: 'manual',
     cat: p.category || ''
-  }]);
+  } };
+}
+
+// 手工补记：录制器漏掉的时段，由用户补上
+ipcMain.handle('add-manual-record', (event, payload) => {
+  const parsed = manualRecordFromPayload(payload);
+  if (parsed.error) return { ok: false, error: parsed.error };
+  const { dateStr, durationMin, record } = parsed;
+  const ok = storageManager.appendActivityRecords([record]);
 
   if (ok) {
     logManager.addLog(`手工补记 ${dateStr} ${p.startTime} · ${durationMin} 分钟`, 'info');
   }
   return { ok, error: ok ? null : '写入失败' };
+});
+
+ipcMain.handle('replace-display-ranges', (event, payload) => {
+  const parsed = manualRecordFromPayload(payload?.record);
+  if (parsed.error) return { ok: false, error: parsed.error };
+  const ranges = payload?.ranges || [];
+  if (!Array.isArray(ranges) || ranges.length > 2 ||
+      payload?.record?.date !== parsed.dateStr) return { ok: false, error: '日期或区间无效' };
+  const result = storageManager.replaceDisplayRanges(parsed.dateStr, ranges, parsed.record);
+  if (result.success) notifyDataChanged();
+  return { ok: result.success, error: result.error };
 });
 
 ipcMain.handle('flush-recorder', () => {

@@ -906,10 +906,10 @@ function buildDayReport(dataDir, dateStr, options) {
 function buildRangeReport(dataDir, from, to, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
   const dates = listDates(dataDir).filter(d => d >= from && d <= to);
-  const perDay = dates.map(d => {
-    const r = buildDayReport(dataDir, d, opts);
+  const reports = dates.map(d => buildDayReport(dataDir, d, opts));
+  const perDay = reports.map(r => {
     return {
-      date: d,
+      date: r.date,
       trackedMs: r.stats.trackedMs,
       spanMs: r.stats.spanMs,
       recordCount: r.stats.recordCount,
@@ -924,8 +924,8 @@ function buildRangeReport(dataDir, from, to, options) {
   const catTotals = new Map();
   let grandTotal = 0;
 
-  for (const day of perDay) {
-    const report = buildDayReport(dataDir, day.date, opts);
+  for (const report of reports) {
+    const day = report;
     grandTotal += report.stats.trackedMs;
     for (const a of report.apps) {
       const cur = appTotals.get(a.processName) || { processName: a.processName, category: a.category, durationMs: 0, days: new Set() };

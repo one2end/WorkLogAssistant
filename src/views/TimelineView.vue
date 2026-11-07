@@ -22,30 +22,21 @@
       </template>
     </div>
 
-    <!-- 视图切换：时间轴 / 日历 / 记录层收在同一个下拉里，工具栏只留一个入口 -->
+    <!-- 常用视图直接可见，原始记录作为次级入口 -->
     <div class="view-head">
-      <div class="view-switch" @click.stop>
-        <button class="view-trigger" @click="menuOpen = !menuOpen">
-          <Icon :name="viewIcon" :size="14" />
-          {{ viewLabel }}
-          <Icon name="chevronDown" :size="13" />
+      <div class="view-switch" role="group" aria-label="时间视图">
+        <button v-for="opt in viewOptions.slice(0, 2)" :key="opt.id" class="view-tab"
+          :class="{ active: mode === opt.id }" :aria-pressed="mode === opt.id"
+          :title="opt.title" @click="setMode(opt.id)">
+          <Icon :name="opt.icon" :size="13" />{{ opt.label }}
         </button>
-        <div v-if="menuOpen" class="view-menu">
-          <template v-for="opt in viewOptions" :key="opt.id">
-            <i v-if="opt.divider" class="view-menu-sep" />
-            <button
-              :class="{ active: mode === opt.id }"
-              :title="opt.title || opt.label"
-              @click="setMode(opt.id)"
-            >
-              <Icon :name="opt.icon" :size="13" />
-              <span class="vm-label">{{ opt.label }}</span>
-              <small v-if="opt.hint">{{ opt.hint }}</small>
-            </button>
-          </template>
-        </div>
       </div>
       <span class="view-date">{{ dateLabel }}</span>
+      <button class="record-toggle" :class="{ active: mode === 'record' }"
+        :aria-pressed="mode === 'record'" title="查看只读的原始窗口采样"
+        @click="setMode(mode === 'record' ? 'timeline' : 'record')">
+        <Icon name="database" :size="12" />原始记录
+      </button>
       <button
         v-if="mode === 'timeline'"
         class="order-btn"
@@ -374,9 +365,7 @@ export default {
   data() {
     return {
       // mode 同时表达「视图」和「层」：timeline/calendar 是展示层，record 是只读事实层。
-      // 三者互斥，所以只用一个下拉，不再并排两套切换控件。
       mode: 'timeline',
-      menuOpen: false,
       sortDesc: true,
       viewOptions: [
         { id: 'timeline', label: '时间轴', icon: 'timeline', title: '按 15 分钟归并的卡片流' },
@@ -496,14 +485,6 @@ export default {
         else groups.push({ hour, label: `${this.pad(hour)}:00`, rows: [r] });
       }
       return groups;
-    },
-    viewLabel() {
-      const hit = this.viewOptions.find(o => o.id === this.mode);
-      return hit ? hit.label : '时间轴';
-    },
-    viewIcon() {
-      const hit = this.viewOptions.find(o => o.id === this.mode);
-      return hit ? hit.icon : 'timeline';
     },
     /**
      * 四格统计随层切换口径：展示层看「有效/空闲/段数/覆盖」，
@@ -1054,15 +1035,7 @@ export default {
     },
 
     async moveBlock(date, b, newStart, dur) {
-      const toIso = (min) => {
-        const d = new Date(`${date}T00:00:00`);
-        d.setMinutes(min);
-        return d.toISOString();
-      };
-      await ipcRenderer.invoke('delete-display-range', {
-        date, start: toIso(b.startMin), end: toIso(b.endMin)
-      });
-      await this.writeAnnotation(date, newStart, dur, b);
+      await this.writeAnnotation(date, newStart, dur, b, [b.startMin, b.endMin]);
     },
 
     /** 右键菜单：和系统日历一致，编辑 / 复制 / 删除 */
@@ -1193,28 +1166,26 @@ export default {
         const b = this.editorTarget || {};
         // 块属于哪一天就用哪一天：日历会同时显示好几天，不能用「当前选中日期」
         const date = b.date || this.selectedDate;
-        // 编辑已有的一段：先把这段的旧标注清掉，否则会留下「同区间两条标注」，
-        // 一条改成新内容、另一条还挂着旧内容。
+        let ranges = [];
         if (b.startMin !== undefined && b.manual && !b.isNew) {
           const toIso = (min) => {
             const d = new Date(`${date}T00:00:00`);
             d.setMinutes(min);
             return d.toISOString();
           };
-          await ipcRenderer.invoke('delete-display-range', {
-            date,
-            start: toIso(b.startMin),
-            end: toIso(b.endMin)
-          });
+          ranges = [{ start: toIso(b.startMin), end: toIso(b.endMin) }];
         }
-        const res = await ipcRenderer.invoke('add-manual-record', {
+        const record = {
           date,
           startTime: payload.startTime,
           durationMin: payload.durationMin,
           app: payload.app,
           title: payload.note,
           category: payload.category
-        });
+        };
+        const res = ranges.length
+          ? await ipcRenderer.invoke('replace-display-ranges', { ranges, record })
+          : await ipcRenderer.invoke('add-manual-record', record);
         if (!res || !res.ok) {
           this.$emit('manual-error', (res && res.error) || '保存失败');
           return;
@@ -1270,24 +1241,27 @@ export default {
       this.beginDrag(onMove, onUp);
     },
 
-    /** 写一条标注覆盖 [startMin, startMin+durationMin)，先清掉同区间的旧标注 */
-    async writeAnnotation(date, startMin, durationMin, b) {
+    /** 原子地替换目标区间内旧标注；拖动时同时移除原区间。 */
+    async writeAnnotation(date, startMin, durationMin, b, oldRange = null) {
       const toIso = (min) => {
         const d = new Date(`${date}T00:00:00`);
         d.setMinutes(min);
         return d.toISOString();
       };
-      await ipcRenderer.invoke('delete-display-range', {
-        date, start: toIso(startMin), end: toIso(startMin + durationMin)
-      });
-      await ipcRenderer.invoke('add-manual-record', {
+      const ranges = [{ start: toIso(startMin), end: toIso(startMin + durationMin) }];
+      if (oldRange) ranges.push({ start: toIso(oldRange[0]), end: toIso(oldRange[1]) });
+      const res = await ipcRenderer.invoke('replace-display-ranges', { ranges, record: {
         date,
         startTime: this.clock(startMin),
         durationMin,
         app: b.app || '标注',
         title: '',
         category: b.category
-      });
+      } });
+      if (!res?.ok) {
+        this.$emit('manual-error', res?.error || '保存失败，原记录未更改');
+        return;
+      }
       await this.refreshAfterWrite();
     },
 
@@ -1318,13 +1292,9 @@ export default {
       const m = Math.max(0, Math.min(1440, Math.round(min)));
       return `${this.pad(Math.floor(m / 60))}:${this.pad(m % 60)}`;
     },
-    closeMenu() {
-      this.menuOpen = false;
-    },
     setMode(id) {
       if (!this.viewOptions.some(o => o.id === id)) return;
       this.mode = id;
-      this.menuOpen = false;
       // 切视图时收掉所有临时浮层：拖拽预览、右键菜单、编辑器、补记面板
       // 都不该跟着飘到下一个视图上（拖拽监听也必须在这里解绑）
       this.endDrag();
@@ -1540,65 +1510,34 @@ export default {
   padding: var(--sp-1) var(--sp-1) 0;
 }
 .view-switch {
-  position: relative;
+  display: inline-flex;
   flex: none;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
 }
-.view-trigger {
+.view-tab, .record-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  font-size: var(--fs-14);
-  font-weight: var(--fw-semibold);
-  color: var(--accent);
-  background: transparent;
-  border: 0;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-.view-trigger:hover { background: var(--accent-soft); }
-.view-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 20;
-  min-width: 196px;
-  padding: 5px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-lg);
-}
-.view-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  text-align: left;
+  gap: 6px;
+  padding: 6px 9px;
   font-size: var(--fs-12);
   color: var(--text-secondary);
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
   cursor: pointer;
 }
-.view-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
-.view-menu button.active { color: var(--accent); background: var(--accent-soft); }
-.view-menu .vm-label { flex: 1; }
-.view-menu small {
-  font-size: var(--fs-10);
-  color: var(--text-tertiary);
-  padding: 1px 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-full);
+.view-tab:hover, .record-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.view-tab.active, .record-toggle.active {
+  color: var(--accent);
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-sm);
 }
-.view-menu-sep {
-  display: block;
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--border-subtle);
-}
+.record-toggle { flex: none; font-size: var(--fs-11); }
 .view-date {
   flex: 1;
   text-align: center;
@@ -1621,6 +1560,12 @@ export default {
   cursor: pointer;
 }
 .order-btn:hover { color: var(--text-primary); border-color: var(--border-default); }
+
+@media (max-width: 700px) {
+  .view-head { flex-wrap: wrap; }
+  .view-date { order: 3; flex-basis: 100%; text-align: left; }
+  .order-btn { margin-left: auto; }
+}
 
 /* ---------- 补记面板 ---------- */
 .manual-panel {

@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
+const { copyMissingData } = require('./fileMigration');
+const { writeFileAtomic } = require('./atomicFile');
 
 class StorageManager {
   constructor(customBasePath) {
@@ -162,7 +164,7 @@ class StorageManager {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+      writeFileAtomic(filePath, JSON.stringify(data, null, 2));
       return true;
     } catch (error) {
       console.error(`写入文件失败 ${filePath}:`, error);
@@ -400,7 +402,7 @@ class StorageManager {
       out.push(line);
     }
     if (!hit) return { success: false, error: '没找到这条记录' };
-    fs.writeFileSync(file, out.join('\n') + '\n', 'utf8');
+    writeFileAtomic(file, out.join('\n') + '\n');
     return { success: true };
   }
 
@@ -430,8 +432,37 @@ class StorageManager {
       out.push(line);
     }
     if (!removed) return { success: false, error: '这一段来自记录层，不能删除（可以编辑覆盖它）', removed: 0 };
-    fs.writeFileSync(file, out.length ? out.join('\n') + '\n' : '', 'utf8');
+    writeFileAtomic(file, out.length ? out.join('\n') + '\n' : '');
     return { success: true, removed };
+  }
+
+  /** 一次提交「删旧标注 + 写新标注」，失败时原文件保持不变。 */
+  replaceDisplayRanges(dateStr, ranges, record) {
+    const file = this._activityJsonlFile(dateStr);
+    const cuts = (ranges || []).map(r => [new Date(r.start).getTime(), new Date(r.end).getTime()]);
+    if (cuts.some(([a, b]) => !Number.isFinite(a) || !Number.isFinite(b) || b <= a)) {
+      return { success: false, error: '时间区间无效' };
+    }
+    try {
+      const out = [];
+      const lines = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let rec;
+        try { rec = JSON.parse(line); } catch (_) { out.push(line); continue; }
+        const start = new Date(rec.t).getTime();
+        const end = start + (rec.dur || 0);
+        if (StorageManager.layerOf(rec) === 'display' &&
+            cuts.some(([a, b]) => start < b && end > a)) continue;
+        out.push(line);
+      }
+      out.push(JSON.stringify(record));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      writeFileAtomic(file, out.join('\n') + '\n');
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   }
 
   /** 删除一条展示层记录。记录层一律拒绝（要删只能删整天，那是另一套语义）。 */
@@ -456,7 +487,7 @@ class StorageManager {
       out.push(line);
     }
     if (!removed) return { success: false, error: '没找到这条记录' };
-    fs.writeFileSync(file, out.length ? out.join('\n') + '\n' : '', 'utf8');
+    writeFileAtomic(file, out.length ? out.join('\n') + '\n' : '');
     return { success: true };
   }
 
@@ -734,30 +765,8 @@ class StorageManager {
       fs.writeFileSync(testFile, 'test', 'utf8');
       fs.unlinkSync(testFile);
 
-      const dirsToMigrate = ['activities', 'summaries', 'summaries_md', 'screenshots'];
-      let fileCount = 0;
-
-      for (const dirName of dirsToMigrate) {
-        const srcDir = path.join(this.dataDir, dirName);
-        const destDir = path.join(newPath, dirName);
-        if (!fs.existsSync(srcDir)) continue;
-        if (!fs.existsSync(destDir)) {
-          fs.mkdirSync(destDir, { recursive: true });
-        }
-        const files = fs.readdirSync(srcDir);
-        for (const file of files) {
-          const srcFile = path.join(srcDir, file);
-          const destFile = path.join(destDir, file);
-          if (fs.statSync(srcFile).isFile()) {
-            // 目标目录已有数据的场景（例如指向 iCloud 上另一台机器的备份）：
-            // 绝不覆盖已有文件，避免把对方的原始数据冲掉。
-            if (!fs.existsSync(destFile)) {
-              fs.copyFileSync(srcFile, destFile);
-              fileCount++;
-            }
-          }
-        }
-      }
+      const fileCount = copyMissingData(this.dataDir, newPath,
+        ['activities', 'summaries', 'summaries_md', 'screenshots', 'arhat', 'dida', 'logs']);
 
       console.log(`已迁移 ${fileCount} 个文件到 ${newPath}`);
       return { success: true, fileCount };

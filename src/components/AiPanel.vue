@@ -81,6 +81,21 @@
 import { marked } from 'marked';
 import Icon from './Icon.vue';
 
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch]);
+}
+
+// 回顾来自外部模型或历史导入，不能把其中的 HTML 当作应用代码执行。
+const safeRenderer = new marked.Renderer();
+safeRenderer.html = html => escapeHtml(html);
+safeRenderer.image = (href, title, alt) => escapeHtml(alt || title || '图片');
+safeRenderer.link = (href, title, label) => {
+  if (!/^https?:\/\//i.test(String(href || ''))) return label;
+  return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(title)}">${label}</a>`;
+};
+
 const PROVIDER_NAMES = {
   deepseek: 'DeepSeek',
   openai: 'OpenAI',
@@ -134,9 +149,9 @@ export default {
   methods: {
     render(md) {
       try {
-        return marked.parse(md || '', { breaks: true });
+        return marked.parse(md || '', { breaks: true, renderer: safeRenderer });
       } catch (e) {
-        return String(md || '');
+        return escapeHtml(md);
       }
     },
     timeRange(s) {

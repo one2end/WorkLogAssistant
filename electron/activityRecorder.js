@@ -16,6 +16,7 @@
  */
 
 const MAX_IDLE_SEGMENT_MS = 2 * 60 * 60 * 1000; // 单段空闲最多记 2 小时
+const { isExcludedSample } = require('./privacyRules');
 
 const DEFAULTS = {
   evaluateMs: 1000,        // Windows 常驻采样时的评估节奏
@@ -138,6 +139,12 @@ class ActivityRecorder {
 
     const sample = await this._sample(opts, now);
     if (!sample) return;
+
+    // 在形成片段前过滤，避免敏感应用或标题进入活动文件。
+    if (isExcludedSample(sample, this.getConfig()?.monitoring)) {
+      this._closeCurrent(now);
+      return;
+    }
 
     const idleNow = (sample.idleMs || 0) >= opts.idleThresholdMs;
 

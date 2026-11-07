@@ -12,8 +12,13 @@
         class="dock-card"
         :class="{ 'is-on': on(p) }"
         role="button"
+        tabindex="0"
+        :aria-pressed="on(p)"
+        :aria-label="`${p.name}，${on(p) ? '已开启' : '已关闭'}，按回车切换`"
         :title="`点击${on(p) ? '关闭' : '开启'}${p.name}`"
         @click="$emit('toggle', p.id)"
+        @keydown.enter.prevent="$emit('toggle', p.id)"
+        @keydown.space.prevent="$emit('toggle', p.id)"
       >
         <div class="dock-top">
           <span class="dock-icon"><Icon :name="p.icon" :size="15" /></span>
@@ -38,9 +43,9 @@
           </div>
         </template>
 
-        <!-- AI：模型 + 首页洞察条数 -->
+        <!-- AI 状态与本地记录提示分别说明，避免混淆来源 -->
         <div v-else-if="p.id === 'ai' && on(p)" class="dock-ai">
-          <span>{{ insightCount ? `${insightCount} 条待确认的提示` : '暂无待确认提示' }}</span>
+          <span>可生成模型回顾 · {{ insightCount }} 条本地记录提示</span>
         </div>
 
         <div class="dock-foot">

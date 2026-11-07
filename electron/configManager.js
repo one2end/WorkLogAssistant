@@ -89,7 +89,9 @@ class ConfigManager {
       monitoring: {
         interval: 60,
         idleThresholdSec: 180,
-        minSegmentSec: 3
+        minSegmentSec: 3,
+        excludeApps: '',
+        excludeTitleContains: ''
       },
       focus: {
         // 番茄钟是以「插件」形式存在的能力，可整体开关（首页方块上的开关）
@@ -106,6 +108,7 @@ class ConfigManager {
         modelName: 'deepseek-flash'
       },
       summary: {
+        autoGenerate: false,
         intervalMinutes: 30,
         lookbackMinutes: 60,
         maxTokens: 500,

@@ -47,7 +47,7 @@ export const PLUGINS = [
 
 /** 首页统计卡片的可开关项 */
 export const DASHBOARD_CARDS = [
-  { key: 'aiInsights', label: 'AI 分析与提示' },
+  { key: 'aiInsights', label: '记录提示' },
   { key: 'heatmap', label: '活跃度热力图' },
   { key: 'session', label: '当前会话' },
   { key: 'composition', label: '时间构成' },
