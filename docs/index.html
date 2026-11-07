@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WorkLog — 记住你在电脑上做了什么</title>
-<meta name="description" content="停驻在后台的时间记录工具：自动记录电脑使用情况，AI 定时汇总成工作日志，还能把数据通过 MCP 交给 AI 分析。数据全部留在本地。">
-<meta property="og:title" content="WorkLog — 记住你在电脑上做了什么">
-<meta property="og:description" content="自动记录 + AI 汇总 + 专注助手 + MCP 数据接口。本地运行，不上传任何服务器。">
+<title>LifeLog — 本地优先的人生记录器</title>
+<meta name="description" content="本地优先的人生记录器：自动记录电脑使用、睡眠与生活，一天 96 个 15 分钟格，需要你做的只是确认那一下。数据全部留在本地，随时能带走。">
+<meta property="og:title" content="LifeLog — 本地优先的人生记录器">
+<meta property="og:description" content="自动记录 + 15 分钟格 + 专注助手 + MCP 数据接口。本地运行，不上传任何服务器。">
 <meta property="og:type" content="website">
 <link rel="icon" href="assets/favicon.png">
 <link rel="stylesheet" href="style.css">
@@ -27,7 +27,7 @@
           </linearGradient>
         </defs>
       </svg>
-      WorkLog
+      LifeLog
     </a>
     <div class="nav-links">
       <a href="#features">功能</a>
@@ -41,11 +41,12 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <span class="pill"><span class="dot"></span> v0.8.0 · Windows 10 / 11</span>
-    <h1>记住你在电脑上<br><span class="accent">到底做了什么</span></h1>
+    <span class="pill"><span class="dot"></span> v0.9.0 · Windows 10 / 11</span>
+    <h1>你的一天，<br><span class="accent">值得被记下来</span></h1>
     <p class="lead">
-      一个停驻在后台的小工具。自动记录你的窗口活动、算准每一段停留时间，
-      到点让 AI 汇总成一份工作日志。数据全在本地，还能通过 MCP 交给 AI 自己来查。
+      一个停驻在后台的小工具。自动记录窗口活动、算准每一段停留时间，
+      一天切成 96 个 15 分钟格——需要你做的，只是确认那一下。
+      记录的不只是工作，还有睡眠和生活。数据全在本地，还能通过 MCP 交给 AI 自己来查。
     </p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/one2end/WorkLogAssistant/releases/latest">
@@ -61,7 +62,7 @@
     <p class="meta-line">完全免费 · 无需注册 · 开源</p>
 
     <div class="shot hero-shot">
-      <img src="assets/today.png" alt="WorkLog 今日概览界面" width="1240" height="1960">
+      <img src="assets/today.png" alt="LifeLog 今日概览界面" width="1240" height="1960">
     </div>
   </div>
 </header>
@@ -116,7 +117,7 @@
         <h3>不是估算，是真实时长</h3>
         <p>
           很多时间记录工具只在窗口切换时记一个时间戳，时长靠「条数 × 采样间隔」去猜，
-          误差能到几倍。WorkLog 的做法是每秒采样，把一个连续状态折成一段，结束时带着精确毫秒数落盘。
+          误差能到几倍。LifeLog 的做法是每秒采样，把一个连续状态折成一段，结束时带着精确毫秒数落盘。
         </p>
         <ul class="check-list">
           <li>
@@ -134,7 +135,7 @@
         </ul>
       </div>
       <div class="shot">
-        <img src="assets/timeline.png" alt="WorkLog 时间线界面" width="1240" height="1960" loading="lazy">
+        <img src="assets/timeline.png" alt="LifeLog 时间线界面" width="1240" height="1960" loading="lazy">
       </div>
     </div>
   </div>
@@ -172,7 +173,7 @@
         </ul>
       </div>
       <div class="shot">
-        <img src="assets/focus.png" alt="WorkLog 专注模式全屏界面" width="1240" height="1960" loading="lazy">
+        <img src="assets/focus.png" alt="LifeLog 专注模式全屏界面" width="1240" height="1960" loading="lazy">
       </div>
     </div>
   </div>
@@ -184,7 +185,7 @@
       <div class="sec-tag">差异化</div>
       <h2>让 AI 自己来查你的时间</h2>
       <p>
-        大多数时间记录工具的数据是死在你自己的界面里的。WorkLog 把聚合结果开放成本地接口，
+        大多数时间记录工具的数据是死在你自己的界面里的。LifeLog 把聚合结果开放成本地接口，
         配一条 MCP，AI 就能直接查询、对比、分析，不用你导表格。
       </p>
     </div>
@@ -214,7 +215,7 @@
         </p>
       </div>
       <div class="shot">
-        <img src="assets/mcp.png" alt="WorkLog 设置页 AI 数据接口与 MCP 配置" width="1240" height="1960" loading="lazy">
+        <img src="assets/mcp.png" alt="LifeLog 设置页 AI 数据接口与 MCP 配置" width="1240" height="1960" loading="lazy">
       </div>
     </div>
   </div>
@@ -229,10 +230,10 @@
     </div>
     <div class="grid" style="grid-template-columns:1fr 1fr;align-items:start">
       <div class="shot">
-        <img src="assets/today-light.png" alt="WorkLog 浅色主题" width="1240" height="1960" loading="lazy">
+        <img src="assets/today-light.png" alt="LifeLog 浅色主题" width="1240" height="1960" loading="lazy">
       </div>
       <div class="shot">
-        <img src="assets/settings.png" alt="WorkLog 设置页主题选择" width="1240" height="1960" loading="lazy">
+        <img src="assets/settings.png" alt="LifeLog 设置页主题选择" width="1240" height="1960" loading="lazy">
       </div>
     </div>
   </div>
@@ -243,7 +244,7 @@
     <div class="sec-head">
       <div class="sec-tag">下载</div>
       <h2>装到电脑上就能用</h2>
-      <p>Windows 10 / 11，64 位。不需要注册账号，不需要联网也能记录。</p>
+      <p>Windows 10 / 11，64 位，约 75 MB。不需要注册账号，不需要联网也能记录；AI 是可选能力，默认关闭。</p>
     </div>
 
     <div class="dl-grid">
@@ -251,7 +252,7 @@
         <span class="dl-label">推荐</span>
         <h3>安装版</h3>
         <p>创建开始菜单和桌面快捷方式，支持开机自启动</p>
-        <a class="btn btn-primary" href="https://github.com/one2end/WorkLogAssistant/releases/latest/download/WorkLog.Assistant.Setup.0.8.0.exe">
+        <a class="btn btn-primary" href="https://github.com/one2end/WorkLogAssistant/releases/download/v0.9.0/LifeLog-Setup-0.9.0.exe">
           下载安装包
         </a>
       </div>
@@ -259,7 +260,7 @@
         <span class="dl-label">便携</span>
         <h3>免安装版</h3>
         <p>单个 exe，双击即用，适合放 U 盘或临时机器</p>
-        <a class="btn btn-ghost" href="https://github.com/one2end/WorkLogAssistant/releases/latest/download/WorkLog.Assistant.0.8.0.exe">
+        <a class="btn btn-ghost" href="https://github.com/one2end/WorkLogAssistant/releases/download/v0.9.0/LifeLog-0.9.0.exe">
           下载免安装版
         </a>
       </div>
@@ -308,7 +309,7 @@
       <details>
         <summary>和 RescueTime 有什么区别？</summary>
         <p>
-          RescueTime 是云端的，数据在它服务器上，且不开放原始数据。WorkLog 全部本地，
+          RescueTime 是云端的，数据在它服务器上，且不开放原始数据。LifeLog 全部本地，
           数据格式就是明文 JSONL，你想怎么分析都行；而且它把数据通过 MCP 直接开放给 AI，
           这是云端工具做不到的。
         </p>
@@ -335,7 +336,7 @@
 
 <footer>
   <div class="wrap foot-inner">
-    <span>WorkLog Assistant · v0.8.0 · 本地运行，数据归你</span>
+    <span>LifeLog · v0.9.0 · 本地运行，数据归你</span>
     <div class="foot-links">
       <a href="https://github.com/one2end/WorkLogAssistant" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/one2end/WorkLogAssistant/releases" target="_blank" rel="noopener">版本历史</a>
