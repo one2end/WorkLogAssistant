@@ -27,8 +27,8 @@
 
 **v0.9.0**（2026-11-07 发布）— 数据分层（记录层只读 / 标注层可改）/ 15 分钟统一原子 / 日历重做（每小时 54px、拖拽带预览）/ AI 降级为能力开关 / 主题拆成「明暗 × 强调色」
 
-- 安装版：[LifeLog Setup 0.9.0.exe](https://github.com/one2end/WorkLogAssistant/releases/download/v0.9.0/LifeLog%20Setup%200.9.0.exe)（约 76 MB）
-- 便携版：[LifeLog 0.9.0.exe](https://github.com/one2end/WorkLogAssistant/releases/download/v0.9.0/LifeLog%200.9.0.exe)（免安装，数据同样落在 `%APPDATA%\worklog-assistant`）
+- 安装版：[LifeLog-Setup-0.9.0.exe](https://github.com/one2end/WorkLogAssistant/releases/download/v0.9.0/LifeLog-Setup-0.9.0.exe)（约 75 MB）
+- 便携版：[LifeLog-0.9.0.exe](https://github.com/one2end/WorkLogAssistant/releases/download/v0.9.0/LifeLog-0.9.0.exe)（免安装，数据同样落在 `%APPDATA%\worklog-assistant`）
 
 已导入 2017–2026 共 **1082 天**历史数据（滴答清单 + UpTimer）。Windows 安装包由 `npm run electron:build` 产出。
 
