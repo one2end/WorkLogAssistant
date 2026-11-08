@@ -4,7 +4,7 @@ const { app } = require('electron');
 
 class ArhatManager {
   constructor(customBasePath) {
-    const userDataPath = app.getPath('userData');
+    const userDataPath = customBasePath && customBasePath.trim() ? null : app.getPath('userData');
     const dataDir = customBasePath && customBasePath.trim()
       ? customBasePath
       : path.join(userDataPath, 'Data');
@@ -19,7 +19,7 @@ class ArhatManager {
 
   /** 运行时切换数据根目录（配合设置页改存储路径后立即生效） */
   setDataDir(newPath) {
-    const userDataPath = app.getPath('userData');
+    const userDataPath = newPath && newPath.trim() ? null : app.getPath('userData');
     const base = newPath && newPath.trim()
       ? newPath.trim()
       : path.join(userDataPath, 'Data');
