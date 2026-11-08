@@ -1041,6 +1041,36 @@ ipcMain.handle('get-ai-usage', () => ({
   next: summarizer.estimateNextReview(configManager.getConfig().summary?.intervalMinutes || 60)
 }));
 
+ipcMain.handle('suggest-categories', async () => {
+  try {
+    const config = configManager.getConfig();
+    if (!config.ai?.enabled) throw new Error('请先开启 AI 能力');
+    const windows = [];
+    for (let daysAgo = 0; daysAgo < 7; daysAgo++) {
+      const day = new Date();
+      day.setDate(day.getDate() - daysAgo);
+      const report = analytics.buildDayReport(storageManager.getDataDir(), analytics.toDateStr(day));
+      for (const item of report.recordedWindows || []) {
+        if (item.title && !windows.some(w => w.title === item.title)) windows.push(item);
+      }
+    }
+    if (!windows.length) return { ok: true, categories: [] };
+    windows.sort((a, b) => b.durationMs - a.durationMs);
+    const existing = (config.analysis?.customCategories || []).map(c => c.name);
+    const prompt = `根据这些最近的窗口标题，建议最多 3 个比现有七组更有用的自定义生活记录分类。已有分类：工作、学习、生活、娱乐、睡眠、专注、其他${existing.length ? '、' + existing.join('、') : ''}。\n只返回 JSON 数组，每项 {"name":"2-6字中文名称","color":"#六位十六进制颜色","reason":"不超过20字的窗口证据"}。没有必要就返回 []。不要输出 Markdown。\n窗口：${JSON.stringify(windows.slice(0, 25).map(w => ({ title: String(w.title).slice(0, 90), app: w.app, minutes: Math.round(w.durationMs / 60000) })))}`;
+    const raw = await summarizer.callAI(prompt);
+    const match = String(raw || '').match(/\[[\s\S]*\]/);
+    const parsed = match ? JSON.parse(match[0]) : [];
+    const categories = (Array.isArray(parsed) ? parsed : []).filter(c =>
+      c && typeof c.name === 'string' && /^[\u4e00-\u9fa5]{2,6}$/.test(c.name) &&
+      /^#[0-9a-fA-F]{6}$/.test(c.color) && !['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...existing].includes(c.name)
+    ).slice(0, 3).map(c => ({ name: c.name, color: c.color, reason: String(c.reason || '').slice(0, 30) }));
+    return { ok: true, categories };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
 ipcMain.handle('generate-summary', async () => {
   return await summarizer.generateSummary();
 });

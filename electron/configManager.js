@@ -77,6 +77,8 @@ class ConfigManager {
     const ui = raw.ui;
     if (!ui || typeof ui !== 'object') return raw;
     if (ui.surface === 'studio') ui.surface = 'nocturne';
+    const themeAccents = { nocturne: 'blue', linen: 'amber', mist: 'green', aurora: 'violet', ember: 'rose' };
+    if (themeAccents[ui.surface]) ui.accent = themeAccents[ui.surface];
     if (ui.mode) return raw;
     const mapped = MAP[ui.theme];
     if (!mapped) return raw;
@@ -127,7 +129,8 @@ class ConfigManager {
         token: ''
       },
       analysis: {
-        categoryRules: null
+        categoryRules: null,
+        customCategories: []
       },
       // AI 是能力开关，不是一个独立页面：关闭时应用只做本地记录与统计，
       // 数据不出本机；开启后才会自动归类、生成回顾、主动提示。

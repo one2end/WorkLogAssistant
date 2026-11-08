@@ -52,7 +52,6 @@ export const DASHBOARD_CARDS = [
   { key: 'session', label: '当前会话' },
   { key: 'composition', label: '时间构成' },
   { key: 'apps', label: '应用排行' },
-  { key: 'dataNotes', label: '数据说明' },
   { key: 'focusNotes', label: '专注与随手记' }
 ];
 

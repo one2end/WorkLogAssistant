@@ -110,6 +110,7 @@
           :dates-with-data="datesWithData"
           :focus-target="timelineTarget"
           :theme="theme"
+          :custom-categories="config.analysis?.customCategories || []"
           @update:selected-date="onSelectDate"
           @shift="changeDate"
           @today="goToToday"
@@ -124,11 +125,11 @@
           v-else
           :config="config"
           :theme="theme"
-          :accent="accent"
-          :accent-options="accentOptions"
           :active-section="settingsSection"
           :provider-presets="providerPresets"
           :ai-usage="aiUsage"
+          :category-suggestions="categorySuggestions"
+          :category-suggesting="categorySuggesting"
           :dida-status="didaStatus"
           :bridge="bridge"
           :bridge-loading="bridgeLoading"
@@ -143,10 +144,11 @@
           :logs="logs"
           :storage-path="storagePath"
           @save="saveConfig"
+          @category-change="onCategoryChange"
+          @suggest-categories="suggestCategories"
           @provider-change="onProviderChange"
           @toggle-auto-launch="toggleAutoLaunch"
           @theme-change="onThemeChange"
-          @accent-change="onAccentChange"
           @surface-change="onSurfaceChange"
           @select-storage="selectStoragePath"
           @reset-storage="resetStoragePath"
@@ -189,7 +191,7 @@ import FocusOverlay from './components/FocusOverlay.vue';
 import TodayView from './views/TodayView.vue';
 import TimelineView from './views/TimelineView.vue';
 import SettingsView from './views/SettingsView.vue';
-import { ACCENTS } from './styles/accents.js';
+import { SURFACES } from './styles/accents.js';
 import { pluginById, pluginOn, writePath } from './plugins/registry.js';
 
 function pad(n) {
@@ -248,6 +250,8 @@ export default {
       activities: [],
       summaries: [],
       annotationSuggestions: [],
+      categorySuggestions: [],
+      categorySuggesting: false,
       aiUsage: { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCalls: 0, next: { inputTokens: 0, outputLimit: 500, records: 0 } },
       datesWithData: new Set(),
       heatDaily: [],
@@ -273,7 +277,6 @@ export default {
       theme: 'dark',
       accent: 'blue',
       // 外观 = 明暗模式 × 强调色。不再有「整套染成草绿色」这类主题。
-      accentOptions: ACCENTS,
       settingsSection: 'appearance',
       didaStatus: {},
       autoLaunch: false,
@@ -563,7 +566,7 @@ export default {
           };
         }
         this.theme = this.config.ui?.mode === 'light' ? 'light' : 'dark';
-        this.accent = this.config.ui?.accent || 'blue';
+        this.accent = SURFACES.find(s => s.id === this.config.ui?.surface)?.accent || 'blue';
         this.storagePath = await ipcRenderer.invoke('get-storage-path');
       } catch (error) {
         this.addLog('读取配置失败: ' + error.message, 'error');
@@ -610,17 +613,31 @@ export default {
       this.saveConfig();
     },
 
-    onAccentChange(accent) {
-      this.accent = accent;
-      this.config.ui = this.config.ui || {};
-      this.config.ui.accent = accent;
-      this.flashThemeSwitch();
+    onCategoryChange(categories) {
+      this.config.analysis = { ...(this.config.analysis || {}), customCategories: categories };
       this.saveConfig();
+      this.onDataChanged();
+    },
+    async suggestCategories() {
+      this.categorySuggesting = true;
+      try {
+        const result = await ipcRenderer.invoke('suggest-categories');
+        if (!result?.ok) throw new Error(result?.error || '分类建议生成失败');
+        this.categorySuggestions = result.categories;
+        if (!result.categories.length) this.showToast('暂无新的分类建议');
+        this.loadAiUsage();
+      } catch (error) {
+        this.showToast(error.message, 'error');
+      } finally {
+        this.categorySuggesting = false;
+      }
     },
 
     onSurfaceChange(surface) {
       this.config.ui = this.config.ui || {};
       this.config.ui.surface = surface;
+      this.accent = SURFACES.find(s => s.id === surface)?.accent || 'blue';
+      this.config.ui.accent = this.accent;
       this.flashThemeSwitch();
       this.saveConfig();
     },

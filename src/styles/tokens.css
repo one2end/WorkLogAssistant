@@ -258,4 +258,28 @@
   --text-tertiary: #799484;
   --shadow-md: 0 4px 12px rgba(34, 78, 52, 0.06), 0 18px 40px rgba(34, 78, 52, 0.05);
 }
+.theme-dark.surface-aurora {
+  --bg-canvas: #121126; --bg-surface: #211f3a; --bg-elevated: #2b2947; --bg-inset: #19172e;
+  --bg-hover: rgba(174, 155, 239, 0.1); --border-subtle: rgba(174, 155, 239, 0.1);
+  --border-default: rgba(174, 155, 239, 0.18); --text-primary: #f0edfa;
+  --text-secondary: #bbb5d4; --text-tertiary: #8e88ab;
+}
+.theme-light.surface-aurora {
+  --bg-canvas: #f0eef9; --bg-surface: #fbfaff; --bg-elevated: #ffffff; --bg-inset: #e9e5f5;
+  --bg-hover: rgba(103, 82, 164, 0.07); --border-subtle: rgba(103, 82, 164, 0.1);
+  --border-default: rgba(103, 82, 164, 0.17); --text-primary: #30294b;
+  --text-secondary: #615a7e; --text-tertiary: #8c86a6;
+}
+.theme-dark.surface-ember {
+  --bg-canvas: #211619; --bg-surface: #302126; --bg-elevated: #3d2b30; --bg-inset: #271a1f;
+  --bg-hover: rgba(239, 166, 151, 0.09); --border-subtle: rgba(239, 166, 151, 0.09);
+  --border-default: rgba(239, 166, 151, 0.17); --text-primary: #faefeb;
+  --text-secondary: #cbb7b4; --text-tertiary: #a18a89;
+}
+.theme-light.surface-ember {
+  --bg-canvas: #f8eee9; --bg-surface: #fff9f5; --bg-elevated: #ffffff; --bg-inset: #f1e2db;
+  --bg-hover: rgba(156, 72, 72, 0.06); --border-subtle: rgba(156, 72, 72, 0.1);
+  --border-default: rgba(156, 72, 72, 0.17); --text-primary: #442b2f;
+  --text-secondary: #815b60; --text-tertiary: #a08081;
+}
 

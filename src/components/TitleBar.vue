@@ -286,6 +286,8 @@ export default {
 .tb-theme-dot.nocturne { background: linear-gradient(135deg, #0b1728, #77a8d8); }
 .tb-theme-dot.linen { background: linear-gradient(135deg, #9a754c, #f2dfb9); }
 .tb-theme-dot.mist { background: linear-gradient(135deg, #2e544f, #c2dbcb); }
+.tb-theme-dot.aurora { background: linear-gradient(135deg, #24204d, #9d91eb); }
+.tb-theme-dot.ember { background: linear-gradient(135deg, #69383e, #f2b0a2); }
 .tb-theme-name { font-size: var(--fs-11); color: var(--text-secondary); }
 
 .theme-pop {
@@ -374,6 +376,8 @@ export default {
 .nocturne .surface-sample { background: linear-gradient(135deg, #0b1728, #31577f); }
 .linen .surface-sample { background: linear-gradient(135deg, #a77d51, #f3e6c9); }
 .mist .surface-sample { background: linear-gradient(135deg, #2e544f, #d6eadc); }
+.aurora .surface-sample { background: linear-gradient(135deg, #24204d, #9d91eb); }
+.ember .surface-sample { background: linear-gradient(135deg, #69383e, #f2b0a2); }
 .theme-more { display: block; margin: 10px 0 0 auto; color: var(--accent); font-size: var(--fs-11); }
 
 .theme-pop-enter-active {

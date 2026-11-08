@@ -15,7 +15,7 @@
       >{{ s.label }}</button>
     </div>
 
-    <p class="group-title basic-group">基本设置 <span>界面、记录与数据</span></p>
+    <p class="group-title basic-group">界面与数据 <span>主题、分类、采集与存储</span></p>
 
     <!-- ---------------- 外观 ---------------- -->
     <section id="sec-appearance" class="sec">
@@ -45,17 +45,35 @@
             </button>
           </div>
         </div>
-        <div class="row-block">
-          <span class="row-label">强调色</span>
-          <div class="accent-row">
-            <button v-for="a in accentOptions" :key="a.id" class="accent-cell" :class="{ active: accent === a.id }" :title="a.label" @click="$emit('accent-change', a.id)">
-              <span class="accent-dot" :style="{ background: accentColor(a.id) }"><Icon v-if="accent === a.id" name="check" :size="10" /></span>
-              <span class="accent-name">{{ a.label }}</span>
-            </button>
-          </div>
-        </div>
       </div>
       <div v-else class="sec-collapsed">已折叠</div>
+    </section>
+
+    <section id="sec-categories" class="sec">
+      <div class="sec-head"><Icon name="palette" :size="13" /><span>自定义分类</span></div>
+      <div class="sec-body">
+        <p class="sec-desc">在时间轴和日历里点选分类；颜色用于时间块和图表。同名分类不能重复。</p>
+        <div class="category-ai">
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="!aiOn || categorySuggesting" @click="$emit('suggest-categories')">{{ categorySuggesting ? '正在分析窗口…' : 'AI 建议分类' }}</button>
+          <span class="hint">根据最近窗口标题提出少量建议，确认后才保存；会消耗 Token。{{ aiOn ? '' : '请先开启 AI 能力。' }}</span>
+        </div>
+        <div v-for="suggestion in categorySuggestions" :key="suggestion.name" class="category-editor">
+          <span class="suggestion-dot" :style="{ background: suggestion.color }"></span>
+          <span class="suggestion-name">{{ suggestion.name }} · {{ suggestion.reason }}</span>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="customCategories.some(c => c.name === suggestion.name)" @click="acceptCategory(suggestion)">采用</button>
+        </div>
+        <div v-for="(category, index) in customCategories" :key="index" class="category-editor">
+          <input type="color" :value="category.color" :aria-label="`${category.name}的颜色`" @change="updateCategory(index, 'color', $event.target.value)">
+          <input type="text" :value="category.name" maxlength="16" aria-label="分类名称" @change="updateCategory(index, 'name', $event.target.value)">
+          <button type="button" class="btn btn-ghost btn-sm" @click="removeCategory(index)">删除</button>
+        </div>
+        <div class="category-editor">
+          <input v-model="newCategoryColor" type="color" aria-label="新分类颜色">
+          <input v-model="newCategoryName" type="text" maxlength="16" placeholder="新分类名称" aria-label="新分类名称" @keyup.enter="addCategory">
+          <button type="button" class="btn btn-secondary btn-sm" @click="addCategory">添加</button>
+        </div>
+        <p v-if="categoryError" class="hint category-error">{{ categoryError }}</p>
+      </div>
     </section>
 
     <!-- ---------------- 首页与图表 ---------------- -->
@@ -164,7 +182,6 @@
       <div class="sec-head">
         <Icon name="refresh" :size="13" />
         <span>滴答同步</span>
-        <span class="sec-badge" :class="{ on: didaOn }">{{ didaOn ? '已开启' : '已关闭' }}</span>
         <label class="switch">
           <input type="checkbox" :checked="didaOn" @change="set('dida.enabled', $event.target.checked)">
           <span class="switch-track"><span class="switch-thumb"></span></span>
@@ -269,7 +286,6 @@
       <div class="sec-head">
         <Icon name="zap" :size="13" />
         <span>AI 能力</span>
-        <span class="sec-badge" :class="{ on: aiOn }">{{ aiOn ? '已开启' : '已关闭' }}</span>
         <label class="switch">
           <input type="checkbox" :checked="aiOn" @change="set('ai.enabled', $event.target.checked)">
           <span class="switch-track"><span class="switch-thumb"></span></span>
@@ -326,7 +342,6 @@
       <div class="sec-head">
         <Icon name="target" :size="13" />
         <span>本地专注</span>
-        <span class="sec-badge" :class="{ on: pomodoroOn }">{{ pomodoroOn ? '已开启' : '已关闭' }}</span>
         <label class="switch">
           <input type="checkbox" :checked="pomodoroOn" @change="set('focus.enabled', $event.target.checked)">
           <span class="switch-track"><span class="switch-thumb"></span></span>
@@ -367,7 +382,6 @@
       <div class="sec-head">
         <Icon name="plug" :size="13" />
         <span>MCP 接口</span>
-        <span class="sec-badge" :class="{ on: bridgeOn }">{{ bridgeOn ? '运行中' : (bridgeEnabled ? '未启动' : '已关闭') }}</span>
         <label class="switch">
           <input type="checkbox" :checked="bridgeEnabled" :disabled="bridgeLoading" @change="$emit('bridge-toggle', $event.target.checked)">
           <span class="switch-track"><span class="switch-thumb"></span></span>
@@ -499,7 +513,7 @@
 </template>
 <script>
 import Icon from '../components/Icon.vue';
-import { accentSwatch, ACCENTS, MODES, SURFACES } from '../styles/accents.js';
+import { MODES, SURFACES } from '../styles/accents.js';
 import { DASHBOARD_CARDS, AI_MODELS } from '../plugins/registry.js';
 
 export default {
@@ -508,11 +522,11 @@ export default {
   props: {
     config: { type: Object, required: true },
     theme: { type: String, default: 'dark' },
-    accent: { type: String, default: 'blue' },
-    accentOptions: { type: Array, default: () => ACCENTS },
     activeSection: { type: String, default: 'appearance' },
     providerPresets: { type: Object, default: () => ({}) },
     aiUsage: { type: Object, default: () => ({}) },
+    categorySuggestions: { type: Array, default: () => [] },
+    categorySuggesting: { type: Boolean, default: false },
     didaStatus: { type: Object, default: () => ({}) },
     bridge: { type: Object, default: null },
     bridgeLoading: { type: Boolean, default: false },
@@ -528,7 +542,7 @@ export default {
     storagePath: { type: String, default: '' }
   },
   emits: [
-    'save', 'provider-change', 'toggle-auto-launch', 'theme-change', 'accent-change', 'surface-change',
+    'save', 'category-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
     'select-storage', 'reset-storage',
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
@@ -543,6 +557,7 @@ export default {
       surfaces: SURFACES,
       sections: [
         { id: 'appearance', label: '外观' },
+        { id: 'categories', label: '分类' },
         { id: 'dashboard', label: '首页' },
         { id: 'privacy', label: '隐私' },
         { id: 'data', label: '数据' },
@@ -557,7 +572,10 @@ export default {
       folded: {
         pomodoro: true, ai: true, bridge: true, dida: true,
         dashboard: true, appearance: false, data: true, privacy: true, advanced: true, about: true
-      }
+      },
+      newCategoryName: '',
+      newCategoryColor: '#6f9fe8',
+      categoryError: ''
     };
   },
   watch: {
@@ -569,6 +587,7 @@ export default {
     this.$nextTick(() => this.scrollTo(this.section));
   },
   computed: {
+    customCategories() { return this.config.analysis?.customCategories || []; },
     dashboardCards() { return DASHBOARD_CARDS; },
     modelPresets() { return AI_MODELS; },
     dida() { return this.config.dida || {}; },
@@ -625,7 +644,37 @@ export default {
       this.set(path, n);
     },
     copy(text, tag) { this.$emit('bridge-copy', text, tag); },
-    accentColor(id) { return accentSwatch(id, this.theme); },
+    addCategory() {
+      const name = this.newCategoryName.trim();
+      const reserved = ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'];
+      if (!name || reserved.includes(name) || this.customCategories.some(c => c.name === name)) {
+        this.categoryError = '请输入未使用的分类名称'; return;
+      }
+      this.categoryError = '';
+      this.$emit('category-change', [...this.customCategories, { name, color: this.newCategoryColor }]);
+      this.newCategoryName = '';
+    },
+    acceptCategory(suggestion) {
+      this.newCategoryName = suggestion.name;
+      this.newCategoryColor = suggestion.color;
+      this.addCategory();
+    },
+    updateCategory(index, field, value) {
+      const next = [...this.customCategories];
+      if (field === 'name') {
+        value = value.trim();
+        if (!value || [...['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'], ...next.filter((_, i) => i !== index).map(c => c.name)].includes(value)) {
+          this.categoryError = '分类名称不能为空或重复'; return;
+        }
+      }
+      if (field === 'color' && !/^#[0-9a-fA-F]{6}$/.test(value)) return;
+      next[index] = { ...next[index], [field]: value };
+      this.$emit('category-change', next);
+      this.categoryError = '';
+    },
+    removeCategory(index) {
+      this.$emit('category-change', this.customCategories.filter((_, i) => i !== index));
+    },
     cardOn(key) {
       const cards = (this.config.dashboard && this.config.dashboard.cards) || {};
       return cards[key] === undefined ? true : !!cards[key];
@@ -693,6 +742,14 @@ export default {
 .sec-head .icon {
   color: var(--text-tertiary);
 }
+
+.category-ai { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0; }
+.category-editor { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0; }
+.category-editor input[type="color"] { width: 36px; height: 30px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: var(--r-sm); background: var(--bg-elevated); cursor: pointer; }
+.category-editor input[type="text"] { flex: 1; min-width: 100px; max-width: 240px; }
+.category-editor .suggestion-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+.category-editor .suggestion-name { flex: 1; font-size: var(--fs-11); color: var(--text-secondary); }
+.category-error { color: var(--danger); }
 
 .sec-body {
   padding: var(--sp-1) var(--sp-4) var(--sp-3);
@@ -1046,54 +1103,9 @@ export default {
 .nocturne .surface-preview { background: linear-gradient(135deg, #0d192b, #31557e); }
 .linen .surface-preview { background: linear-gradient(135deg, #a77d51, #f3e6c9); }
 .mist .surface-preview { background: linear-gradient(135deg, #2e544f, #d6eadc); }
+.aurora .surface-preview { background: linear-gradient(135deg, #24204d, #9d91eb); }
+.ember .surface-preview { background: linear-gradient(135deg, #69383e, #f2b0a2); }
 @media (max-width: 600px) { .surface-grid { grid-template-columns: 1fr; } }
-
-/* 强调色：一排圆点 */
-.accent-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-
-.accent-cell {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
-  border-radius: var(--r-sm);
-  border: 1px solid transparent;
-  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
-}
-
-.accent-cell:hover {
-  background: var(--bg-hover);
-}
-
-.accent-cell.active {
-  border-color: var(--border-strong);
-  background: var(--bg-inset);
-}
-
-.accent-dot {
-  width: 20px;
-  height: 20px;
-  border-radius: var(--r-full);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
-}
-
-.accent-name {
-  font-size: var(--fs-10);
-  color: var(--text-secondary);
-}
-
-.accent-cell.active .accent-name {
-  color: var(--text-primary);
-}
 
 .theme-check {
   position: absolute;

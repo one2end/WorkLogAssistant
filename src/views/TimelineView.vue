@@ -64,12 +64,14 @@
         <span>事项</span>
         <input v-model="manualApp" type="text" placeholder="这段时间在做什么（必填）">
       </label>
-      <label class="mf full">
+      <div class="mf full">
         <span>分类</span>
-        <select v-model="manualCategory">
-          <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
-        </select>
-      </label>
+        <div class="manual-categories" role="group" aria-label="分类">
+          <button v-for="c in categories" :key="c" type="button" class="manual-category"
+            :class="{ selected: manualCategory === c }" :aria-pressed="manualCategory === c"
+            :style="{ '--category-color': colorOf(c) }" @click="manualCategory = c">{{ c }}</button>
+        </div>
+      </div>
       <label class="mf full">
         <span>备注</span>
         <input v-model="manualTitle" type="text" placeholder="补充说明，可留空">
@@ -358,6 +360,7 @@ export default {
     selectedDate: { type: String, required: true },
     datesWithData: { type: Set, default: () => new Set() },
     focusTarget: { type: Object, default: null },
+    customCategories: { type: Array, default: () => [] },
     theme: { type: String, default: 'dark' }
   },
   emits: ['update:selectedDate', 'shift', 'today', 'refresh',
@@ -403,8 +406,6 @@ export default {
       manualTitle: '',
       manualCategory: '其他',
       savingManual: false,
-      // 记录只需要一眼选中的 7 个分组（细分分类仍由后端自动推断）
-      categories: ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'],
       tick: 0,
       timer: null
     };
@@ -425,6 +426,9 @@ export default {
     }
   },
   computed: {
+    categories() {
+      return [...new Set(['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...this.customCategories.map(c => c.name).filter(Boolean)])];
+    },
     todayStr() {
       const n = new Date();
       return `${n.getFullYear()}-${this.pad(n.getMonth() + 1)}-${this.pad(n.getDate())}`;
@@ -1314,6 +1318,8 @@ export default {
       return CAT_ICONS[cat] || 'activity';
     },
     colorOf(name) {
+      const custom = this.customCategories.find(c => c.name === name);
+      if (custom && /^#[0-9a-fA-F]{6}$/.test(custom.color)) return custom.color;
       return colorForCategory(this.theme, name);
     },
     softColor(name, alpha) {
@@ -1597,6 +1603,9 @@ export default {
 .mf.grow { flex: 1; }
 .mf.full { width: 100%; }
 .mf > span { font-size: var(--fs-11); color: var(--text-tertiary); }
+.manual-categories { display: flex; flex-wrap: wrap; gap: 6px; }
+.manual-category { padding: 5px 10px; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; }
+.manual-category.selected { border-color: var(--category-color); color: var(--category-color); background: var(--accent-soft); }
 .manual-actions { display: flex; align-items: center; gap: var(--sp-2); justify-content: flex-end; }
 .manual-hint { flex: 1; font-size: var(--fs-11); color: var(--text-tertiary); }
 

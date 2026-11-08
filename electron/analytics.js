@@ -559,7 +559,8 @@ function buildSlots(atoms, dateStr, options = {}) {
       const segEnd = Math.min(to, dayStart + (idx + 1) * slotMs);
       const mins = (segEnd - cur) / 60000;
       const slot = slots[idx];
-      const cat = simpleCategory(a.category || '其他');
+      const cat = a.source === 'manual' && a.category && !CAT_TO_GROUP[a.category]
+        ? a.category : simpleCategory(a.category || '其他');
       slot.ms += segEnd - cur;
       slot.catMs[cat] = (slot.catMs[cat] || 0) + mins;
       slot.appMs[a.app] = (slot.appMs[a.app] || 0) + mins;
@@ -710,7 +711,7 @@ function aggregate(sessions) {
   // 细分分类仍留在 categories 里做统计与设置页规则。
   const groupMap = new Map();
   for (const c of categories) {
-    const g = simpleCategory(c.name);
+    const g = !CAT_TO_GROUP[c.name] ? c.name : simpleCategory(c.name);
     if (!groupMap.has(g)) groupMap.set(g, { name: g, durationMs: 0, sessionCount: 0, apps: new Set() });
     const item = groupMap.get(g);
     item.durationMs += c.durationMs;
@@ -809,6 +810,16 @@ function buildDayReport(dataDir, dateStr, options) {
   const recordedSessions = foldSessions(resolveByPriority(workAtoms.filter(a => a.source === 'auto')), opts)
     .filter(s => !classify.isExcluded(s.category));
   const recordedApps = aggregate(recordedSessions).apps;
+  const windowMap = new Map();
+  for (const atom of resolveByPriority(workAtoms.filter(a => a.source === 'auto'))) {
+    if (classify.isExcluded(atom.category) || atom.durationMs <= 0) continue;
+    const title = (atom.title || '').trim() || '未命名窗口';
+    const key = `${atom.app}\u0000${title}`;
+    const row = windowMap.get(key) || { title, app: atom.app, category: atom.category, durationMs: 0 };
+    row.durationMs += atom.durationMs;
+    windowMap.set(key, row);
+  }
+  const recordedWindows = [...windowMap.values()].sort((a, b) => b.durationMs - a.durationMs);
 
   // 旧数据里锁屏会被记成普通活动，这里也归入「空档」
   const sessions = [];
@@ -849,8 +860,8 @@ function buildDayReport(dataDir, dateStr, options) {
   if (bigGaps.length > 0) {
     dataNotes.push(`存在 ${bigGaps.length} 处超过 ${Math.round(opts.idleGapMs / 60000)} 分钟的空档（空档、休眠或应用未运行），此时长不可信`);
   }
-  if (spanMs > 0 && totalMs / spanMs < 0.35) {
-    dataNotes.push(`有效记录仅占区间跨度的 ${pct(totalMs / spanMs)}，实际在岗时间可能更长`);
+  if (spanMs > 0 && agg.totalMs / spanMs < 0.35) {
+    dataNotes.push(`已记录时长仅占区间跨度的 ${pct(agg.totalMs / spanMs)}，可检查未记录时段`);
   }
 
   const slots = buildSlots(resolvedAtoms, dateStr, opts);
@@ -878,6 +889,7 @@ function buildDayReport(dataDir, dateStr, options) {
     categoriesGrouped,
     apps,
     recordedApps,
+    recordedWindows,
     // 展示层：15 分钟一格的主要事件，UI 与 AI 回顾都读这一层
     slots,
     dayBalance: buildDayBalance(slots),

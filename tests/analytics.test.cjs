@@ -28,6 +28,8 @@ test('manual annotation replaces overlapping recorded time without double counti
   assert.equal(report.recordedApps.length, 1);
   assert.equal(report.recordedApps[0].processName, 'chrome');
   assert.equal(report.recordedApps[0].durationMs, 60 * 60000);
+  assert.equal(report.recordedWindows[0].title, 'Research');
+  assert.equal(report.recordedWindows[0].durationMs, 60 * 60000);
 });
 
 test('recorded time includes life and sleep while effective work remains separate', t => {
@@ -42,6 +44,15 @@ test('recorded time includes life and sleep while effective work remains separat
   assert.deepEqual(report.recordedApps.map(a => a.processName), ['chrome']);
   assert.equal(analytics.buildDailyTrackedMs(dir, '2026-11-08', '2026-11-08')[0].trackedMs,
     90 * 60000);
+});
+
+test('custom manual category remains visible in time slots and composition', t => {
+  const dir = fixture(t, [
+    { t: at('11:00'), dur: 30 * 60000, app: '画画', source: 'manual', cat: '创作' }
+  ]);
+  const report = analytics.buildDayReport(dir, '2026-11-08');
+  assert.equal(report.slots.find(s => s.startMin === 660).category, '创作');
+  assert.equal(report.categoriesGrouped.find(c => c.name === '创作').durationMs, 30 * 60000);
 });
 
 test('range totals use the same day reports as its daily breakdown', t => {

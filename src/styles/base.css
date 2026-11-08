@@ -41,6 +41,12 @@ body {
 .app-root.surface-mist .content {
   background-image: radial-gradient(circle at 12% 0%, rgba(89, 177, 145, 0.11), transparent 44%);
 }
+.app-root.surface-aurora .content {
+  background-image: radial-gradient(circle at 90% 0%, rgba(151, 127, 232, 0.13), transparent 42%);
+}
+.app-root.surface-ember .content {
+  background-image: radial-gradient(circle at 8% 0%, rgba(231, 138, 119, 0.12), transparent 42%);
+}
 
 .app-root {
   background: var(--bg-canvas);

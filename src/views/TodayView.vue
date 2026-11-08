@@ -44,7 +44,7 @@
 
         <div class="hero-side">
           <div class="mini-stat">
-            <span class="mini-value">{{ (report.recordedApps || []).length }}</span>
+            <span class="mini-value">{{ (report.recordedApps || rankedApps).length }}</span>
             <span class="mini-label">应用</span>
           </div>
           <div class="mini-stat">
@@ -142,16 +142,21 @@
     </div>
 
     <!-- 本地规则提示与模型回顾分开，避免把确定性统计误称为 AI 建议。 -->
-    <section v-if="cards.aiInsights && hasData" class="card insight-card">
+    <section v-if="cards.aiInsights && (hasData || report.dataNotes?.length)" class="card insight-card">
       <div class="card-head">
         <span class="card-title">记录提示</span>
-        <span class="insight-tag">本地规则</span>
+        <span class="insight-tag">本地检查</span>
       </div>
       <div class="insight-list">
         <div v-for="(it, i) in insights" :key="i" class="insight-item">
           <span class="insight-dot" :style="{ background: it.color }" />
           <span class="insight-text">{{ it.text }}</span>
           <span class="insight-meta">{{ it.meta }}</span>
+        </div>
+        <div v-for="(n, i) in report.dataNotes || []" :key="'data-' + i" class="insight-item">
+          <span class="insight-dot" style="background: var(--warning)" />
+          <span class="insight-text">{{ n }}</span>
+          <span class="insight-meta">数据口径</span>
         </div>
       </div>
       <p class="insight-note">依据当前记录计算，仅供检查；不会自动修改原始数据。</p>
@@ -218,30 +223,26 @@
     <!-- 应用排行 -->
     <section v-if="cards.apps" class="card">
       <div class="card-head">
-        <span class="card-title">应用排行</span>
-        <span class="head-note">仅后台录制的软件 · Top {{ rankedApps.length }}</span>
+        <span class="card-title">窗口排行</span>
+        <span class="head-note">仅后台录制 · 应用名作辅助 · Top {{ rankedWindows.length }}</span>
       </div>
 
-      <template v-if="rankedApps.length">
+      <template v-if="rankedWindows.length">
         <ul class="app-list">
-          <li v-for="(a, i) in rankedApps" :key="a.processName" class="app-row">
+          <li v-for="(a, i) in rankedWindows" :key="a.app + ':' + a.title" class="app-row">
             <span class="app-rank">{{ i + 1 }}</span>
             <span class="app-main">
               <span class="app-name-row">
-                <span class="app-name" :title="a.processName">{{ a.processName }}</span>
+                <span class="app-name" :title="a.title">{{ a.title }}</span>
                 <span class="app-time">{{ fmt(a.durationMs) }}</span>
               </span>
               <span class="app-bar">
                 <span
                   class="app-bar-fill"
-                  :style="{ width: (a.durationMs / maxAppMs * 100).toFixed(1) + '%', background: colorOf(a.category) }"
+                  :style="{ width: (a.durationMs / maxWindowMs * 100).toFixed(1) + '%', background: colorOf(a.category) }"
                 ></span>
               </span>
-              <span
-                v-if="a.titles.length && a.titles[0] !== a.processName"
-                class="app-titles"
-                :title="a.titles.join(' / ')"
-              >{{ a.titles[0] }}</span>
+              <span class="app-titles">{{ a.app }}</span>
             </span>
           </li>
         </ul>
@@ -249,19 +250,8 @@
 
       <div v-else class="empty">
         <span class="empty-icon"><EmptyIllustration variant="grid" :size="88" /></span>
-        <span class="empty-title">暂无应用记录</span>
+        <span class="empty-title">暂无窗口记录</span>
       </div>
-    </section>
-
-    <!-- 数据质量提示 -->
-    <section v-if="cards.dataNotes && report.dataNotes && report.dataNotes.length" class="card note-card">
-      <div class="note-head">
-        <Icon name="alert" :size="14" />
-        <span>数据说明</span>
-      </div>
-      <ul class="note-list">
-        <li v-for="(n, i) in report.dataNotes" :key="i">{{ n }}</li>
-      </ul>
     </section>
 
     <!-- 专注与随手记 -->
@@ -352,7 +342,7 @@ export default {
       return v === undefined ? true : !!v;
     },
     dayBalance() {
-      const totals = this.report.dayBalance || { work: 0, life: 0, sleep: 0, other: 0, unknown: 1440 };
+      const totals = this.report.dayBalance || this.balanceFromSlots();
       return [
         { label: '工作/学习/专注', minutes: totals.work, color: 'var(--accent)' },
         { label: '生活/娱乐', minutes: totals.life, color: 'var(--success)' },
@@ -471,19 +461,29 @@ export default {
       return String(this.heroTotalMinutes % 60).padStart(2, '0');
     },
     heroTotalMinutes() {
-      return Math.round((this.report.stats.recordedMs || 0) / 60000);
+      return Math.round(this.recordedMs / 60000);
     },
     recordedCoverage() {
-      return this.report.stats.spanMs > 0 ? (this.report.stats.recordedMs || 0) / this.report.stats.spanMs : 0;
+      return this.report.stats.spanMs > 0 ? this.recordedMs / this.report.stats.spanMs : 0;
+    },
+    recordedMs() {
+      const s = this.report.stats || {};
+      return s.recordedMs ?? ((s.trackedMs || 0) + (s.lifeMs || 0) + (s.sleepMs || 0));
     },
     idleText() {
       return this.fmt(this.report.stats.idleMs || 0);
     },
     rankedApps() {
-      return (this.report.recordedApps || []).slice(0, 6);
+      return this.report.recordedApps || (this.report.apps || []).filter(a => !a.manual);
     },
-    maxAppMs() {
-      return this.rankedApps.length ? this.rankedApps[0].durationMs : 1;
+    rankedWindows() {
+      return (this.report.recordedWindows || this.rankedApps.map(a => ({
+        title: a.titles?.[0] || a.processName || a.name, app: a.processName || a.name,
+        category: a.category, durationMs: a.durationMs
+      }))).slice(0, 6);
+    },
+    maxWindowMs() {
+      return this.rankedWindows.length ? this.rankedWindows[0].durationMs : 1;
     },
     current() {
       if (!this.recorder || !this.recorder.running || !this.isToday) return null;
@@ -511,6 +511,19 @@ export default {
   },
   methods: {
     pad(n) { return String(n).padStart(2, '0'); },
+    balanceFromSlots() {
+      const totals = { work: 0, life: 0, sleep: 0, other: 0, unknown: 1440 };
+      for (const slot of this.report.slots || []) {
+        const minutes = Math.max(0, Math.min(15, Number(slot.filledMin) || 0));
+        totals.unknown -= minutes;
+        if (slot.category === '睡眠') totals.sleep += minutes;
+        else if (['生活', '娱乐'].includes(slot.category)) totals.life += minutes;
+        else if (['工作', '学习', '专注'].includes(slot.category)) totals.work += minutes;
+        else totals.other += minutes;
+      }
+      totals.unknown = Math.max(0, totals.unknown);
+      return totals;
+    },
     onBandClick(i, cell) {
       this.$emit('jump-to-time', {
         minutes: cell && Number.isFinite(cell.minutes) ? cell.minutes : i * 15,
@@ -518,6 +531,8 @@ export default {
       });
     },
     colorOf(name) {
+      const custom = this.config.analysis?.customCategories?.find(c => c.name === name);
+      if (custom && /^#[0-9a-fA-F]{6}$/.test(custom.color)) return custom.color;
       return colorForCategory(this.theme, name);
     },
     fmt(ms) {

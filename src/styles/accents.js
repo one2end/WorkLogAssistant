@@ -1,4 +1,4 @@
-/* 外观 = 主题风格 × 明暗模式 × 强调色。分类色保持独立。 */
+/* 外观 = 主题风格 × 明暗模式；每套主题有固定强调色。分类色保持独立。 */
 
 export const ACCENTS = [
   { id: 'blue', label: '靖蓝', hue: 222, sat: 82 },
@@ -24,7 +24,9 @@ export const MODES = [
 ];
 
 export const SURFACES = [
-  { id: 'nocturne', label: '夜航', hint: '蓝灰层次，沉静通透' },
-  { id: 'linen', label: '纸本', hint: '温暖纸感，适合回顾' },
-  { id: 'mist', label: '晨雾', hint: '柔和青绿，轻盈舒展' }
+  { id: 'nocturne', label: '夜航', hint: '蓝灰层次，沉静通透', accent: 'blue' },
+  { id: 'linen', label: '纸本', hint: '温暖纸感，适合回顾', accent: 'amber' },
+  { id: 'mist', label: '晨雾', hint: '柔和青绿，轻盈舒展', accent: 'green' },
+  { id: 'aurora', label: '极光', hint: '紫蓝微光，适合深度专注', accent: 'violet' },
+  { id: 'ember', label: '晚霞', hint: '温柔珊瑚，轻快有序', accent: 'rose' }
 ];
