@@ -48,3 +48,24 @@ test('AI usage prefers provider token counts and persists them locally', t => {
     output: summarizer.getUsageStats().outputTokens }, { calls: 1, input: 42, output: 12 });
   assert.equal(summarizer.getUsageStats().estimatedCalls, 0);
 });
+
+test('AI review asks for evidence based recording and life suggestions without another model call', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifelog-ai-prompt-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const originalLoad = Module._load;
+  Module._load = function (id, ...args) {
+    if (id === 'electron') return { app: { getPath: () => root } };
+    return originalLoad.call(this, id, ...args);
+  };
+  let Summarizer;
+  try { Summarizer = require('../electron/summarizer'); } finally { Module._load = originalLoad; }
+  const summarizer = new Summarizer();
+  summarizer.buildHistoricalContext = () => '2026-11-07：记录 60 分钟；学习 60分钟';
+  const prompt = summarizer.buildPrompt([{ timestamp: '2026-11-08T09:00:00.000Z',
+    durationMs: 30 * 60000, processName: 'chrome', windowTitle: '阅读资料', source: 'auto' }]);
+  assert.match(prompt, /## 记录提示/);
+  assert.match(prompt, /## 生活建议/);
+  assert.match(prompt, /## 意外发现/);
+  assert.match(prompt, /2026-11-07：记录 60 分钟/);
+  assert.match(prompt, /不要推断心理健康/);
+});

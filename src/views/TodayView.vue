@@ -35,8 +35,8 @@
           </div>
           <div class="hero-sub">
             <span v-if="hasData">
-              统计区间 {{ hm(report.stats.firstAt) }} – {{ hm(report.stats.lastAt) }}
-              · 已记录占这段时间的 {{ pct(recordedCoverage) }}
+              15 分钟格 00:00 – {{ coverageEnd }}
+              · 覆盖 {{ pct(recordedCoverage) }}
             </span>
             <span v-else>还没有记录</span>
           </div>
@@ -399,7 +399,7 @@ export default {
       }
       const cov = this.recordedCoverage;
       if (cov > 0 && cov < 0.6 && (Number(st.recordedMs) || 0) > 0) {
-        out.push({ text: `已记录时长占记录跨度的 ${Math.round(cov * 100)}%；可查看时间线了解未记录时段`, meta: '查看时间线', color: '#8374c9' });
+        out.push({ text: `从 00:00 至今，已有 ${Math.round(cov * 100)}% 的 15 分钟格包含记录；可查看时间轴补充空格`, meta: '查看时间轴', color: '#8374c9' });
       }
       if (!out.length) {
         out.push({ text: '今天的记录比较完整，暂无明显待确认线索', meta: '已就绪', color: '#2f9c73' });
@@ -491,7 +491,12 @@ export default {
       return Math.round(this.recordedMs / 60000);
     },
     recordedCoverage() {
-      return this.report.stats.spanMs > 0 ? this.recordedMs / this.report.stats.spanMs : 0;
+      return this.report.stats.coverage || 0;
+    },
+    coverageEnd() {
+      const count = this.report.stats.elapsedSlots || (this.isToday ? Math.ceil((new Date().getHours() * 60 + new Date().getMinutes() + 1) / 15) : 96);
+      const minutes = Math.min(1440, count * 15);
+      return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
     },
     recordedMs() {
       const s = this.report.stats || {};

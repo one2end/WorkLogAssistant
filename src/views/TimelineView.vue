@@ -60,26 +60,28 @@
           <input v-model.number="manualDuration" type="number" min="15" step="15" max="1440">
         </label>
       </div>
-      <label class="mf full">
-        <span>事项</span>
-        <input v-model="manualApp" type="text" placeholder="这段时间在做什么（必填）">
-      </label>
       <div class="mf full">
         <span>分类</span>
         <div class="manual-categories" role="group" aria-label="分类">
           <button v-for="c in categories" :key="c" type="button" class="manual-category"
             :class="{ selected: manualCategory === c }" :aria-pressed="manualCategory === c"
             :style="{ '--category-color': colorOf(c) }" @click="manualCategory = c">{{ categoryLabel(c) }}</button>
+          <button type="button" class="manual-category" title="新增分类" @click="addingManualCategory = !addingManualCategory">＋</button>
+        </div>
+        <div v-if="addingManualCategory" class="manual-new-category">
+          <input v-model="newManualCategory" type="text" maxlength="16" placeholder="分类名称" aria-label="新分类名称">
+          <input v-model="newManualCategoryColor" type="color" aria-label="新分类颜色">
+          <button class="btn btn-secondary btn-sm" :disabled="!newManualCategory.trim()" @click="createManualCategory">添加</button>
         </div>
       </div>
       <label class="mf full">
         <span>备注</span>
-        <input v-model="manualTitle" type="text" placeholder="补充说明，可留空">
+        <input v-model="manualTitle" type="text" placeholder="这段时间做了什么，可留空">
       </label>
       <div class="manual-actions">
         <span class="manual-hint">最小 15 分钟，按 15 分钟对齐；保存后计入当日记录时长</span>
         <button class="btn btn-ghost btn-sm" @click="manualOpen = false">取消</button>
-        <button class="btn btn-primary btn-sm" :disabled="savingManual || !manualApp.trim()" @click="submitManual">
+        <button class="btn btn-primary btn-sm" :disabled="savingManual" @click="submitManual">
           {{ savingManual ? '保存中' : '保存' }}
         </button>
       </div>
@@ -244,7 +246,7 @@
                   'is-thin': b.height < 1.2
                 }"
                 :style="calBlockStyle(b)"
-                :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${categoryLabel(b.category)}${b.manual ? ' · 标注' : ''}`"
+                :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${entryLabel(b)}${b.manual ? ' · 标注' : ''}`"
                 @pointerdown.stop="startBlockDrag($event, d.date, b)"
                 @contextmenu.prevent.stop="openCtx($event, d.date, b)"
               >
@@ -291,7 +293,7 @@
           <i class="ctx-sep" />
           <button class="danger" @click="ctxDo('delete')">删除这一段</button>
           <i class="ctx-sep" />
-          <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ ctxMenu.block.category }}</span>
+          <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ entryLabel(ctxMenu.block) }}</span>
         </template>
         <template v-else>
           <button @click="ctxDo('new')">在这里新建 15 分钟</button>
@@ -314,6 +316,7 @@
       @save="saveSegment"
       @delete="deleteSegment"
       @close="closeSegment"
+      @add-category="createCategoryFromEditor"
     />
   </div>
 </template>
@@ -363,10 +366,11 @@ export default {
     focusTarget: { type: Object, default: null },
     customCategories: { type: Array, default: () => [] },
     categoryMeta: { type: Object, default: () => ({}) },
+    categoryMerges: { type: Object, default: () => ({}) },
     theme: { type: String, default: 'dark' }
   },
   emits: ['update:selectedDate', 'shift', 'today', 'refresh',
-    'manual-error', 'focus-consumed', 'focus-missed'],
+    'manual-error', 'focus-consumed', 'focus-missed', 'add-category'],
   data() {
     return {
       // mode 同时表达「视图」和「层」：timeline/calendar 是展示层，record 是只读事实层。
@@ -404,9 +408,11 @@ export default {
       manualOpen: false,
       manualTime: '09:00',
       manualDuration: 30,
-      manualApp: '',
       manualTitle: '',
       manualCategory: '其他',
+      addingManualCategory: false,
+      newManualCategory: '',
+      newManualCategoryColor: '#6f9fe8',
       savingManual: false,
       tick: 0,
       timer: null
@@ -429,7 +435,8 @@ export default {
   },
   computed: {
     categories() {
-      return [...new Set(['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...this.customCategories.map(c => c.key || c.name).filter(Boolean)])];
+      return [...new Set(['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...this.customCategories.map(c => c.key || c.name).filter(Boolean)])]
+        .filter(key => !this.categoryMerges[key]);
     },
     categoryLabels() {
       return Object.fromEntries(this.categories.map(key => [key, this.categoryLabel(key)]));
@@ -503,7 +510,7 @@ export default {
     statCells() {
       if (this.mode !== 'record') {
         return [
-          { value: this.fmtCN(this.trackedMs), label: '有效', icon: 'timer' },
+          { value: this.fmtCN(this.report.stats?.recordedMs || 0), label: '已记录', icon: 'timer' },
           { value: this.fmtCN(this.gapTotalMs), label: '空闲', icon: 'moon' },
           { value: this.sessionCount, label: '段数', icon: 'activity' },
           { value: `${this.coveragePct}%`, label: '覆盖', icon: 'chart' }
@@ -632,8 +639,9 @@ export default {
         .reduce((sum, b) => sum + b.durationMin * 60000, 0);
     },
     coveragePct() {
-      // 用 trackedMs（已排除生活事务）除以已过去的时间，避免把吃饭睡觉算进覆盖率
-      return Math.min(100, Math.round(this.trackedMs / Math.max(1, this.dayEndMin * 60000) * 100));
+      const count = Math.max(1, Math.min(96, Math.ceil(this.dayEndMin / 15)));
+      const covered = ((this.report && this.report.slots) || []).slice(0, count).filter(s => s.filledMin > 0).length;
+      return Math.round(covered / count * 100);
     },
     dateLabel() {
       const [y, m, d] = this.selectedDate.split('-').map(Number);
@@ -857,12 +865,14 @@ export default {
 
     /** 时间轴卡片标题：优先应用名，应用名无意义时退回「做了什么」 */
     cardTitle(b) {
+      if (b.manual) return this.entryLabel(b);
       const app = (b.app || '').trim();
       const note = this.cleanNote(this.noteOf(b));
       if (app && !['记录', '标注', '手工记录', 'unknown'].includes(app)) return app;
       return note || this.categoryLabel(b.category || '其他');
     },
     cardNote(b) {
+      if (b.manual) return '';
       const app = (b.app || '').trim();
       const note = b.tag === '专注' ? (b.titles || []).join(' · ') : this.cleanNote(this.noteOf(b));
       // 标题已经用了 note 时，不再重复显示一行
@@ -875,16 +885,12 @@ export default {
      * 导入记录常带「工作-上班 …」这种前缀，显示前把与分类重复的开头去掉。
      */
     blockLabel(b) {
-      if (b.focusId && b.app) return b.app;
-      const note = this.cleanNote(b.note);
-      if (note) return note;
-      const app = (b.app || '').trim();
-      if (app && !['记录', '标注', '手工记录', 'unknown'].includes(app)) return app;
-      return this.categoryLabel(b.category || '其他');
+      return this.entryLabel(b);
     },
     blockSub(b) {
       // 一天/三天视图里才显示来源，七天视图太窄
       if (this.calSpan > 3) return '';
+      if (b.manual) return '';
       const app = (b.app || '').trim();
       if (b.focusId) return b.note && b.note !== app ? b.note : '';
       if (!app || ['记录', '标注', '手工记录'].includes(app)) return '';
@@ -895,8 +901,27 @@ export default {
     },
     cleanNote(note) {
       if (!note) return '';
-      // 「工作-上班 做下计划」→「上班 做下计划」（前缀已由颜色表达）
-      return String(note).replace(/^[^-]{1,4}-\s*/, '').trim();
+      return String(note).trim();
+    },
+    entryRemark(b) {
+      const cat = b.category || '其他';
+      const label = this.categoryLabel(cat);
+      let value = String(b.note || (b.titles || []).join(' · ') || '').trim();
+      const app = String(b.app || '').trim();
+      if (b.focusId && app && value && value !== app) value = `${app} · ${value}`;
+      if (!value && app && !['记录', '标注', '手工记录', '手工标注', 'unknown', cat, label].includes(app)) value = app;
+      for (const prefix of [cat, label]) {
+        if (value.startsWith(`${prefix}-`) || value.startsWith(`${prefix}－`)) {
+          value = value.slice(prefix.length + 1).trim();
+          break;
+        }
+      }
+      return value === label || value === cat ? '' : value;
+    },
+    entryLabel(b) {
+      const label = this.categoryLabel(b.category || '其他');
+      const remark = this.entryRemark(b);
+      return remark ? `${label}-${remark}` : label;
     },
 
     /** 把鼠标位置换算成 15 分钟刻度 */
@@ -1161,9 +1186,9 @@ export default {
         range: `${this.clock(b.startMin)} – ${this.clock(b.endMin)}`,
         startTime: this.clock(b.startMin),
         durationMin: Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15),
-        app: b.app || '',
+        app: '手工标注',
         category: b.category || '其他',
-        note: b.isNew ? '' : (b.note || (b.titles || []).join(' · '))
+        note: b.isNew ? '' : this.entryRemark(b)
       };
       this.editorOpen = true;
     },
@@ -1219,6 +1244,7 @@ export default {
         key: b.key,
         date: b.date || this.selectedDate,
         app: b.app,
+        note: this.entryRemark(b),
         category: b.category,
         startMin: b.startMin,
         durationMin: Math.max(1, Math.round(b.durationMs / 60000)),
@@ -1267,8 +1293,8 @@ export default {
         date,
         startTime: this.clock(startMin),
         durationMin,
-        app: b.app || b.category || '其他',
-        title: '',
+        app: '手工标注',
+        title: this.entryRemark(b),
         category: b.category
       } });
       if (!res?.ok) {
@@ -1290,8 +1316,8 @@ export default {
         date,
         startTime: this.clock(Math.min(1425, startMin)),
         durationMin: c.durationMin,
-        app: c.app || c.category || '其他',
-        title: '',
+        app: '手工标注',
+        title: c.note || '',
         category: c.category
       });
       await this.refreshAfterWrite();
@@ -1401,7 +1427,6 @@ export default {
     toggleManual() {
       this.manualOpen = !this.manualOpen;
       if (this.manualOpen) {
-        this.manualApp = '';
         this.manualTitle = '';
         this.manualCategory = '其他';
         const now = new Date();
@@ -1410,9 +1435,27 @@ export default {
         this.$nextTick(() => this.scrollTop());
       }
     },
+    addQuickCategory(item) {
+      const name = String(item?.name || '').trim();
+      if (!name || this.categories.includes(name) || Object.values(this.categoryLabels).includes(name)) {
+        this.$emit('manual-error', '分类名称不能为空或重复');
+        return false;
+      }
+      this.$emit('add-category', { name, color: item.color || '#6f9fe8', group: '其他' });
+      return true;
+    },
+    createManualCategory() {
+      const name = this.newManualCategory.trim();
+      if (!this.addQuickCategory({ name, color: this.newManualCategoryColor })) return;
+      this.manualCategory = name;
+      this.newManualCategory = '';
+      this.addingManualCategory = false;
+    },
+    createCategoryFromEditor(item) {
+      this.addQuickCategory(item);
+    },
     /** 点空闲块的 + ：把该空白段的起止时间直接带进补记表单 */
     openManualFor(b) {
-      this.manualApp = '';
       this.manualTitle = '';
       this.manualCategory = '其他';
       this.manualTime = this.clock(Math.min(1439, b.startMin));
@@ -1421,15 +1464,11 @@ export default {
       this.$nextTick(() => this.scrollTop());
     },
     async submitManual() {
-      if (!this.manualApp.trim()) {
-        this.$emit('manual-error', '请填写事项');
-        return;
-      }
       const payload = {
         date: this.selectedDate,
         startTime: this.manualTime,
         durationMin: this.manualDuration,
-        app: this.manualApp,
+        app: '手工标注',
         title: this.manualTitle,
         category: this.manualCategory
       };
@@ -1616,6 +1655,9 @@ export default {
 .manual-categories { display: flex; flex-wrap: wrap; gap: 6px; }
 .manual-category { padding: 5px 10px; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; }
 .manual-category.selected { border-color: var(--category-color); color: var(--category-color); background: var(--accent-soft); }
+.manual-new-category { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.manual-new-category input[type="text"] { flex: 1; min-width: 100px; }
+.manual-new-category input[type="color"] { width: 38px; padding: 2px; }
 .manual-actions { display: flex; align-items: center; gap: var(--sp-2); justify-content: flex-end; }
 .manual-hint { flex: 1; font-size: var(--fs-11); color: var(--text-tertiary); }
 

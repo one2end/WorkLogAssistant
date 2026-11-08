@@ -25,7 +25,7 @@
       <header class="ai-head">
         <span class="ai-title">
           <Icon name="zap" :size="13" />
-          AI 回顾
+          AI 回顾与建议
           <span class="ai-chip">{{ providerLabel }}</span>
         </span>
         <span v-if="autoReview" class="ai-meta">{{ scheduledReview ? '定时段自动回顾' : `自动回顾 · 每 ${reviewInterval} 分钟` }}</span>
@@ -41,6 +41,11 @@
       </header>
 
       <template v-if="latest">
+        <div v-if="actionHints.length" class="ai-actions">
+          <div v-for="hint in actionHints" :key="hint.title" class="ai-action">
+            <strong>{{ hint.title }}</strong><span>{{ hint.text }}</span>
+          </div>
+        </div>
         <div class="ai-body" :class="{ 'is-clamped': clamped && !expanded }">
           <div class="md" v-html="html"></div>
         </div>
@@ -135,6 +140,14 @@ export default {
     },
     html() {
       return this.render(this.latest && this.latest.summary);
+    },
+    actionHints() {
+      const md = String(this.latest?.summary || '');
+      return ['记录提示', '生活建议', '意外发现'].map(title => {
+        const match = md.match(new RegExp(`^#{1,3}\\s*${title}\\s*\\n([\\s\\S]*?)(?=^#{1,3}\\s|$)`, 'm'));
+        const text = match?.[1]?.replace(/\*\*/g, '').replace(/^[\s>*-]+/, '').trim().split('\n')[0] || '';
+        return { title, text: text.slice(0, 160) };
+      }).filter(h => h.text && !/^(暂无|无建议|没有足够证据)/.test(h.text));
     },
     /** 超过一定长度才折叠，短回顾不该出现「展开全文」 */
     clamped() {
@@ -267,6 +280,11 @@ export default {
   font-weight: var(--fw-normal);
   color: var(--text-tertiary);
 }
+
+.ai-actions { display: grid; gap: 7px; margin-bottom: var(--sp-3); }
+.ai-action { display: flex; gap: 9px; align-items: baseline; padding: 8px 10px; border-radius: var(--r-md); background: var(--bg-inset); font-size: var(--fs-12); line-height: 1.5; }
+.ai-action strong { flex: none; color: var(--accent); font-weight: var(--fw-medium); }
+.ai-action span { color: var(--text-secondary); }
 
 .ai-body {
   position: relative;

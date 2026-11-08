@@ -19,17 +19,6 @@
         </div>
 
         <div class="seg-body">
-          <label class="seg-field">
-            <span>事项</span>
-            <input
-              ref="titleInput"
-              v-model="form.app"
-              type="text"
-              placeholder="这段时间在做什么（必填）"
-              @keydown.enter.prevent="submit"
-            >
-          </label>
-
           <div class="seg-field">
             <span>分类</span>
             <div class="seg-cats">
@@ -41,12 +30,18 @@
                 :class="{ active: form.category === c }"
                 @click="form.category = c"
               >{{ categoryLabels[c] || c }}</button>
+              <button type="button" class="seg-cat" title="新增分类" @click="addingCategory = !addingCategory">＋</button>
+            </div>
+            <div v-if="addingCategory" class="seg-new-cat">
+              <input v-model="newCategoryName" type="text" maxlength="16" placeholder="分类名称" aria-label="新分类名称">
+              <input v-model="newCategoryColor" type="color" aria-label="新分类颜色">
+              <button class="seg-btn" :disabled="!newCategoryName.trim()" @click="createCategory">添加</button>
             </div>
           </div>
 
           <label class="seg-field">
             <span>备注</span>
-            <textarea v-model="form.note" rows="2" placeholder="补充说明，可留空" />
+            <textarea ref="titleInput" v-model="form.note" rows="2" placeholder="这段时间做了什么，可留空" />
           </label>
         </div>
 
@@ -54,7 +49,7 @@
           <button v-if="deletable" class="seg-del" @click="$emit('delete')">删除这一段</button>
           <span class="seg-hint">保存后覆盖展示</span>
           <button class="seg-btn" @click="$emit('close')">取消</button>
-          <button class="seg-btn primary" :disabled="saving || !form.app.trim()" @click="submit">
+          <button class="seg-btn primary" :disabled="saving" @click="submit">
             {{ saving ? '保存中' : '保存' }}
           </button>
         </div>
@@ -79,12 +74,15 @@ export default {
     deletable: { type: Boolean, default: false },
     saving: { type: Boolean, default: false }
   },
-  emits: ['save', 'delete', 'close'],
+  emits: ['save', 'delete', 'close', 'add-category'],
   data() {
     return {
       form: { range: '', durationMin: 15, app: '', category: '其他', note: '' },
       pos: { top: '0px', left: '0px' },
-      origin: 'top left'
+      origin: 'top left',
+      addingCategory: false,
+      newCategoryName: '',
+      newCategoryColor: '#6f9fe8'
     };
   },
   computed: {
@@ -148,14 +146,22 @@ export default {
       this.pos = { top: `${Math.round(top)}px`, left: `${Math.round(left)}px` };
     },
     submit() {
-      if (this.saving || !this.form.app.trim()) return;
+      if (this.saving) return;
       this.$emit('save', {
-        app: this.form.app.trim(),
+        app: '手工标注',
         category: this.form.category,
         note: (this.form.note || '').trim(),
         startTime: this.form.startTime,
         durationMin: this.form.durationMin
       });
+    },
+    createCategory() {
+      const name = this.newCategoryName.trim();
+      if (!name || this.categories.includes(name) || Object.values(this.categoryLabels).includes(name)) return;
+      this.$emit('add-category', { name, color: this.newCategoryColor });
+      this.form.category = name;
+      this.addingCategory = false;
+      this.newCategoryName = '';
     },
     bindGlobal() {
       this.unbindGlobal();
@@ -315,6 +321,9 @@ export default {
   background: var(--accent-soft);
   color: var(--accent);
 }
+.seg-new-cat { display: flex; align-items: center; gap: 5px; margin-top: 6px; }
+.seg-new-cat input[type="text"] { flex: 1; min-width: 80px; }
+.seg-new-cat input[type="color"] { width: 34px; padding: 2px; }
 
 .seg-foot {
   display: flex;

@@ -132,6 +132,7 @@ class ConfigManager {
         categoryRules: null,
         customCategories: [],
         categoryMeta: {},
+        categoryMerges: {},
         appCategoryMap: {},
         windowCategoryRules: []
       },

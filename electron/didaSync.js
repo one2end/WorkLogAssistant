@@ -12,6 +12,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const axios = require('axios');
 
 const API_BASE = 'https://api.dida365.com/open/v1';
@@ -67,6 +68,17 @@ function clampInt(value, min, max, fallback) {
   const n = parseInt(value, 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+function formatRecordTask(session, categoryNames = {}) {
+  const category = categoryNames[session.category] || session.category || '其他';
+  const app = String(session.app || '').trim();
+  let remark = String((session.titles || []).filter(Boolean).join(' · ') || session.note || '').trim();
+  if (!remark && !['手工标注', '手工记录', category].includes(app)) remark = app;
+  if (remark.startsWith(`${category}-`) || remark.startsWith(`${category}－`)) remark = remark.slice(category.length + 1).trim();
+  const full = remark ? `${category}-${remark}` : category;
+  const chars = Array.from(full);
+  return { title: chars.slice(0, 30).join(''), overflow: chars.slice(30).join('') };
 }
 
 class DidaSync {
@@ -331,8 +343,10 @@ class DidaSync {
           const start = parseDidaTime(s.startTime || s.start);
           const end = parseDidaTime(s.endTime || s.end);
           if (!Number.isFinite(start)) continue;
-          const key = `${date}:${Math.round(start / 60000)}:${String(s.app || s.title || '').slice(0, 40)}`;
-          if (pushed[key]) continue;
+          const legacyKey = `${date}:${Math.round(start / 60000)}:${String(s.app || s.title || '').slice(0, 40)}`;
+          const fingerprint = crypto.createHash('sha256').update(JSON.stringify([s.category, s.app, s.titles, s.durationMs])).digest('hex').slice(0, 16);
+          const key = `${date}:${Math.round(start / 60000)}:${fingerprint}`;
+          if (pushed[key] || pushed[legacyKey]) continue;
           candidates.push({ key, date, start, end, session: s });
           if (candidates.length >= PUSH_LIMIT) break;
         }
@@ -344,14 +358,20 @@ class DidaSync {
       }
 
       let sent = 0;
+      const analysis = this.getConfig().analysis || {};
+      const categoryNames = Object.fromEntries([
+        ...Object.entries(analysis.categoryMeta || {}).map(([key, meta]) => [key, meta.name || key]),
+        ...(analysis.customCategories || []).map(c => [c.key || c.name, c.name])
+      ]);
       for (const c of candidates) {
         const s = c.session;
         const startMs = c.start;
         const durMs = Number(s.durationMs) || (Number.isFinite(c.end) ? c.end - startMs : 900000);
+        const taskText = formatRecordTask(s, categoryNames);
         const body = {
           projectId: cfg.pushProjectId,
-          title: `[LifeLog] ${s.category || '记录'} · ${String(s.app || s.title || '标注').slice(0, 50)}`,
-          content: `来自 LifeLog 展示层\n分类：${s.category || '—'}\n时长：${Math.round(durMs / 60000)} 分钟`,
+          title: taskText.title,
+          content: [taskText.overflow, `来自 LifeLog · ${Math.round(durMs / 60000)} 分钟`].filter(Boolean).join('\n\n'),
           startDate: didaUtc(startMs),
           dueDate: didaUtc(startMs + Math.max(15 * 60000, durMs)),
           timeZone: 'Asia/Shanghai',
@@ -364,9 +384,9 @@ class DidaSync {
           proxy: false
         });
         pushed[c.key] = new Date().toISOString();
+        writeJson(d.pushed, pushed);
         sent += 1;
       }
-      writeJson(d.pushed, pushed);
 
       const st = this.status();
       st.lastPushAt = new Date().toISOString();
@@ -417,4 +437,4 @@ class DidaSync {
   }
 }
 
-module.exports = { DidaSync, localDateStr, parseDidaTime };
+module.exports = { DidaSync, localDateStr, parseDidaTime, formatRecordTask };

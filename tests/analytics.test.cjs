@@ -46,6 +46,17 @@ test('recorded time includes life and sleep while effective work remains separat
     90 * 60000);
 });
 
+test('coverage starts at midnight and counts populated 15 minute slots', t => {
+  const date = '2026-11-07';
+  const dir = fixture(t, [{ t: new Date(`${date}T00:04:00`).toISOString(), dur: 10 * 60000,
+    app: 'chrome', title: 'Early activity' }], date);
+  const report = analytics.buildDayReport(dir, date);
+  assert.equal(report.stats.coveredSlots, 1);
+  assert.equal(report.stats.elapsedSlots, 96);
+  assert.equal(report.stats.coverage, 1 / 96);
+  assert.equal(report.slots[0].filledMin, 10);
+});
+
 test('custom manual category remains visible in time slots and composition', t => {
   const dir = fixture(t, [
     { t: at('11:00'), dur: 30 * 60000, app: '画画', source: 'manual', cat: '创作' }
@@ -172,4 +183,17 @@ test('AI prompt context respects manual overlap instead of adding both layers', 
   ];
   const context = analytics.renderPromptContext(items);
   assert.equal(context.totalMs, 60 * 60000);
+});
+
+test('category merge reclassifies historical manual and app records without editing source', t => {
+  const dir = fixture(t, [
+    { t: at('09:00'), dur: 30 * 60000, app: 'chrome', title: 'Research', cat: '旧分类' },
+    { t: at('10:00'), dur: 30 * 60000, app: '手工标注', title: '读书', cat: '旧分类', source: 'manual' }
+  ]);
+  const report = analytics.buildDayReport(dir, '2026-11-08', { categoryMerges: { 旧分类: '学习' } });
+  assert.ok(report.sessions.some(s => s.category === '学习'));
+  assert.ok(report.slots.some(s => s.category === '学习'));
+  assert.ok(!report.categories.some(c => c.name === '旧分类'));
+  const original = analytics.buildDayReport(dir, '2026-11-08');
+  assert.ok(original.sessions.some(s => s.category === '旧分类'));
 });

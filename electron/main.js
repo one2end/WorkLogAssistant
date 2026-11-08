@@ -1019,14 +1019,15 @@ function manualRecordFromPayload(payload) {
   if (Number.isNaN(start.getTime())) {
     return { error: '时间无法解析' };
   }
-  const appName = String(p.app || '').trim();
-  if (!appName) return { error: '请填写事项' };
+  const appName = String(p.app || '手工标注').trim() || '手工标注';
+  const remark = String(p.note ?? p.title ?? '').trim() ||
+    (!['手工标注', '手工记录'].includes(appName) ? appName : '');
   return { dateStr, durationMin, record: {
     t: start.toISOString(),
     dur: durationMin * 60000,
     kind: 'active',
     app: appName,
-    title: String(p.title || '').trim(),
+    title: remark,
     platform: 'manual',
     source: 'manual',
     cat: p.category || ''

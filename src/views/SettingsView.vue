@@ -80,6 +80,19 @@
           <button type="button" class="btn btn-secondary btn-sm" @click="addCategory">添加</button>
         </div>
         <p v-if="categoryError" class="hint category-error">{{ categoryError }}</p>
+        <div class="row-block">
+          <span class="row-label">合并分类<span class="row-desc">历史记录和统计会归入目标分类；原始数据不改，可以撤销。</span></span>
+          <div v-for="(target, source) in categoryMerges" :key="source" class="app-map-row">
+            <span class="app-map-name">{{ categoryLabel(source) }} → {{ categoryLabel(target) }}</span>
+            <button type="button" class="btn btn-ghost btn-sm" @click="undoCategoryMerge(source)">撤销合并</button>
+          </div>
+          <div class="category-editor">
+            <select v-model="mergeSource" aria-label="待合并分类"><option value="">选择原分类</option><option v-for="choice in categoryChoices" :key="choice.key" :value="choice.key">{{ choice.name }}</option></select>
+            <span>→</span>
+            <select v-model="mergeTarget" aria-label="目标分类"><option value="">选择目标分类</option><option v-for="choice in activeCategoryChoices" :key="choice.key" :value="choice.key">{{ choice.name }}</option></select>
+            <button type="button" class="btn btn-secondary btn-sm" @click="mergeCategory">合并</button>
+          </div>
+        </div>
         <div class="hr"></div>
         <span class="row-label">历史应用与活动分类<span class="row-desc">固定映射会用于过去和未来的自动记录；手工标注仍优先。浏览器等用途多变的应用可保持按窗口判断。</span></span>
         <input v-model="appQuery" class="app-map-search" type="search" placeholder="搜索历史应用">
@@ -585,7 +598,7 @@ export default {
     storagePath: { type: String, default: '' }
   },
   emits: [
-    'save', 'category-change', 'category-meta-change', 'app-map-change', 'window-rule-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
+    'save', 'category-change', 'category-meta-change', 'category-merge-change', 'app-map-change', 'window-rule-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
     'select-storage', 'reset-storage',
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
@@ -620,6 +633,7 @@ export default {
       newCategoryColor: '#6f9fe8',
       newCategoryGroup: '其他',
       categoryError: '',
+      mergeSource: '', mergeTarget: '',
       appQuery: '',
       newRuleApp: '', newRuleTitle: '', newRuleCategory: '工作'
     };
@@ -635,12 +649,14 @@ export default {
   computed: {
     customCategories() { return this.config.analysis?.customCategories || []; },
     categoryMeta() { return this.config.analysis?.categoryMeta || {}; },
+    categoryMerges() { return this.config.analysis?.categoryMerges || {}; },
     windowRules() { return this.config.analysis?.windowCategoryRules || []; },
     baseCategories() { return ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他']; },
     categoryChoices() {
       return [...this.baseCategories.map(key => ({ key, name: this.categoryMeta[key]?.name || key })),
         ...this.customCategories.map(c => ({ key: c.key || c.name, name: c.name }))];
     },
+    activeCategoryChoices() { return this.categoryChoices.filter(c => !this.categoryMerges[c.key]); },
     visibleKnownApps() {
       const query = this.appQuery.trim().toLowerCase();
       return query ? this.knownApps.filter(a => a.name.toLowerCase().includes(query)) : this.knownApps;
@@ -733,6 +749,29 @@ export default {
     },
     removeCategory(index) {
       this.$emit('category-change', this.customCategories.filter((_, i) => i !== index));
+    },
+    mergeCategory() {
+      const source = this.mergeSource;
+      const target = this.mergeTarget;
+      if (!source || !target || source === target || !this.categoryChoices.some(c => c.key === source) || !this.activeCategoryChoices.some(c => c.key === target)) {
+        this.categoryError = '请选择不同的原分类和目标分类'; return;
+      }
+      const next = { ...this.categoryMerges, [source]: target };
+      let cursor = target;
+      const seen = new Set([source]);
+      while (next[cursor]) {
+        if (seen.has(cursor)) { this.categoryError = '分类合并不能形成循环'; return; }
+        seen.add(cursor);
+        cursor = next[cursor];
+      }
+      this.$emit('category-merge-change', next);
+      this.mergeSource = ''; this.mergeTarget = ''; this.categoryError = '';
+    },
+    undoCategoryMerge(source) {
+      const next = { ...this.categoryMerges };
+      delete next[source];
+      this.$emit('category-merge-change', next);
+      this.categoryError = '';
     },
     updateBaseCategory(key, field, value) {
       value = String(value || '').trim();

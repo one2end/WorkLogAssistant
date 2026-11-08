@@ -113,6 +113,7 @@
           :theme="theme"
           :custom-categories="config.analysis?.customCategories || []"
           :category-meta="config.analysis?.categoryMeta || {}"
+          :category-merges="config.analysis?.categoryMerges || {}"
           @update:selected-date="onSelectDate"
           @shift="changeDate"
           @today="goToToday"
@@ -120,6 +121,7 @@
           @manual-error="showToast($event, 'error')"
           @focus-consumed="timelineTarget = null"
           @focus-missed="onFocusMissed"
+          @add-category="addCategoryQuick"
         />
 
         <SettingsView
@@ -150,6 +152,7 @@
           @save="saveConfig"
           @category-change="onCategoryChange"
           @category-meta-change="onCategoryMetaChange"
+          @category-merge-change="onCategoryMergeChange"
           @app-map-change="onAppMapChange"
           @window-rule-change="onWindowRuleChange"
           @suggest-categories="suggestCategories"
@@ -634,9 +637,21 @@ export default {
       await this.saveConfig();
       this.onDataChanged();
     },
+    async addCategoryQuick(item) {
+      const categories = this.config.analysis?.customCategories || [];
+      const reserved = ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'];
+      if (!item?.name || reserved.includes(item.name) || categories.some(c => (c.key || c.name) === item.name || c.name === item.name)) return;
+      await this.onCategoryChange([...categories, { key: item.name, name: item.name, color: item.color, group: item.group || '其他' }]);
+    },
     onCategoryMetaChange(meta) {
       this.config.analysis = { ...(this.config.analysis || {}), categoryMeta: meta };
       this.saveConfig();
+    },
+    async onCategoryMergeChange(merges) {
+      this.config.analysis = { ...(this.config.analysis || {}), categoryMerges: merges };
+      await this.saveConfig();
+      this.onDataChanged();
+      await this.loadKnownApps();
     },
     async onAppMapChange(map) {
       this.config.analysis = { ...(this.config.analysis || {}), appCategoryMap: map };

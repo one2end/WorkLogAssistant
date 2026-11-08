@@ -207,12 +207,14 @@ class Summarizer {
       activityText += '\n\n需要核对的重叠线索（人工标注优先，窗口记录只是同时出现，不代表人工标注错误）：\n' +
         clues.map(c => `- ${c.time} 人工写「${c.manual}」，后台窗口有 ${c.apps.join('、')}`).join('\n');
     }
+    const history = this.buildHistoricalContext(activities);
+    if (history) activityText += `\n\n近期对照（仅用于发现重复模式，不要把过去事项当作当前发生）：\n${history}`;
 
     if (customPrompt && customPrompt.trim() !== '') {
       return `${customPrompt}\n\n${activityText}`;
     }
 
-    return `以下是这段时间内电脑前台窗口的使用记录，已按连续停留折叠成片段，每行包含时间范围、时长、应用、分类和窗口标题。
+    return `以下是这段时间内的生活记录，含电脑窗口、手工记录和导入的专注。已按连续停留折叠成片段，每行包含时间范围、时长、应用、分类和窗口标题。
 
 ${activityText}
 
@@ -222,7 +224,31 @@ ${activityText}
 3. 用 "## 值得注意" 指出有证据的异常；若有人工解释与后台窗口重叠，核对两者是否可能属于同一件事，并列出需用户确认的差异。窗口同时出现不等于人工解释错误。没有足够证据就写「暂无可确认的异常」。
 4. 用 "## 分类建议" 给最多三条需要用户确认的时段，写清时间、建议的七组分类（工作/学习/生活/娱乐/睡眠/专注/其他）及标题证据；信息不足就写「暂无建议」，不要自行改动记录。
 5. 用 "## 下一步" 只给一条、具体可执行，基于当前时段没做完或被打断的部分；没有依据就省略。
-6. 全部结论必须来自上面的记录，信息不足就直说，不要虚构人名、数字或结论。语言简洁，像写给自己的笔记。`;
+6. 用 "## 记录提示" 给一条有证据的补记或分类核对建议；可指出人工备注与窗口证据的差异，但不要断言人工备注错误。没有线索就写「暂无」。
+7. 用 "## 生活建议" 给一条温和、具体、可选择的休息、兴趣或精神生活建议，联系当前记录与近期对照；不要推断心理健康、诊断或说教。证据不足就写「暂无」。
+8. 用 "## 意外发现" 指出一条跨时段重复模式或容易忽略的积极细节；证据不足就写「暂无」。
+9. 全部结论必须来自上面的记录，信息不足就直说，不要虚构人名、数字或结论。每节尽量只写一句，整体不超过 450 汉字，像写给自己的笔记。`;
+  }
+
+  buildHistoricalContext(activities) {
+    if (!activities.length) return '';
+    try {
+      const storage = this._createStorage();
+      const analytics = require('./analytics');
+      const anchor = new Date(activities[0].timestamp);
+      if (Number.isNaN(anchor.getTime())) return '';
+      const lines = [];
+      for (let offset = 1; offset <= 3; offset++) {
+        const day = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - offset);
+        const date = analytics.toDateStr(day);
+        const report = analytics.buildDayReport(storage.getDataDir(), date, this.config.analysis || {});
+        if (!report.stats?.recordedMs) continue;
+        const top = (report.categories || []).slice(0, 3)
+          .map(c => `${c.name} ${Math.round(c.durationMs / 60000)}分钟`).join('、');
+        lines.push(`${date}：记录 ${Math.round(report.stats.recordedMs / 60000)} 分钟；${top}`);
+      }
+      return lines.join('\n');
+    } catch (_) { return ''; }
   }
 
   groupActivities(activities) {
@@ -240,7 +266,7 @@ ${activityText}
   }
 
   _systemPrompt() {
-    return '你是一个工作日志助手。根据用户的电脑窗口活动记录，推断实际工作内容并生成结构化的 Markdown 摘要。不要简单罗列应用名称，而是根据窗口标题推断用户在做什么。输出简洁实用，像写给自己看的工作笔记。';
+    return '你是生活记录助手。结合窗口标题、人工记录和已导入的专注，生成有证据的 Markdown 回顾和可选择的建议。不要把窗口活动当成生活全貌，也不要简单罗列应用名。输出简洁具体。';
   }
 
   async callAI(prompt) {

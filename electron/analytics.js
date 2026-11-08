@@ -442,7 +442,18 @@ function buildClassifier(rules, appCategoryMap = {}, windowCategoryRules = [], c
  * 把原始记录标准化为原子事件，并按时间排序。
  * 自动丢弃异常记录（无时间戳 / 无法解析）。
  */
-function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), windowCategoryRules = []) {
+function resolveCategoryMerge(category, merges = {}) {
+  let current = category;
+  const seen = new Set();
+  while (merges[current]) {
+    if (seen.has(current)) return category;
+    seen.add(current);
+    current = merges[current];
+  }
+  return current;
+}
+
+function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), windowCategoryRules = [], categoryMerges = {}) {
   const atoms = [];
   const ignored = ignoreSet || new Set(DEFAULT_IGNORED_APPS);
 
@@ -465,12 +476,13 @@ function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), win
       String(rule.app || '').toLowerCase().replace(/\.exe$/, '') === normalizedApp &&
       String(rule.titleContains || '').trim().length >= 2 &&
       title.toLowerCase().includes(String(rule.titleContains).toLowerCase()));
+    const category = source === 'auto' && (hasWindowRule || mappedApps.has(normalizedApp))
+      ? classify(app, title) : (item.category || classify(app, title));
     atoms.push({
       ms,
       app,
       title,
-      category: source === 'auto' && (hasWindowRule || mappedApps.has(normalizedApp))
-        ? classify(app, title) : (item.category || classify(app, title)),
+      category: resolveCategoryMerge(category, categoryMerges),
       kind: item.kind === 'idle' ? 'idle' : 'active',
       // 三层来源要原样保留：优先级消解靠它区分
       // manual（本人补记）> imported（导入的标注）> focus（专注）> auto（录制）
@@ -815,7 +827,7 @@ function buildDayReport(dataDir, dateStr, options) {
 
   const raw = readDayRaw(dataDir, dateStr);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
-    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {});
 
   // 录制器会把空闲段单独写成 kind=idle 的片段，直接累计
   const idleAtoms = atoms.filter(a => a.kind === 'idle');
@@ -873,7 +885,7 @@ function buildDayReport(dataDir, dateStr, options) {
       app: f.text,
       title: f.text,
       note: f.note || '',
-      category: '专注',
+      category: resolveCategoryMerge('专注', opts.categoryMerges || {}),
       source: 'focus',
       focusId: f.focusId
     });
@@ -936,11 +948,16 @@ function buildDayReport(dataDir, dateStr, options) {
   if (bigGaps.length > 0) {
     dataNotes.push(`存在 ${bigGaps.length} 处超过 ${Math.round(opts.idleGapMs / 60000)} 分钟的空档（空档、休眠或应用未运行），此时长不可信`);
   }
-  if (spanMs > 0 && agg.totalMs / spanMs < 0.35) {
-    dataNotes.push(`已记录时长仅占区间跨度的 ${pct(agg.totalMs / spanMs)}，可检查未记录时段`);
-  }
-
   const slots = buildSlots(resolvedAtoms, dateStr, opts);
+  const now = new Date();
+  const elapsedSlots = dateStr === toDateStr(now)
+    ? Math.max(1, Math.min(slots.length, Math.ceil((now.getHours() * 60 + now.getMinutes() + 1) / 15)))
+    : slots.length;
+  const coveredSlots = slots.slice(0, elapsedSlots).filter(s => s.filledMin > 0).length;
+  const slotCoverage = elapsedSlots > 0 ? coveredSlots / elapsedSlots : 0;
+  if (elapsedSlots - coveredSlots > 0) {
+    dataNotes.push(`当天已有 ${elapsedSlots - coveredSlots} 个 15 分钟格尚无记录，可在时间轴补充`);
+  }
   return {
     kind: 'day',
     date: dateStr,
@@ -956,7 +973,9 @@ function buildDayReport(dataDir, dateStr, options) {
       idleMs,
       idleSessionCount,
       spanMs,
-      coverage: spanMs > 0 ? totalMs / spanMs : 0,
+      coverage: slotCoverage,
+      coveredSlots,
+      elapsedSlots,
       firstAt: firstMs ? new Date(firstMs).toISOString() : null,
       lastAt: lastEndMs ? new Date(lastEndMs).toISOString() : null,
       bigGapCount: bigGaps.length
@@ -1140,7 +1159,7 @@ function searchActivities(dataDir, keyword, from, to, options) {
 
   const raw = readRangeRaw(dataDir, from, to);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
-    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {});
   inferDurations(atoms, opts);
 
   const hits = atoms.filter(a =>
@@ -1182,7 +1201,7 @@ function renderDayMarkdown(report, detail) {
   }
 
   lines.push(`- 统计区间：${toHm(s.firstAt)} – ${toHm(s.lastAt)}（跨度 ${formatDuration(s.spanMs)}）`);
-  lines.push(`- 有效记录：${formatDuration(s.trackedMs)}（占跨度 ${pct(s.coverage)}）`);
+  lines.push(`- 有效记录：${formatDuration(s.trackedMs)}；15 分钟格覆盖率 ${pct(s.coverage)}`);
   if (s.idleMs > 0) {
     lines.push(`- 空档（锁屏/未记录）：${formatDuration(s.idleMs)}（已从有效工时中剔除）`);
   }
@@ -1315,7 +1334,7 @@ function renderPromptContext(rawItems, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
   const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
   const atoms = normalizeRaw(rawItems, classify, buildIgnoreSet(opts.ignoredApps),
-    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {});
 
   if (!atoms.length) return { text: '', totalMs: 0, sessionCount: 0, idleMs: 0 };
 
@@ -1395,6 +1414,7 @@ module.exports = {
   toHm,
   formatDuration,
   buildClassifier,
+  resolveCategoryMerge,
   buildIgnoreSet,
   listRecordedApps,
   listRecordedAppsAsync,
