@@ -84,6 +84,26 @@ test('window title identifies activity before generic browser category', () => {
   assert.equal(mapped('chrome.exe', 'Plain web page'), '学习');
 });
 
+test('mapping an app to life keeps its time out of effective work', t => {
+  const dir = fixture(t, [{ t: at('18:00'), dur: 30 * 60000, app: 'music.exe', title: 'Playlist' }]);
+  const report = analytics.buildDayReport(dir, '2026-11-08', { appCategoryMap: { music: '娱乐' } });
+  assert.equal(report.stats.recordedMs, 30 * 60000);
+  assert.equal(report.stats.trackedMs, 0);
+  assert.equal(report.stats.lifeMs, 30 * 60000);
+});
+
+test('custom category keeps its label and uses its parent group for time accounting', t => {
+  const dir = fixture(t, [{ t: at('18:00'), dur: 30 * 60000, app: 'music.exe', title: 'Playlist' }]);
+  const report = analytics.buildDayReport(dir, '2026-11-08', {
+    appCategoryMap: { music: '听歌' },
+    customCategories: [{ key: '听歌', name: '听音乐', color: '#dd8855', group: '娱乐' }]
+  });
+  assert.equal(report.slots.find(s => s.startMin === 1080).category, '听歌');
+  assert.equal(report.dayBalance.life, 30);
+  assert.equal(report.stats.lifeMs, 30 * 60000);
+  assert.equal(report.stats.trackedMs, 0);
+});
+
 test('range totals use the same day reports as its daily breakdown', t => {
   const dir = fixture(t, [
     { t: at('10:00'), dur: 45 * 60000, app: 'wps', title: 'Draft', kind: 'active' }

@@ -1088,14 +1088,16 @@ ipcMain.handle('suggest-categories', async () => {
     windows.sort((a, b) => b.durationMs - a.durationMs);
     const existing = (config.analysis?.customCategories || []).map(c => c.key || c.name);
     const choices = ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...existing];
-    const prompt = `分析最近窗口标题，提出最多 3 个新分类和最多 5 条对现有分类的应用映射建议。已有分类：${choices.join('、')}。同一应用用途多变时，只能建议具体窗口关键词映射，不能把整个应用固定为一种活动。\n只返回 JSON 对象：{"categories":[{"name":"2-6字中文名称","color":"#六位十六进制颜色","reason":"简短证据"}],"mappings":[{"app":"原样应用名","category":"已有分类之一","titleContains":"可选的窗口标题关键词，整个应用通用时留空","reason":"简短证据"}]}。没有建议就使用空数组，不要 Markdown。\n窗口：${JSON.stringify(windows.slice(0, 25).map(w => ({ title: String(w.title).slice(0, 90), app: w.app, minutes: Math.round(w.durationMs / 60000) })))}`;
+    const prompt = `分析最近窗口标题，提出最多 3 个新分类和最多 5 条对现有分类的应用映射建议。已有分类：${choices.join('、')}。同一应用用途多变时，只能建议具体窗口关键词映射，不能把整个应用固定为一种活动。\n只返回 JSON 对象：{"categories":[{"name":"2-6字中文名称","color":"#六位十六进制颜色","group":"工作/学习/生活/娱乐/睡眠/专注/其他之一","reason":"简短证据"}],"mappings":[{"app":"原样应用名","category":"已有分类之一","titleContains":"可选的窗口标题关键词，整个应用通用时留空","reason":"简短证据"}]}。没有建议就使用空数组，不要 Markdown。\n窗口：${JSON.stringify(windows.slice(0, 25).map(w => ({ title: String(w.title).slice(0, 90), app: w.app, minutes: Math.round(w.durationMs / 60000) })))}`;
     const raw = await summarizer.callAI(prompt);
     const match = String(raw || '').match(/\{[\s\S]*\}/);
     const parsed = match ? JSON.parse(match[0]) : {};
     const categories = (Array.isArray(parsed.categories) ? parsed.categories : []).filter(c =>
       c && typeof c.name === 'string' && /^[\u4e00-\u9fa5]{2,6}$/.test(c.name) &&
       /^#[0-9a-fA-F]{6}$/.test(c.color) && !['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...existing].includes(c.name)
-    ).slice(0, 3).map(c => ({ name: c.name, color: c.color, reason: String(c.reason || '').slice(0, 30) }));
+    ).slice(0, 3).map(c => ({ name: c.name, color: c.color,
+      group: ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'].includes(c.group) ? c.group : '其他',
+      reason: String(c.reason || '').slice(0, 30) }));
     const seenApps = new Set(windows.map(w => String(w.app || '').toLowerCase()));
     const mappings = (Array.isArray(parsed.mappings) ? parsed.mappings : []).filter(m =>
       m && seenApps.has(String(m.app || '').toLowerCase()) && choices.includes(m.category) &&

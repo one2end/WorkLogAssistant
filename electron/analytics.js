@@ -150,7 +150,7 @@ function simpleCategory(cat) {
 }
 
 /** 不算工作产出的分类：生活事务、影音娱乐、睡眠。时间照实显示，但不进有效工时。 */
-const LIFE_CATEGORIES = new Set([LIFE_CATEGORY, '影音娱乐', SLEEP_CATEGORY]);
+const LIFE_CATEGORIES = new Set([LIFE_CATEGORY, '影音娱乐', '生活', '娱乐', SLEEP_CATEGORY]);
 
 /**
  * 记录器自身不应该被统计进去（开发模式进程名是 electron，打包后是 WorkLog Assistant）。
@@ -374,7 +374,7 @@ function readDidaFocus(dataDir, dateStr) {
 // 分类
 // ---------------------------------------------------------------------------
 
-function buildClassifier(rules, appCategoryMap = {}, windowCategoryRules = []) {
+function buildClassifier(rules, appCategoryMap = {}, windowCategoryRules = [], customCategories = []) {
   const active = Array.isArray(rules) && rules.length > 0 ? rules : DEFAULT_CATEGORY_RULES;
   const compiled = active.map(rule => ({
     name: rule.name,
@@ -386,6 +386,7 @@ function buildClassifier(rules, appCategoryMap = {}, windowCategoryRules = []) {
   const excluded = new Set(
     compiled.filter(r => r.excludeFromTotal).map(r => r.name)
   );
+  const customGroups = new Map((customCategories || []).map(c => [c.key || c.name, c.group || '其他']));
 
   /**
    * 短键（<4 字符，如 et / wps / cmd / qq）只允许精确匹配，
@@ -428,8 +429,8 @@ function buildClassifier(rules, appCategoryMap = {}, windowCategoryRules = []) {
    * 它们要出现在时间线上（一天是完整的），但不能算进有效工作工时，
    * 否则手工补记的全天记录会把"有效工时"顶到 18 小时。
    */
-  classify.isLife = (category) => LIFE_CATEGORIES.has(category);
-  classify.isSleep = (category) => category === SLEEP_CATEGORY;
+  classify.isLife = (category) => LIFE_CATEGORIES.has(category) || ['生活', '娱乐', '睡眠'].includes(customGroups.get(category));
+  classify.isSleep = (category) => category === SLEEP_CATEGORY || customGroups.get(category) === '睡眠';
   return classify;
 }
 
@@ -627,7 +628,8 @@ function buildSlots(atoms, dateStr, options = {}) {
       const segEnd = Math.min(to, dayStart + (idx + 1) * slotMs);
       const mins = (segEnd - cur) / 60000;
       const slot = slots[idx];
-      const cat = a.source === 'manual' && a.category && !CAT_TO_GROUP[a.category]
+      const isCustom = (options.customCategories || []).some(c => (c.key || c.name) === a.category);
+      const cat = (isCustom || a.source === 'manual') && a.category && !CAT_TO_GROUP[a.category]
         ? a.category : simpleCategory(a.category || '其他');
       slot.ms += segEnd - cur;
       slot.catMs[cat] = (slot.catMs[cat] || 0) + mins;
@@ -809,7 +811,7 @@ function pct(n) {
 
 function buildDayReport(dataDir, dateStr, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules);
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
 
   const raw = readDayRaw(dataDir, dateStr);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
@@ -966,7 +968,7 @@ function buildDayReport(dataDir, dateStr, options) {
     recordedWindows,
     // 展示层：15 分钟一格的主要事件，UI 与 AI 回顾都读这一层
     slots,
-    dayBalance: buildDayBalance(slots),
+    dayBalance: buildDayBalance(slots, Object.fromEntries((opts.customCategories || []).map(c => [c.key || c.name, c.group || '其他']))),
     layers: {
       autoMs: resolvedAtoms.filter(a => a.source === 'auto').reduce((n, a) => n + (a.durationMs || 0), 0),
       importedMs: resolvedAtoms.filter(a => a.source === 'imported').reduce((n, a) => n + (a.durationMs || 0), 0),
@@ -1132,7 +1134,7 @@ function buildDailyTrackedMs(dataDir, from, to, options) {
 
 function searchActivities(dataDir, keyword, from, to, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules);
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
   const kw = String(keyword || '').toLowerCase();
   if (!kw) return { keyword, hits: [], totalDurationMs: 0 };
 
@@ -1311,7 +1313,7 @@ function renderRangeMarkdown(report, detail) {
  */
 function renderPromptContext(rawItems, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules);
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
   const atoms = normalizeRaw(rawItems, classify, buildIgnoreSet(opts.ignoredApps),
     new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
 

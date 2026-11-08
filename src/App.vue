@@ -629,9 +629,9 @@ export default {
       this.saveConfig();
     },
 
-    onCategoryChange(categories) {
+    async onCategoryChange(categories) {
       this.config.analysis = { ...(this.config.analysis || {}), customCategories: categories };
-      this.saveConfig();
+      await this.saveConfig();
       this.onDataChanged();
     },
     onCategoryMetaChange(meta) {

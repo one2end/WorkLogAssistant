@@ -64,17 +64,19 @@
         </div>
         <div v-for="suggestion in categorySuggestions" :key="suggestion.name" class="category-editor">
           <span class="suggestion-dot" :style="{ background: suggestion.color }"></span>
-          <span class="suggestion-name">{{ suggestion.name }} · {{ suggestion.reason }}</span>
+          <span class="suggestion-name">{{ suggestion.name }} · {{ categoryLabel(suggestion.group || '其他') }} · {{ suggestion.reason }}</span>
           <button type="button" class="btn btn-ghost btn-sm" :disabled="categoryChoices.some(c => c.name === suggestion.name)" @click="acceptCategory(suggestion)">采用</button>
         </div>
         <div v-for="(category, index) in customCategories" :key="index" class="category-editor">
           <input type="color" :value="category.color" :aria-label="`${category.name}的颜色`" @change="updateCategory(index, 'color', $event.target.value)">
           <input type="text" :value="category.name" maxlength="16" aria-label="分类名称" @change="updateCategory(index, 'name', $event.target.value)">
+          <select :value="category.group || '其他'" :aria-label="`${category.name}所属大类`" @change="updateCategory(index, 'group', $event.target.value)"><option v-for="key in baseCategories" :key="key" :value="key">{{ categoryLabel(key) }}</option></select>
           <button type="button" class="btn btn-ghost btn-sm" @click="removeCategory(index)">删除</button>
         </div>
         <div class="category-editor">
           <input v-model="newCategoryColor" type="color" aria-label="新分类颜色">
           <input v-model="newCategoryName" type="text" maxlength="16" placeholder="新分类名称" aria-label="新分类名称" @keyup.enter="addCategory">
+          <select v-model="newCategoryGroup" aria-label="新分类所属大类"><option v-for="key in baseCategories" :key="key" :value="key">{{ categoryLabel(key) }}</option></select>
           <button type="button" class="btn btn-secondary btn-sm" @click="addCategory">添加</button>
         </div>
         <p v-if="categoryError" class="hint category-error">{{ categoryError }}</p>
@@ -616,6 +618,7 @@ export default {
       },
       newCategoryName: '',
       newCategoryColor: '#6f9fe8',
+      newCategoryGroup: '其他',
       categoryError: '',
       appQuery: '',
       newRuleApp: '', newRuleTitle: '', newRuleCategory: '工作'
@@ -705,12 +708,13 @@ export default {
         this.categoryError = '请输入未使用的分类名称'; return;
       }
       this.categoryError = '';
-      this.$emit('category-change', [...this.customCategories, { key: name, name, color: this.newCategoryColor }]);
+      this.$emit('category-change', [...this.customCategories, { key: name, name, color: this.newCategoryColor, group: this.newCategoryGroup }]);
       this.newCategoryName = '';
     },
     acceptCategory(suggestion) {
       this.newCategoryName = suggestion.name;
       this.newCategoryColor = suggestion.color;
+      this.newCategoryGroup = suggestion.group || '其他';
       this.addCategory();
     },
     updateCategory(index, field, value) {
@@ -722,6 +726,7 @@ export default {
         }
       }
       if (field === 'color' && !/^#[0-9a-fA-F]{6}$/.test(value)) return;
+      if (field === 'group' && !this.baseCategories.includes(value)) return;
       next[index] = { key: next[index].key || next[index].name, ...next[index], [field]: value };
       this.$emit('category-change', next);
       this.categoryError = '';
@@ -838,6 +843,7 @@ export default {
 .category-editor { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0; }
 .category-editor input[type="color"] { width: 36px; height: 30px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: var(--r-sm); background: var(--bg-elevated); cursor: pointer; }
 .category-editor input[type="text"] { flex: 1; min-width: 100px; max-width: 240px; }
+.category-editor select { flex: 0 0 96px; min-width: 0; }
 .category-editor .suggestion-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .category-editor .suggestion-name { flex: 1; font-size: var(--fs-11); color: var(--text-secondary); }
 .category-error { color: var(--danger); }
