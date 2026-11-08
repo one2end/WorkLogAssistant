@@ -223,26 +223,26 @@
     <!-- 应用排行 -->
     <section v-if="cards.apps" class="card">
       <div class="card-head">
-        <span class="card-title">窗口排行</span>
-        <span class="head-note">仅后台录制 · 应用名作辅助 · Top {{ rankedWindows.length }}</span>
+        <span class="card-title">应用排行</span>
+        <span class="head-note">仅后台录制 · 按应用汇总 · Top {{ topRankedApps.length }}</span>
       </div>
 
-      <template v-if="rankedWindows.length">
+      <template v-if="topRankedApps.length">
         <ul class="app-list">
-          <li v-for="(a, i) in rankedWindows" :key="a.app + ':' + a.title" class="app-row">
+          <li v-for="(a, i) in topRankedApps" :key="a.processName || a.name" class="app-row">
             <span class="app-rank">{{ i + 1 }}</span>
             <span class="app-main">
               <span class="app-name-row">
-                <span class="app-name" :title="a.title">{{ a.title }}</span>
+                <span class="app-name" :title="a.processName || a.name">{{ a.processName || a.name }}</span>
                 <span class="app-time">{{ fmt(a.durationMs) }}</span>
               </span>
               <span class="app-bar">
                 <span
                   class="app-bar-fill"
-                  :style="{ width: (a.durationMs / maxWindowMs * 100).toFixed(1) + '%', background: colorOf(a.category) }"
+                  :style="{ width: (a.durationMs / maxAppMs * 100).toFixed(1) + '%', background: colorOf(a.category) }"
                 ></span>
               </span>
-              <span class="app-titles">{{ a.app }}</span>
+              <span v-if="windowHint(a)" class="app-titles" :title="windowHint(a)">{{ windowHint(a) }}</span>
             </span>
           </li>
         </ul>
@@ -250,7 +250,7 @@
 
       <div v-else class="empty">
         <span class="empty-icon"><EmptyIllustration variant="grid" :size="88" /></span>
-        <span class="empty-title">暂无窗口记录</span>
+        <span class="empty-title">暂无应用记录</span>
       </div>
     </section>
 
@@ -490,14 +490,11 @@ export default {
     rankedApps() {
       return this.report.recordedApps || (this.report.apps || []).filter(a => !a.manual);
     },
-    rankedWindows() {
-      return (this.report.recordedWindows || this.rankedApps.map(a => ({
-        title: a.titles?.[0] || a.processName || a.name, app: a.processName || a.name,
-        category: a.category, durationMs: a.durationMs
-      }))).slice(0, 6);
+    topRankedApps() {
+      return this.rankedApps.slice(0, 6);
     },
-    maxWindowMs() {
-      return this.rankedWindows.length ? this.rankedWindows[0].durationMs : 1;
+    maxAppMs() {
+      return this.topRankedApps.length ? this.topRankedApps[0].durationMs : 1;
     },
     current() {
       if (!this.recorder || !this.recorder.running || !this.isToday) return null;
@@ -525,6 +522,10 @@ export default {
   },
   methods: {
     pad(n) { return String(n).padStart(2, '0'); },
+    windowHint(app) {
+      const name = app.processName || app.name;
+      return this.report.recordedWindows?.find(w => w.app === name)?.title || app.titles?.[0] || '';
+    },
     onBandClick(i, cell) {
       this.$emit('jump-to-time', {
         minutes: cell && Number.isFinite(cell.minutes) ? cell.minutes : i * 15,
