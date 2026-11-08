@@ -12,12 +12,28 @@
  */
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const axios = require('axios');
 
 const API_BASE = 'https://api.dida365.com/open/v1';
 const PAGE_DAYS = 30;          // 官方单次最多 30 天
 const PUSH_LIMIT = 20;         // 单次最多推送 20 条，防止刷屏
+const PUSH_DELETE_LIMIT = 40;  // 单次最多清理 40 条旧任务，防止误删刷屏
+
+/**
+ * 推送记录（pushed.json）的三个版本，读取时要能同时兼容：
+ *
+ *   v1  { "<key>": "<ISO 时间>" }                     —— 只知道「推过」，没有 id
+ *   v2  { "<key>": { id, at } }                        —— 记下 taskId，能删
+ *   v3  { "<key>": { id, at, start, end, date } }      —— 还能按时间范围对账
+ *
+ * 为什么必须记 id：滴答的清单接口只返回**未完成**的任务，推过去并标记完成之后
+ * 就再也查不到了。所以「这条旧任务要不要删」只能靠本地记录判断，删也得靠本地存的 id。
+ *
+ * 为什么去重键不能只看内容指纹：一条 1 小时的记录先被推成 A，后来和邻段合并成
+ * 2 小时，指纹（含时长）就变了，于是被当成新记录再推一条 B——A 还留在滴答里。
+ * 现在改成按「时间范围」判断：同一段时间只应该有一条任务。
+ */
+const PUSH_RECORD_VERSION = 3;
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
@@ -81,6 +97,68 @@ function formatRecordTask(session, categoryNames = {}) {
   return { title: chars.slice(0, 30).join(''), overflow: chars.slice(30).join('') };
 }
 
+/**
+ * 把推送记录统一成 v3 结构。入参是已经解析过的 JSON 对象。
+ *
+ * v1 的值只是一个时间字符串、没有 taskId——那批任务是本次改造之前推的，
+ * 删不掉（滴答查不到已完成任务），只能照样当作「已推过」避免重复。
+ * 这里把它们标成 start/end 为 null，既不会参与区间对账，也不会被误删。
+ */
+function readPushRecords(raw) {
+  const out = {};
+  for (const [key, value] of Object.entries(raw || {})) {
+    if (value && typeof value === 'object') {
+      out[key] = {
+        id: value.id || '',
+        at: value.at || '',
+        start: Number.isFinite(value.start) ? value.start : null,
+        end: Number.isFinite(value.end) ? value.end : null,
+        date: value.date || ''
+      };
+    } else if (typeof value === 'string' && value) {
+      out[key] = { id: '', at: value, start: null, end: null, date: '' };
+    }
+  }
+  return out;
+}
+
+/**
+ * 旧记录是否该被「当前这批标注」取代。
+ *
+ * 核心规则：**同一段时间只应该存在一条任务**。
+ * 只要当前标注里找不到一条与它时间范围完全一致（±1 分钟）的，
+ * 这条旧记录就已经过时——合并、拆分、挪时间、干脆删掉，都归到这一类。
+ *
+ * 为什么不比较内容指纹：一条 13:00–14:00 的记录被合并进 13:00–15:00 之后，
+ * 内容固然变了，但真正的判定依据是「这段时间现在归谁」。
+ * 用区间判断，合并和拆分才不会各写一套逻辑。
+ */
+function hasSameRange(record, live) {
+  return Math.abs(record.start - live.start) < 60000 && Math.abs(record.end - live.end) < 60000;
+}
+
+/**
+ * 一条待推标注是否已经有对应记录。
+ *
+ * 分两种情况：
+ *   · v1 老记录没有区间，只能退回按「日期 + 起始分钟」比对，
+ *     这样改造前推过的段不会重复推一遍；
+ *   · 有区间的记录一律按区间比对——同一起点但终点变了（合并/拉长），
+ *     必须当成新任务重推，否则合并后的内容永远推不出去。
+ */
+function liveHasRecord(records, item) {
+  const direct = records[pushKey(item.date, item.start)];
+  if (direct && (direct.start === null || direct.end === null)) return true;
+  return Object.values(records).some(rec => (
+    rec.start !== null && rec.end !== null && hasSameRange(rec, item)
+  ));
+}
+
+/** 推送记录的去重键：同一天同一起点视为同一条 */
+function pushKey(date, startMs) {
+  return `${date}:${Math.round(startMs / 60000)}`;
+}
+
 class DidaSync {
   /**
    * @param {object} deps
@@ -125,6 +203,9 @@ class DidaSync {
       todayPushed: Number(s.todayPushed) || 0,
       lastPullCount: Number(s.lastPullCount) || 0,
       lastPushCount: Number(s.lastPushCount) || 0,
+      // 上一次推送顺带清理掉多少条被合并/改动的旧任务
+      lastRemovedCount: Number(s.lastRemovedCount) || 0,
+      lastPushNote: s.lastPushNote || '',
       lastError: s.lastError || ''
     };
   }
@@ -377,34 +458,70 @@ class DidaSync {
     this.broadcast('dida-status', this.status());
     try {
       const d = this.dirs();
-      const pushed = readJson(d.pushed, {});
+      const pushed = readPushRecords(readJson(d.pushed, {}));
       const days = clampInt(cfg.syncDays, 1, 30, 7);
-      const candidates = [];
+
+      // 1) 先把这些天所有「该推的标注」收齐，不管推没推过。
+      //    对账需要完整集合：只有知道现在这段时间归谁，才能判断旧任务是否过时。
+      const live = [];
       for (let i = 0; i < days; i += 1) {
         const date = localDateStr(Date.now() - i * 86400000);
         let report = null;
         try {
           report = this.buildDayReport(this.getDataDir(), date, {});
         } catch (_) { continue; }
-        const sessions = (report && report.sessions) || [];
-        for (const s of sessions) {
+        for (const s of (report && report.sessions) || []) {
           // 只推展示层里人工声明过的段，绝不推记录层的原始采样
           if (!s.manual && !s.isManual && s.layer !== 'display') continue;
           const start = parseDidaTime(s.startTime || s.start);
-          const end = parseDidaTime(s.endTime || s.end);
+          let end = parseDidaTime(s.endTime || s.end);
           if (!Number.isFinite(start)) continue;
-          const legacyKey = `${date}:${Math.round(start / 60000)}:${String(s.app || s.title || '').slice(0, 40)}`;
-          const fingerprint = crypto.createHash('sha256').update(JSON.stringify([s.category, s.app, s.titles, s.durationMs])).digest('hex').slice(0, 16);
-          const key = `${date}:${Math.round(start / 60000)}:${fingerprint}`;
-          if (pushed[key] || pushed[legacyKey]) continue;
-          candidates.push({ key, date, start, end, session: s });
-          if (candidates.length >= PUSH_LIMIT) break;
+          if (!Number.isFinite(end) || end <= start) {
+            end = start + (Number(s.durationMs) || 900000);
+          }
+          live.push({ date, start, end, session: s });
         }
+      }
+
+      // 2) 对账：找出已被取代的旧推送，删掉滴答任务并清出记录。
+      //    判据是「当前标注里没有一条与它时间范围一致」——合并、拆分、改时间、删除都归此列。
+      let removed = 0;
+      let unremovable = 0;
+      for (const [key, rec] of Object.entries(pushed)) {
+        if (rec.start === null || rec.end === null) {
+          // v1 老记录：没有区间也没 id，既判断不了过时也删不掉，原样留着避免重复推送
+          continue;
+        }
+        const stillLive = live.some(x => hasSameRange(rec, x));
+        if (stillLive) continue;
+        if (!rec.id) { unremovable += 1; delete pushed[key]; continue; }
+        if (removed >= PUSH_DELETE_LIMIT) continue;
+        try {
+          await axios.delete(
+            `${API_BASE}/project/${encodeURIComponent(cfg.pushProjectId)}/task/${encodeURIComponent(rec.id)}`,
+            { headers: { Authorization: `Bearer ${cfg.token}` }, timeout: 15000, proxy: false }
+          );
+          delete pushed[key];
+          removed += 1;
+        } catch (e) {
+          // 删不掉就留着，下一轮再试；不要因为一条删失败中断整轮
+          const st0 = this.status();
+          st0.lastError = `清理旧任务失败（${rec.id}）：${e.response?.status || ''} ${e.message || e}`.trim();
+          this.writeStatus(st0);
+        }
+      }
+      writeJson(d.pushed, pushed);
+
+      // 3) 再决定推哪些：当前标注里，凡是还没有「同区间」记录的就是新任务
+      const candidates = [];
+      for (const item of live) {
+        if (liveHasRecord(pushed, item)) continue;
+        candidates.push(item);
         if (candidates.length >= PUSH_LIMIT) break;
       }
 
-      if (!candidates.length) {
-        return { ok: true, count: 0, skipped: true, reason: '没有需要推送的新标注' };
+      if (!candidates.length && !removed) {
+        return { ok: true, count: 0, removed: 0, skipped: true, reason: '没有需要推送的新标注' };
       }
 
       let sent = 0;
@@ -448,7 +565,14 @@ class DidaSync {
             this.writeStatus(st0);
           }
         }
-        pushed[c.key] = new Date().toISOString();
+        // 记下 id 和区间：下次合并时要靠这两个字段把这条删掉
+        pushed[pushKey(c.date, c.start)] = {
+          id: taskId || '',
+          at: new Date().toISOString(),
+          start: c.start,
+          end: c.end,
+          date: c.date
+        };
         writeJson(d.pushed, pushed);
         sent += 1;
       }
@@ -456,11 +580,14 @@ class DidaSync {
       const st = this.status();
       st.lastPushAt = new Date().toISOString();
       st.lastPushCount = sent;
+      st.lastRemovedCount = removed;
+      // 每轮都重写，避免上一轮的提示一直挂着
+      st.lastPushNote = unremovable ? `${unremovable} 条早期推送缺少任务 id，无法自动清理` : '';
       st.pushedTotal += sent;
       st.todayPushed += sent;
       st.lastError = '';
       this.writeStatus(st);
-      return { ok: true, count: sent, manual };
+      return { ok: true, count: sent, removed, manual };
     } catch (e) {
       const s = this.status();
       s.lastError = `推送失败：${e.response?.status || ''} ${e.message || e}`.trim();
@@ -502,4 +629,4 @@ class DidaSync {
   }
 }
 
-module.exports = { DidaSync, localDateStr, parseDidaTime, formatRecordTask };
+module.exports = { DidaSync, localDateStr, parseDidaTime, formatRecordTask, hasSameRange, readPushRecords, liveHasRecord, pushKey };

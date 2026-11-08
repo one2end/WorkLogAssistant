@@ -308,6 +308,10 @@
         </div>
         <div v-if="dida.pushEnabled === true">
           <p class="danger-note">这条通道会真的往滴答清单里创建任务。请先确认目标清单，评估好再开启。</p>
+          <p class="hint">
+            推送是「同步」而不是「只加不减」：同一段时间只保留一条任务。
+            如果你把两段标注合并、拆分或改了时间，下一轮推送会删掉旧任务、换成新的。
+          </p>
           <div class="row">
             <span class="row-label">推送间隔</span>
             <div class="row-control sm">
@@ -715,7 +719,11 @@ export default {
     lastPushText() {
       const s = this.didaStat;
       if (!s.lastPushAt) return '尚未推送';
-      return `上次 ${this.fmtTime(s.lastPushAt)} · 新增 ${s.lastPushCount || 0} 条`;
+      const parts = [`上次 ${this.fmtTime(s.lastPushAt)}`, `新增 ${s.lastPushCount || 0} 条`];
+      // 合并/改动后被替换掉的旧任务，说清楚它去哪了，否则用户会以为任务丢了
+      if (s.lastRemovedCount) parts.push(`清理旧任务 ${s.lastRemovedCount} 条`);
+      if (s.lastPushNote) parts.push(s.lastPushNote);
+      return parts.join(' · ');
     },
     /** 目标清单下方的说明：已经选中的显示清单名，没选的说清后果 */
     projectHint() {
