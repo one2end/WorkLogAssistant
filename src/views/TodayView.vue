@@ -298,6 +298,20 @@ import PluginDock from '../components/PluginDock.vue';
 import { colorForCategory } from '../styles/palette.js';
 import { readPath } from '../plugins/registry.js';
 
+function balanceFromSlots(report) {
+  const totals = { work: 0, life: 0, sleep: 0, other: 0, unknown: 1440 };
+  for (const slot of report.slots || []) {
+    const minutes = Math.max(0, Math.min(15, Number(slot.filledMin) || 0));
+    totals.unknown -= minutes;
+    if (slot.category === '睡眠') totals.sleep += minutes;
+    else if (['生活', '娱乐'].includes(slot.category)) totals.life += minutes;
+    else if (['工作', '学习', '专注'].includes(slot.category)) totals.work += minutes;
+    else totals.other += minutes;
+  }
+  totals.unknown = Math.max(0, totals.unknown);
+  return totals;
+}
+
 export default {
   name: 'TodayView',
   components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock },
@@ -342,7 +356,7 @@ export default {
       return v === undefined ? true : !!v;
     },
     dayBalance() {
-      const totals = this.report.dayBalance || this.balanceFromSlots();
+      const totals = this.report.dayBalance || balanceFromSlots(this.report);
       return [
         { label: '工作/学习/专注', minutes: totals.work, color: 'var(--accent)' },
         { label: '生活/娱乐', minutes: totals.life, color: 'var(--success)' },
@@ -511,19 +525,6 @@ export default {
   },
   methods: {
     pad(n) { return String(n).padStart(2, '0'); },
-    balanceFromSlots() {
-      const totals = { work: 0, life: 0, sleep: 0, other: 0, unknown: 1440 };
-      for (const slot of this.report.slots || []) {
-        const minutes = Math.max(0, Math.min(15, Number(slot.filledMin) || 0));
-        totals.unknown -= minutes;
-        if (slot.category === '睡眠') totals.sleep += minutes;
-        else if (['生活', '娱乐'].includes(slot.category)) totals.life += minutes;
-        else if (['工作', '学习', '专注'].includes(slot.category)) totals.work += minutes;
-        else totals.other += minutes;
-      }
-      totals.unknown = Math.max(0, totals.unknown);
-      return totals;
-    },
     onBandClick(i, cell) {
       this.$emit('jump-to-time', {
         minutes: cell && Number.isFinite(cell.minutes) ? cell.minutes : i * 15,

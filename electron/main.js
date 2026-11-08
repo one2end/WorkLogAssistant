@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, screen } = require('electron');
 
 // 强调色在主窗口里由 CSS 变量生成；浮窗是独立 HTML，拿不到主文档变量，
 // 这里用同一组色相/饱和度再算一遍推过去，保证小窗和大窗同色。
