@@ -69,7 +69,7 @@
         <div class="manual-categories" role="group" aria-label="分类">
           <button v-for="c in categories" :key="c" type="button" class="manual-category"
             :class="{ selected: manualCategory === c }" :aria-pressed="manualCategory === c"
-            :style="{ '--category-color': colorOf(c) }" @click="manualCategory = c">{{ c }}</button>
+            :style="{ '--category-color': colorOf(c) }" @click="manualCategory = c">{{ categoryLabel(c) }}</button>
         </div>
       </div>
       <label class="mf full">
@@ -167,7 +167,7 @@
               <div v-if="cardNote(b)" class="card-note" :title="cardNote(b)">{{ cardNote(b) }}</div>
               <div class="card-meta">
                 <span class="cat-chip" :style="{ color: colorOf(b.category), background: softColor(b.category) }">
-                  {{ b.category || '其他' }}
+                  {{ categoryLabel(b.category || '其他') }}
                 </span>
                 <span v-if="b.tag" class="mini-tag focus">{{ b.tag }}</span>
                 <span v-else-if="b.manual" class="mini-tag">标注</span>
@@ -244,7 +244,7 @@
                   'is-thin': b.height < 1.2
                 }"
                 :style="calBlockStyle(b)"
-                :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${b.category}${b.manual ? ' · 标注' : ''}`"
+                :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${categoryLabel(b.category)}${b.manual ? ' · 标注' : ''}`"
                 @pointerdown.stop="startBlockDrag($event, d.date, b)"
                 @contextmenu.prevent.stop="openCtx($event, d.date, b)"
               >
@@ -308,6 +308,7 @@
       :anchor="editorAnchor"
       :initial="editorForm"
       :categories="categories"
+      :category-labels="categoryLabels"
       :deletable="editorDeletable"
       :saving="editSaving"
       @save="saveSegment"
@@ -361,6 +362,7 @@ export default {
     datesWithData: { type: Set, default: () => new Set() },
     focusTarget: { type: Object, default: null },
     customCategories: { type: Array, default: () => [] },
+    categoryMeta: { type: Object, default: () => ({}) },
     theme: { type: String, default: 'dark' }
   },
   emits: ['update:selectedDate', 'shift', 'today', 'refresh',
@@ -427,7 +429,10 @@ export default {
   },
   computed: {
     categories() {
-      return [...new Set(['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...this.customCategories.map(c => c.name).filter(Boolean)])];
+      return [...new Set(['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...this.customCategories.map(c => c.key || c.name).filter(Boolean)])];
+    },
+    categoryLabels() {
+      return Object.fromEntries(this.categories.map(key => [key, this.categoryLabel(key)]));
     },
     todayStr() {
       const n = new Date();
@@ -855,7 +860,7 @@ export default {
       const app = (b.app || '').trim();
       const note = this.cleanNote(this.noteOf(b));
       if (app && !['记录', '标注', '手工记录', 'unknown'].includes(app)) return app;
-      return note || b.category || '其他';
+      return note || this.categoryLabel(b.category || '其他');
     },
     cardNote(b) {
       const app = (b.app || '').trim();
@@ -875,7 +880,7 @@ export default {
       if (note) return note;
       const app = (b.app || '').trim();
       if (app && !['记录', '标注', '手工记录', 'unknown'].includes(app)) return app;
-      return b.category || '其他';
+      return this.categoryLabel(b.category || '其他');
     },
     blockSub(b) {
       // 一天/三天视图里才显示来源，七天视图太窄
@@ -1318,9 +1323,14 @@ export default {
       return CAT_ICONS[cat] || 'activity';
     },
     colorOf(name) {
-      const custom = this.customCategories.find(c => c.name === name);
+      const metaColor = this.categoryMeta[name]?.color;
+      if (metaColor && /^#[0-9a-fA-F]{6}$/.test(metaColor)) return metaColor;
+      const custom = this.customCategories.find(c => (c.key || c.name) === name);
       if (custom && /^#[0-9a-fA-F]{6}$/.test(custom.color)) return custom.color;
       return colorForCategory(this.theme, name);
+    },
+    categoryLabel(name) {
+      return this.categoryMeta[name]?.name || this.customCategories.find(c => (c.key || c.name) === name)?.name || name;
     },
     softColor(name, alpha) {
       const hex = this.colorOf(name);
@@ -1351,7 +1361,7 @@ export default {
     },
     noteOf(b) {
       if (b.titles && b.titles.length) return b.titles.join(' · ');
-      return b.category || '—';
+      return this.categoryLabel(b.category || '—');
     },
     consumeFocus() {
       const t = this.focusTarget;

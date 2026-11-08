@@ -190,7 +190,7 @@ class ApiServer {
       // 单日报告
       if (pathname === '/api/report/day' || pathname === '/api/day') {
         const date = DATE_RE.test(query.date || '') ? query.date : todayStr();
-        const report = analytics.buildDayReport(dataDir, date);
+        const report = analytics.buildDayReport(dataDir, date, this.getConfig().analysis);
         if (format === 'json') return jsonRes(res, 200, report);
         return textRes(res, 200, analytics.renderDayMarkdown(report, detail));
       }
@@ -202,7 +202,7 @@ class ApiServer {
         if (from > to) {
           return jsonRes(res, 400, { error: 'bad_range', message: 'from 必须早于或等于 to' });
         }
-        const report = analytics.buildRangeReport(dataDir, from, to, { detail });
+        const report = analytics.buildRangeReport(dataDir, from, to, { detail, ...(this.getConfig().analysis || {}) });
         if (format === 'json') return jsonRes(res, 200, report);
         return textRes(res, 200, analytics.renderRangeMarkdown(report, detail));
       }
@@ -211,7 +211,7 @@ class ApiServer {
       if (pathname === '/api/apps') {
         const to = DATE_RE.test(query.to || '') ? query.to : todayStr();
         const from = DATE_RE.test(query.from || '') ? query.from : to;
-        const report = analytics.buildRangeReport(dataDir, from, to, { detail });
+        const report = analytics.buildRangeReport(dataDir, from, to, { detail, ...(this.getConfig().analysis || {}) });
         return jsonRes(res, 200, {
           from, to,
           totalMs: report.stats.trackedMs,

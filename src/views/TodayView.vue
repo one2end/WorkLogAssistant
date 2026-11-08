@@ -196,14 +196,14 @@
             :key="c.name"
             class="stack-seg"
             :style="{ width: (c.percent * 100).toFixed(2) + '%', background: colorOf(c.name) }"
-            :title="`${c.name} ${fmt(c.durationMs)}`"
+            :title="`${categoryLabel(c.name)} ${fmt(c.durationMs)}`"
           ></div>
         </div>
 
         <ul class="cat-list">
           <li v-for="c in catList" :key="c.name" class="cat-row">
             <span class="cat-dot" :style="{ background: colorOf(c.name) }"></span>
-            <span class="cat-name">{{ c.name }}</span>
+            <span class="cat-name">{{ categoryLabel(c.name) }}</span>
             <span class="cat-bar">
               <span class="cat-bar-fill" :style="{ width: (c.percent * 100).toFixed(1) + '%', background: colorOf(c.name) }"></span>
             </span>
@@ -264,15 +264,28 @@
       <ul v-if="focus.sessions.length" class="focus-list">
         <li v-for="(s, i) in focus.sessions" :key="'s' + i" class="focus-row">
           <Icon name="zen" :size="13" />
-          <span class="focus-text"><strong>{{ s.focusText || '未命名专注' }}</strong><small v-if="s.note">{{ s.note }}</small></span>
+          <span v-if="editingFocus?.kind === 'session' && editingFocus.id === s.id" class="focus-edit">
+            <input v-model="focusDraft" maxlength="160" aria-label="专注内容" placeholder="专注内容">
+            <input v-model="focusNoteDraft" maxlength="1000" aria-label="专注备注" placeholder="备注，可留空">
+            <button class="btn btn-primary btn-sm" :disabled="!focusDraft.trim()" @click="saveFocusEdit">保存</button>
+            <button class="btn btn-ghost btn-sm" @click="editingFocus = null">取消</button>
+          </span>
+          <span v-else class="focus-text"><strong>{{ s.focusText || '未命名专注' }}</strong><small v-if="s.note">{{ s.note }}</small></span>
           <span class="focus-time">{{ fmt(s.durationMs) }}</span>
+          <button v-if="editingFocus?.id !== s.id" class="btn btn-ghost btn-sm" :aria-label="`修改专注 ${s.focusText}`" @click="startFocusEdit('session', s)">修改</button>
         </li>
       </ul>
 
       <ul v-if="focus.notes.length" class="note-items">
         <li v-for="(n, i) in focus.notes" :key="'n' + i" class="note-item">
           <span class="note-time">{{ hm(n.time) }}</span>
-          <span class="note-text">{{ n.text }}</span>
+          <span v-if="editingFocus?.kind === 'note' && editingFocus.id === n.id" class="focus-edit">
+            <input v-model="focusDraft" maxlength="1000" aria-label="随手记内容" @keyup.enter="saveFocusEdit">
+            <button class="btn btn-primary btn-sm" :disabled="!focusDraft.trim()" @click="saveFocusEdit">保存</button>
+            <button class="btn btn-ghost btn-sm" @click="editingFocus = null">取消</button>
+          </span>
+          <span v-else class="note-text">{{ n.text }}</span>
+          <button v-if="editingFocus?.id !== n.id" class="btn btn-ghost btn-sm" :aria-label="`修改随手记 ${n.text}`" @click="startFocusEdit('note', n)">修改</button>
         </li>
       </ul>
     </section>
@@ -339,9 +352,9 @@ export default {
   },
   emits: ['jump-to-time', 'select-date', 'shift-date', 'go-today',
     'shift-range', 'pick-month', 'heat-today', 'start-focus',
-    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings', 'accept-suggestion', 'dismiss-suggestion'],
+    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings', 'accept-suggestion', 'dismiss-suggestion', 'update-focus'],
   data() {
-    return { tick: 0, timer: null };
+    return { tick: 0, timer: null, editingFocus: null, focusDraft: '', focusNoteDraft: '' };
   },
   computed: {
     /** 首页卡片显隐：配置缺字段时默认全开，旧配置不用迁移 */
@@ -358,9 +371,9 @@ export default {
     dayBalance() {
       const totals = this.report.dayBalance || balanceFromSlots(this.report);
       return [
-        { label: '工作/学习/专注', minutes: totals.work, color: 'var(--accent)' },
-        { label: '生活/娱乐', minutes: totals.life, color: 'var(--success)' },
-        { label: '睡眠', minutes: totals.sleep, color: '#8d80ba' },
+        { label: ['工作', '学习', '专注'].map(c => this.categoryLabel(c)).join('/'), minutes: totals.work, color: 'var(--accent)' },
+        { label: ['生活', '娱乐'].map(c => this.categoryLabel(c)).join('/'), minutes: totals.life, color: 'var(--success)' },
+        { label: this.categoryLabel('睡眠'), minutes: totals.sleep, color: '#8d80ba' },
         { label: '已记录其他', minutes: totals.other, color: 'var(--text-tertiary)' },
         { label: '未解释', minutes: Math.max(0, totals.unknown), color: 'var(--border-strong)' }
       ];
@@ -433,7 +446,7 @@ export default {
           ...common,
           color: this.colorOf(top[0]),
           opacity: (0.42 + Math.min(1, cell.total / 15) * 0.58).toFixed(2),
-          title: `${at} · ${top[0]} ${Math.round(cell.total)} 分钟`
+          title: `${at} · ${this.categoryLabel(top[0])} ${Math.round(cell.total)} 分钟`
         };
       });
     },
@@ -522,6 +535,19 @@ export default {
   },
   methods: {
     pad(n) { return String(n).padStart(2, '0'); },
+    startFocusEdit(kind, item) {
+      this.editingFocus = { kind, id: item.id };
+      this.focusDraft = kind === 'note' ? item.text : item.focusText;
+      this.focusNoteDraft = kind === 'session' ? (item.note || '') : '';
+    },
+    saveFocusEdit() {
+      if (!this.editingFocus || !this.focusDraft.trim()) return;
+      const { kind, id } = this.editingFocus;
+      this.$emit('update-focus', kind === 'note'
+        ? { kind, id, text: this.focusDraft.trim() }
+        : { kind, id, focusText: this.focusDraft.trim(), note: this.focusNoteDraft.trim() });
+      this.editingFocus = null;
+    },
     windowHint(app) {
       const name = app.processName || app.name;
       return this.report.recordedWindows?.find(w => w.app === name)?.title || app.titles?.[0] || '';
@@ -533,9 +559,15 @@ export default {
       });
     },
     colorOf(name) {
-      const custom = this.config.analysis?.customCategories?.find(c => c.name === name);
+      const metaColor = this.config.analysis?.categoryMeta?.[name]?.color;
+      if (metaColor && /^#[0-9a-fA-F]{6}$/.test(metaColor)) return metaColor;
+      const custom = this.config.analysis?.customCategories?.find(c => (c.key || c.name) === name);
       if (custom && /^#[0-9a-fA-F]{6}$/.test(custom.color)) return custom.color;
       return colorForCategory(this.theme, name);
+    },
+    categoryLabel(name) {
+      return this.config.analysis?.categoryMeta?.[name]?.name ||
+        this.config.analysis?.customCategories?.find(c => (c.key || c.name) === name)?.name || name;
     },
     fmt(ms) {
       if (!ms || ms <= 0) return '0m';
@@ -1224,6 +1256,8 @@ export default {
 .focus-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .focus-text strong { font-size: var(--fs-12); font-weight: var(--fw-medium); }
 .focus-text small { color: var(--text-secondary); font-size: var(--fs-11); }
+.focus-edit { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; }
+.focus-edit input { flex: 1 1 130px; min-width: 90px; }
 
 .focus-time {
   font-size: var(--fs-11);
@@ -1251,6 +1285,7 @@ export default {
 }
 
 .note-text {
+  flex: 1;
   color: var(--text-secondary);
 }
 

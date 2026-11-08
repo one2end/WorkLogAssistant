@@ -34,7 +34,7 @@ const DEFAULT_OPTIONS = {
 };
 
 /**
- * 分类规则：按优先级从上到下匹配 processName，再匹配 windowTitle。
+ * 分类规则：窗口标题优先于通用应用名；用户固定映射和窗口例外在前。
  * 全部小写比较，用户可在 config.analysis.categoryRules 覆盖。
  */
 const DEFAULT_CATEGORY_RULES = [
@@ -291,6 +291,57 @@ function readDayRaw(dataDir, dateStr) {
   return items;
 }
 
+/** 历史记录层出现过的应用；只列应用，不把手工事项或导入专注当作软件。 */
+function listRecordedApps(dataDir, options = {}) {
+  const ignored = buildIgnoreSet(options.ignoredApps);
+  const apps = new Map();
+  for (const date of listDates(dataDir)) {
+    for (const row of readDayRaw(dataDir, date)) {
+      if ((row.source && row.source !== 'auto') || row.kind === 'idle') continue;
+      const name = String(row.processName || '').trim();
+      if (!name || ignored.has(name.toLowerCase())) continue;
+      const key = name.toLowerCase().replace(/\.exe$/, '');
+      const item = apps.get(key) || { key, name, count: 0, lastDate: date };
+      item.count += 1;
+      item.lastDate = date;
+      apps.set(key, item);
+    }
+  }
+  return [...apps.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** 设置页使用异步扫描，避免 iCloud 历史文件阻塞 Electron 主进程。 */
+async function listRecordedAppsAsync(dataDir, options = {}) {
+  const dir = path.join(dataDir, 'activities');
+  let files;
+  try { files = (await fs.promises.readdir(dir)).filter(f => /^\d{4}-\d{2}-\d{2}\.(json|jsonl)$/.test(f)); }
+  catch (_) { return []; }
+  const ignored = buildIgnoreSet(options.ignoredApps);
+  const apps = new Map();
+  for (let offset = 0; offset < files.length; offset += 6) {
+    const batch = await Promise.all(files.slice(offset, offset + 6).map(async file => {
+      try {
+        const content = await fs.promises.readFile(path.join(dir, file), 'utf8');
+        const rows = file.endsWith('.jsonl') ? content.split('\n').filter(Boolean).map(line => {
+          try { return JSON.parse(line); } catch (_) { return null; }
+        }) : JSON.parse(content);
+        return { date: file.slice(0, 10), rows: Array.isArray(rows) ? rows : [], jsonl: file.endsWith('.jsonl') };
+      } catch (_) { return { date: file.slice(0, 10), rows: [], jsonl: false }; }
+    }));
+    for (const file of batch) for (const row of file.rows) {
+      if (!row || (row.source && row.source !== 'auto') || row.kind === 'idle') continue;
+      const name = String((file.jsonl ? row.app : row.processName) || '').trim();
+      if (!name || ignored.has(name.toLowerCase())) continue;
+      const key = name.toLowerCase().replace(/\.exe$/, '');
+      const item = apps.get(key) || { key, name, count: 0, lastDate: file.date };
+      item.count += 1;
+      if (file.date > item.lastDate) item.lastDate = file.date;
+      apps.set(key, item);
+    }
+  }
+  return [...apps.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
 function readRangeRaw(dataDir, from, to) {
   const all = [];
   const dates = listDates(dataDir).filter(d => d >= from && d <= to);
@@ -323,7 +374,7 @@ function readDidaFocus(dataDir, dateStr) {
 // 分类
 // ---------------------------------------------------------------------------
 
-function buildClassifier(rules) {
+function buildClassifier(rules, appCategoryMap = {}, windowCategoryRules = []) {
   const active = Array.isArray(rules) && rules.length > 0 ? rules : DEFAULT_CATEGORY_RULES;
   const compiled = active.map(rule => ({
     name: rule.name,
@@ -351,11 +402,22 @@ function buildClassifier(rules) {
     const app = String(processName || '').toLowerCase().replace(/\.exe$/, '');
     const title = String(windowTitle || '').toLowerCase();
 
+    for (const rule of windowCategoryRules || []) {
+      const targetApp = String(rule.app || '').trim().toLowerCase().replace(/\.exe$/, '');
+      const keyword = String(rule.titleContains || '').trim().toLowerCase();
+      if (targetApp === app && keyword.length >= 2 && title.includes(keyword) && rule.category) return rule.category;
+    }
+    const mapped = appCategoryMap[app] || appCategoryMap[`${app}.exe`];
+    if (mapped) return mapped;
+
     for (const rule of compiled) {
-      if (rule.apps.some(k => matchesApp(app, k))) return rule.name;
+      if (rule.excludeFromTotal && rule.apps.some(k => matchesApp(app, k))) return rule.name;
     }
     for (const rule of compiled) {
       if (rule.titles.some(k => title.includes(k))) return rule.name;
+    }
+    for (const rule of compiled) {
+      if (rule.apps.some(k => matchesApp(app, k))) return rule.name;
     }
     return FALLBACK_CATEGORY;
   }
@@ -379,7 +441,7 @@ function buildClassifier(rules) {
  * 把原始记录标准化为原子事件，并按时间排序。
  * 自动丢弃异常记录（无时间戳 / 无法解析）。
  */
-function normalizeRaw(rawItems, classify, ignoreSet) {
+function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), windowCategoryRules = []) {
   const atoms = [];
   const ignored = ignoreSet || new Set(DEFAULT_IGNORED_APPS);
 
@@ -395,17 +457,23 @@ function normalizeRaw(rawItems, classify, ignoreSet) {
 
     const title = String(item.windowTitle || '').trim();
     const hasExplicitDur = typeof item.durationMs === 'number' && item.durationMs > 0;
+    const source = item.source === 'manual' ? 'manual'
+      : (item.source === 'dida' || item.source === 'uptimer' || item.source === 'imported') ? 'imported' : 'auto';
+    const normalizedApp = app.toLowerCase().replace(/\.exe$/, '');
+    const hasWindowRule = windowCategoryRules.some(rule =>
+      String(rule.app || '').toLowerCase().replace(/\.exe$/, '') === normalizedApp &&
+      String(rule.titleContains || '').trim().length >= 2 &&
+      title.toLowerCase().includes(String(rule.titleContains).toLowerCase()));
     atoms.push({
       ms,
       app,
       title,
-      category: item.category || classify(app, title),
+      category: source === 'auto' && (hasWindowRule || mappedApps.has(normalizedApp))
+        ? classify(app, title) : (item.category || classify(app, title)),
       kind: item.kind === 'idle' ? 'idle' : 'active',
       // 三层来源要原样保留：优先级消解靠它区分
       // manual（本人补记）> imported（导入的标注）> focus（专注）> auto（录制）
-      source: item.source === 'manual' ? 'manual'
-        : (item.source === 'dida' || item.source === 'uptimer' || item.source === 'imported') ? 'imported'
-        : 'auto',
+      source,
       // 录制器写入的片段自带精确时长；旧数据这里为 undefined，走时间差推断
       durationMs: hasExplicitDur ? item.durationMs : undefined,
       durationExact: hasExplicitDur
@@ -741,10 +809,11 @@ function pct(n) {
 
 function buildDayReport(dataDir, dateStr, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const classify = buildClassifier(opts.categoryRules);
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules);
 
   const raw = readDayRaw(dataDir, dateStr);
-  const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps));
+  const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
 
   // 录制器会把空闲段单独写成 kind=idle 的片段，直接累计
   const idleAtoms = atoms.filter(a => a.kind === 'idle');
@@ -765,7 +834,12 @@ function buildDayReport(dataDir, dateStr, options) {
   // 否则它和自动录制会各画一份，同一段时间被重复计算两次。
   // 本地番茄钟与滴答清单拉来的专注属于同一层级（第二层级），合并成一份声明。
   const arhatSessions = readArhatSessions(dataDir, dateStr);
-  const didaSessions = readDidaFocus(dataDir, dateStr);
+  const focusOverrides = safeReadJson(path.join(dataDir, 'arhat', 'overrides', `${dateStr}.json`), []);
+  const overrideMap = new Map((Array.isArray(focusOverrides) ? focusOverrides : []).map(o => [String(o.id), o]));
+  const didaSessions = readDidaFocus(dataDir, dateStr).map(f => {
+    const override = overrideMap.get(`dida:${f.id}`);
+    return override ? { ...f, title: override.focusText, note: override.note } : f;
+  });
   const focusClaims = [
     ...arhatSessions.map(f => ({
       from: new Date(f.startTime).getTime(),
@@ -915,17 +989,21 @@ function buildDayReport(dataDir, dateStr, options) {
         end: s.endTime,
         durationMs: s.durationMs,
         focusText: s.focusText,
+        note: s.note || '',
+        source: 'local',
         notesCount: s.notesCount
       })),
       didaSessions: didaSessions.map(s => ({
-        id: s.id,
+        id: `dida:${s.id}`,
         start: new Date(s.startMs).toISOString(),
         end: new Date(Number(s.endMs) || Number(s.startMs) + Number(s.durationMs || 0)).toISOString(),
         durationMs: Math.max(0, Number(s.durationMs) - Number(s.pauseMs || 0)),
         focusText: s.title || '专注',
-        note: s.note || ''
+        note: s.note || '',
+        source: 'dida'
       })),
       notes: notes.map(n => ({
+        id: n.id,
         time: n.timestamp,
         text: n.text,
         category: n.category
@@ -1054,12 +1132,13 @@ function buildDailyTrackedMs(dataDir, from, to, options) {
 
 function searchActivities(dataDir, keyword, from, to, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const classify = buildClassifier(opts.categoryRules);
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules);
   const kw = String(keyword || '').toLowerCase();
   if (!kw) return { keyword, hits: [], totalDurationMs: 0 };
 
   const raw = readRangeRaw(dataDir, from, to);
-  const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps));
+  const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
   inferDurations(atoms, opts);
 
   const hits = atoms.filter(a =>
@@ -1232,8 +1311,9 @@ function renderRangeMarkdown(report, detail) {
  */
 function renderPromptContext(rawItems, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const classify = buildClassifier(opts.categoryRules);
-  const atoms = normalizeRaw(rawItems, classify, buildIgnoreSet(opts.ignoredApps));
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules);
+  const atoms = normalizeRaw(rawItems, classify, buildIgnoreSet(opts.ignoredApps),
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || []);
 
   if (!atoms.length) return { text: '', totalMs: 0, sessionCount: 0, idleMs: 0 };
 
@@ -1314,6 +1394,8 @@ module.exports = {
   formatDuration,
   buildClassifier,
   buildIgnoreSet,
+  listRecordedApps,
+  listRecordedAppsAsync,
   buildDayReport,
   buildRangeReport,
   buildDailyTrackedMs,

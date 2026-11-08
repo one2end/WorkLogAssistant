@@ -98,6 +98,7 @@
           @pick-month="pickHeatMonth"
           @heat-today="heatGoToday"
           @start-focus="showArhatStart"
+          @update-focus="updateFocusRecord"
           @toggle-plugin="togglePlugin"
           @open-plugin-settings="openPluginSettings"
         />
@@ -111,6 +112,7 @@
           :focus-target="timelineTarget"
           :theme="theme"
           :custom-categories="config.analysis?.customCategories || []"
+          :category-meta="config.analysis?.categoryMeta || {}"
           @update:selected-date="onSelectDate"
           @shift="changeDate"
           @today="goToToday"
@@ -130,6 +132,8 @@
           :ai-usage="aiUsage"
           :category-suggestions="categorySuggestions"
           :category-suggesting="categorySuggesting"
+          :mapping-suggestions="mappingSuggestions"
+          :known-apps="knownApps"
           :dida-status="didaStatus"
           :bridge="bridge"
           :bridge-loading="bridgeLoading"
@@ -145,6 +149,9 @@
           :storage-path="storagePath"
           @save="saveConfig"
           @category-change="onCategoryChange"
+          @category-meta-change="onCategoryMetaChange"
+          @app-map-change="onAppMapChange"
+          @window-rule-change="onWindowRuleChange"
           @suggest-categories="suggestCategories"
           @provider-change="onProviderChange"
           @toggle-auto-launch="toggleAutoLaunch"
@@ -251,7 +258,9 @@ export default {
       summaries: [],
       annotationSuggestions: [],
       categorySuggestions: [],
+      mappingSuggestions: [],
       categorySuggesting: false,
+      knownApps: [],
       aiUsage: { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCalls: 0, next: { inputTokens: 0, outputLimit: 500, records: 0 } },
       datesWithData: new Set(),
       heatDaily: [],
@@ -362,6 +371,9 @@ export default {
     }
   },
   watch: {
+    view(value) {
+      if (value === 'settings') this.loadKnownApps();
+    },
     // 设置页改热力图周数后，首页必须真的按新跨度重拉
     'config.dashboard.heatmapWeeks'() {
       this.loadDailyTracked(true);
@@ -426,6 +438,10 @@ export default {
     },
 
     // ============ 数据加载 ============
+
+    async loadKnownApps() {
+      try { this.knownApps = await ipcRenderer.invoke('get-known-apps'); } catch (_) { this.knownApps = []; }
+    },
 
     async reloadDate(forceHeat = false) {
       await Promise.all([
@@ -618,13 +634,29 @@ export default {
       this.saveConfig();
       this.onDataChanged();
     },
+    onCategoryMetaChange(meta) {
+      this.config.analysis = { ...(this.config.analysis || {}), categoryMeta: meta };
+      this.saveConfig();
+    },
+    async onAppMapChange(map) {
+      this.config.analysis = { ...(this.config.analysis || {}), appCategoryMap: map };
+      await this.saveConfig();
+      this.onDataChanged();
+      await this.loadKnownApps();
+    },
+    async onWindowRuleChange(rules) {
+      this.config.analysis = { ...(this.config.analysis || {}), windowCategoryRules: rules };
+      await this.saveConfig();
+      this.onDataChanged();
+    },
     async suggestCategories() {
       this.categorySuggesting = true;
       try {
         const result = await ipcRenderer.invoke('suggest-categories');
         if (!result?.ok) throw new Error(result?.error || '分类建议生成失败');
         this.categorySuggestions = result.categories;
-        if (!result.categories.length) this.showToast('暂无新的分类建议');
+        this.mappingSuggestions = result.mappings || [];
+        if (!result.categories.length && !this.mappingSuggestions.length) this.showToast('暂无新的分类或映射建议');
         this.loadAiUsage();
       } catch (error) {
         this.showToast(error.message, 'error');
@@ -939,12 +971,8 @@ export default {
 
     async endFocus() {
       try {
-        const record = await ipcRenderer.invoke('focus-end');
+        await ipcRenderer.invoke('focus-end');
         this.focusState = { active: false };
-        if (record) {
-          const mins = Math.round(record.activeMs / 60000);
-          this.showToast(`${record.modeName}结束 · 专注 ${mins} 分钟`, 'success');
-        }
         await this.loadReport();
       } catch (error) {
         this.focusState = { active: false };
@@ -957,6 +985,18 @@ export default {
         if (note) this.showToast('已记录', 'success');
       } catch (error) {
         this.showToast('记录失败: ' + error.message, 'error');
+      }
+    },
+
+    async updateFocusRecord(payload) {
+      try {
+        const channel = payload.kind === 'note' ? 'update-focus-note' : 'update-focus-session';
+        const result = await ipcRenderer.invoke(channel, { ...payload, date: this.selectedDate });
+        if (!result?.success) throw new Error(result?.error || '保存失败');
+        this.showToast('已更新', 'success');
+        await this.loadReport();
+      } catch (error) {
+        this.showToast(error.message, 'error');
       }
     },
 
@@ -1171,7 +1211,9 @@ export default {
           this.focusState = { active: false };
           if (record) {
             const mins = Math.round(record.activeMs / 60000);
-            this.showToast(`${record.modeName}结束 · 专注 ${mins} 分钟`, 'success');
+            this.showToast(record.saved
+              ? `${record.modeName}结束 · 专注 ${mins} 分钟`
+              : '专注不足 15 分钟，未保存', record.saved ? 'success' : 'info');
             this.loadReport();
           }
         },

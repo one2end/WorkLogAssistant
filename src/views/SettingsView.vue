@@ -50,17 +50,22 @@
     </section>
 
     <section id="sec-categories" class="sec">
-      <div class="sec-head"><Icon name="palette" :size="13" /><span>自定义分类</span></div>
+      <div class="sec-head"><Icon name="palette" :size="13" /><span>分类与应用映射</span></div>
       <div class="sec-body">
-        <p class="sec-desc">在时间轴和日历里点选分类；颜色用于时间块和图表。同名分类不能重复。</p>
+        <p class="sec-desc">修改现有分类的显示名称与颜色，不改动历史原始记录；新增分类也可用于手工标注和应用映射。</p>
+        <div v-for="key in baseCategories" :key="key" class="category-editor">
+          <input type="color" :value="categoryMeta[key]?.color || colorForCategory(theme, key)" :aria-label="`${key}的颜色`" @change="updateBaseCategory(key, 'color', $event.target.value)">
+          <input type="text" :value="categoryMeta[key]?.name || key" maxlength="16" :aria-label="`${key}的显示名称`" @change="updateBaseCategory(key, 'name', $event.target.value)">
+          <small class="category-key">{{ key }}</small>
+        </div>
         <div class="category-ai">
-          <button type="button" class="btn btn-secondary btn-sm" :disabled="!aiOn || categorySuggesting" @click="$emit('suggest-categories')">{{ categorySuggesting ? '正在分析窗口…' : 'AI 建议分类' }}</button>
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="!aiOn || categorySuggesting" @click="$emit('suggest-categories')">{{ categorySuggesting ? '正在分析窗口…' : 'AI 建议分类与映射' }}</button>
           <span class="hint">根据最近窗口标题提出少量建议，确认后才保存；会消耗 Token。{{ aiOn ? '' : '请先开启 AI 能力。' }}</span>
         </div>
         <div v-for="suggestion in categorySuggestions" :key="suggestion.name" class="category-editor">
           <span class="suggestion-dot" :style="{ background: suggestion.color }"></span>
           <span class="suggestion-name">{{ suggestion.name }} · {{ suggestion.reason }}</span>
-          <button type="button" class="btn btn-ghost btn-sm" :disabled="customCategories.some(c => c.name === suggestion.name)" @click="acceptCategory(suggestion)">采用</button>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="categoryChoices.some(c => c.name === suggestion.name)" @click="acceptCategory(suggestion)">采用</button>
         </div>
         <div v-for="(category, index) in customCategories" :key="index" class="category-editor">
           <input type="color" :value="category.color" :aria-label="`${category.name}的颜色`" @change="updateCategory(index, 'color', $event.target.value)">
@@ -73,6 +78,39 @@
           <button type="button" class="btn btn-secondary btn-sm" @click="addCategory">添加</button>
         </div>
         <p v-if="categoryError" class="hint category-error">{{ categoryError }}</p>
+        <div class="hr"></div>
+        <span class="row-label">历史应用与活动分类<span class="row-desc">固定映射会用于过去和未来的自动记录；手工标注仍优先。浏览器等用途多变的应用可保持按窗口判断。</span></span>
+        <input v-model="appQuery" class="app-map-search" type="search" placeholder="搜索历史应用">
+        <div class="app-map-list">
+          <div v-for="app in visibleKnownApps" :key="app.key" class="app-map-row">
+            <span class="app-map-name" :title="app.name">{{ app.name }}<small>{{ app.count }} 条 · {{ app.mappedCategory ? '固定映射' : `规则推断：${categoryLabel(app.inferredCategory)}` }}</small></span>
+            <select :value="app.mappedCategory" :aria-label="`${app.name} 对应的分类`" @change="updateAppMap(app.key, $event.target.value)">
+              <option value="">按窗口判断</option>
+              <option v-for="choice in categoryChoices" :key="choice.key" :value="choice.key">{{ choice.name }}</option>
+            </select>
+          </div>
+        </div>
+        <p v-if="!knownApps.length" class="hint">记录层暂无可映射的应用。</p>
+        <div v-if="mappingSuggestions.length" class="row-block">
+          <span class="row-label">AI 映射建议<span class="row-desc">根据窗口证据提出，采用后重算历史记录；不自动改动原始采样。</span></span>
+          <div v-for="(item, index) in mappingSuggestions" :key="index" class="app-map-row">
+            <span class="app-map-name">{{ item.app }} → {{ categoryLabel(item.category) }}<small>{{ item.titleContains ? `窗口包含「${item.titleContains}」 · ` : '整个应用 · ' }}{{ item.reason }}</small></span>
+            <button type="button" class="btn btn-secondary btn-sm" @click="acceptMapping(item)">采用</button>
+          </div>
+        </div>
+        <div class="row-block">
+          <span class="row-label">窗口关键词例外<span class="row-desc">优先于应用映射。适合浏览器、WPS 等同一应用承担多种活动的情况。</span></span>
+          <div v-for="(rule, index) in windowRules" :key="index" class="app-map-row">
+            <span class="app-map-name">{{ rule.app }} · 包含「{{ rule.titleContains }}」<small>→ {{ categoryLabel(rule.category) }}</small></span>
+            <button type="button" class="btn btn-ghost btn-sm" @click="removeWindowRule(index)">删除</button>
+          </div>
+          <div class="category-editor">
+            <input v-model="newRuleApp" type="text" placeholder="应用名" aria-label="例外应用名">
+            <input v-model="newRuleTitle" type="text" placeholder="窗口关键词" aria-label="窗口关键词">
+            <select v-model="newRuleCategory" aria-label="例外分类"><option v-for="choice in categoryChoices" :key="choice.key" :value="choice.key">{{ choice.name }}</option></select>
+            <button type="button" class="btn btn-secondary btn-sm" @click="addWindowRule">添加</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -514,6 +552,7 @@
 <script>
 import Icon from '../components/Icon.vue';
 import { MODES, SURFACES } from '../styles/accents.js';
+import { colorForCategory } from '../styles/palette.js';
 import { DASHBOARD_CARDS, AI_MODELS } from '../plugins/registry.js';
 
 export default {
@@ -527,6 +566,8 @@ export default {
     aiUsage: { type: Object, default: () => ({}) },
     categorySuggestions: { type: Array, default: () => [] },
     categorySuggesting: { type: Boolean, default: false },
+    mappingSuggestions: { type: Array, default: () => [] },
+    knownApps: { type: Array, default: () => [] },
     didaStatus: { type: Object, default: () => ({}) },
     bridge: { type: Object, default: null },
     bridgeLoading: { type: Boolean, default: false },
@@ -542,7 +583,7 @@ export default {
     storagePath: { type: String, default: '' }
   },
   emits: [
-    'save', 'category-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
+    'save', 'category-change', 'category-meta-change', 'app-map-change', 'window-rule-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
     'select-storage', 'reset-storage',
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
@@ -575,7 +616,9 @@ export default {
       },
       newCategoryName: '',
       newCategoryColor: '#6f9fe8',
-      categoryError: ''
+      categoryError: '',
+      appQuery: '',
+      newRuleApp: '', newRuleTitle: '', newRuleCategory: '工作'
     };
   },
   watch: {
@@ -588,6 +631,17 @@ export default {
   },
   computed: {
     customCategories() { return this.config.analysis?.customCategories || []; },
+    categoryMeta() { return this.config.analysis?.categoryMeta || {}; },
+    windowRules() { return this.config.analysis?.windowCategoryRules || []; },
+    baseCategories() { return ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他']; },
+    categoryChoices() {
+      return [...this.baseCategories.map(key => ({ key, name: this.categoryMeta[key]?.name || key })),
+        ...this.customCategories.map(c => ({ key: c.key || c.name, name: c.name }))];
+    },
+    visibleKnownApps() {
+      const query = this.appQuery.trim().toLowerCase();
+      return query ? this.knownApps.filter(a => a.name.toLowerCase().includes(query)) : this.knownApps;
+    },
     dashboardCards() { return DASHBOARD_CARDS; },
     modelPresets() { return AI_MODELS; },
     dida() { return this.config.dida || {}; },
@@ -625,6 +679,7 @@ export default {
     }
   },
   methods: {
+    colorForCategory,
     /** 写入配置并持久化。path 支持 "dida.pullIntervalMin" */
     set(path, value) {
       const keys = path.split('.');
@@ -646,12 +701,11 @@ export default {
     copy(text, tag) { this.$emit('bridge-copy', text, tag); },
     addCategory() {
       const name = this.newCategoryName.trim();
-      const reserved = ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'];
-      if (!name || reserved.includes(name) || this.customCategories.some(c => c.name === name)) {
+      if (!name || this.categoryChoices.some(c => c.name === name)) {
         this.categoryError = '请输入未使用的分类名称'; return;
       }
       this.categoryError = '';
-      this.$emit('category-change', [...this.customCategories, { name, color: this.newCategoryColor }]);
+      this.$emit('category-change', [...this.customCategories, { key: name, name, color: this.newCategoryColor }]);
       this.newCategoryName = '';
     },
     acceptCategory(suggestion) {
@@ -663,17 +717,54 @@ export default {
       const next = [...this.customCategories];
       if (field === 'name') {
         value = value.trim();
-        if (!value || [...['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'], ...next.filter((_, i) => i !== index).map(c => c.name)].includes(value)) {
+        if (!value || [...this.baseCategories.map(key => this.categoryMeta[key]?.name || key), ...next.filter((_, i) => i !== index).map(c => c.name)].includes(value)) {
           this.categoryError = '分类名称不能为空或重复'; return;
         }
       }
       if (field === 'color' && !/^#[0-9a-fA-F]{6}$/.test(value)) return;
-      next[index] = { ...next[index], [field]: value };
+      next[index] = { key: next[index].key || next[index].name, ...next[index], [field]: value };
       this.$emit('category-change', next);
       this.categoryError = '';
     },
     removeCategory(index) {
       this.$emit('category-change', this.customCategories.filter((_, i) => i !== index));
+    },
+    updateBaseCategory(key, field, value) {
+      value = String(value || '').trim();
+      if (field === 'name' && (!value || this.categoryChoices.some(c => c.key !== key && c.name === value))) {
+        this.categoryError = '分类名称不能为空或重复'; return;
+      }
+      if (field === 'color' && !/^#[0-9a-fA-F]{6}$/.test(value)) return;
+      this.categoryError = '';
+      this.$emit('category-meta-change', { ...this.categoryMeta, [key]: { ...(this.categoryMeta[key] || {}), [field]: value } });
+    },
+    updateAppMap(app, category) {
+      const next = { ...(this.config.analysis?.appCategoryMap || {}) };
+      if (category) next[app] = category;
+      else delete next[app];
+      this.$emit('app-map-change', next);
+    },
+    categoryLabel(key) {
+      return this.categoryChoices.find(c => c.key === key)?.name || key;
+    },
+    acceptMapping(item) {
+      if (item.titleContains) {
+        const next = [...this.windowRules.filter(r => !(r.app === item.app && r.titleContains === item.titleContains)),
+          { app: item.app, titleContains: item.titleContains, category: item.category }];
+        this.$emit('window-rule-change', next);
+      } else {
+        this.updateAppMap(item.app.toLowerCase().replace(/\.exe$/, ''), item.category);
+      }
+    },
+    addWindowRule() {
+      const app = this.newRuleApp.trim();
+      const titleContains = this.newRuleTitle.trim();
+      if (!app || titleContains.length < 2) { this.categoryError = '应用名与至少两个字的窗口关键词必填'; return; }
+      this.$emit('window-rule-change', [...this.windowRules, { app, titleContains, category: this.newRuleCategory }]);
+      this.newRuleApp = ''; this.newRuleTitle = ''; this.categoryError = '';
+    },
+    removeWindowRule(index) {
+      this.$emit('window-rule-change', this.windowRules.filter((_, i) => i !== index));
     },
     cardOn(key) {
       const cards = (this.config.dashboard && this.config.dashboard.cards) || {};
@@ -750,6 +841,13 @@ export default {
 .category-editor .suggestion-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .category-editor .suggestion-name { flex: 1; font-size: var(--fs-11); color: var(--text-secondary); }
 .category-error { color: var(--danger); }
+.category-key { color: var(--text-tertiary); min-width: 28px; }
+.app-map-search { width: 100%; margin: var(--sp-2) 0; }
+.app-map-list { max-height: 340px; overflow-y: auto; border-top: 1px solid var(--border-subtle); }
+.app-map-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: 7px 0; border-bottom: 1px solid var(--border-subtle); }
+.app-map-name { display: flex; flex-direction: column; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
+.app-map-name small { color: var(--text-tertiary); font-size: var(--fs-10); }
+.app-map-row select { max-width: 45%; flex: 0 0 150px; }
 
 .sec-body {
   padding: var(--sp-1) var(--sp-4) var(--sp-3);

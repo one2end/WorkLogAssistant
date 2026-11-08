@@ -129,6 +129,7 @@ class FocusManager {
       pausedAt: null,
       pausedMs: 0,
       totalPausedMs: 0,
+      totalBreakMs: 0,
       round: 1,
       rounds: preset.rounds || 0,
       workMin: preset.workMin,
@@ -171,6 +172,9 @@ class FocusManager {
     if (!this.session) return null;
     const s = this.session;
     const now = Date.now();
+    const pendingPauseMs = s.pausedAt ? now - s.pausedAt : 0;
+    const currentBreakMs = s.phase === 'break'
+      ? Math.max(0, now - s.phaseStartAt - s.pausedMs - pendingPauseMs) : 0;
 
     const record = {
       id: s.id,
@@ -180,7 +184,7 @@ class FocusManager {
       startTime: new Date(s.startedAt).toISOString(),
       endTime: new Date(now).toISOString(),
       durationMs: now - s.startedAt,
-      activeMs: Math.max(0, now - s.startedAt - s.totalPausedMs),
+      activeMs: Math.max(0, now - s.startedAt - s.totalPausedMs - pendingPauseMs - s.totalBreakMs - currentBreakMs),
       rounds: s.round,
       notesCount: s.notesCount
     };
@@ -188,8 +192,11 @@ class FocusManager {
     this.session = null;
     this._lastPhase = null;
 
-    this._persist(record);
-    this.onLog(`专注结束 · ${record.modeName} · ${Math.round(record.activeMs / 60000)} 分钟`, 'info');
+    record.saved = record.activeMs >= 15 * MINUTE;
+    if (record.saved) this._persist(record);
+    this.onLog(record.saved
+      ? `专注结束 · ${record.modeName} · ${Math.round(record.activeMs / 60000)} 分钟`
+      : '专注不足 15 分钟，未保存', 'info');
     this.onEnd(record);
     return record;
   }
@@ -250,6 +257,7 @@ class FocusManager {
     }
 
     if (s.phase === 'break') {
+      s.totalBreakMs += Math.max(0, now - s.phaseStartAt - s.pausedMs);
       if (s.rounds > 0 && s.round >= s.rounds) {
         return this.end();
       }
@@ -334,7 +342,7 @@ class FocusManager {
     try {
       const dir = this.arhatManager.sessionsDir;
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, `${dateStr(Date.now())}.json`);
+      const file = path.join(dir, `${dateStr(new Date(record.startTime).getTime())}.json`);
       let items = [];
       if (fs.existsSync(file)) {
         try {

@@ -11,6 +11,7 @@ class ArhatManager {
     this.arhatDir = path.join(dataDir, 'arhat');
     this.sessionsDir = path.join(this.arhatDir, 'sessions');
     this.notesDir = path.join(this.arhatDir, 'notes');
+    this.overridesDir = path.join(this.arhatDir, 'overrides');
     this._ensureDirs();
 
     this.currentSession = null;
@@ -26,6 +27,7 @@ class ArhatManager {
       this.arhatDir = path.join(base, 'arhat');
       this.sessionsDir = path.join(this.arhatDir, 'sessions');
       this.notesDir = path.join(this.arhatDir, 'notes');
+      this.overridesDir = path.join(this.arhatDir, 'overrides');
       this._ensureDirs();
       return true;
     } catch (error) {
@@ -35,7 +37,7 @@ class ArhatManager {
   }
 
   _ensureDirs() {
-    [this.arhatDir, this.sessionsDir, this.notesDir].forEach(dir => {
+    [this.arhatDir, this.sessionsDir, this.notesDir, this.overridesDir].forEach(dir => {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
@@ -97,6 +99,12 @@ class ArhatManager {
     this.currentSession.endTime = now.toISOString();
     this.currentSession.durationMs = now.getTime() - new Date(this.currentSession.startTime).getTime();
 
+    if (this.currentSession.durationMs < 15 * 60000) {
+      const ended = { ...this.currentSession, saved: false };
+      this.currentSession = null;
+      return ended;
+    }
+
     // Save to today's session file
     const dateStr = this._toDateStr(this.currentSession.startTime);
     const filePath = path.join(this.sessionsDir, `${dateStr}.json`);
@@ -104,7 +112,7 @@ class ArhatManager {
     sessions.push(this.currentSession);
     this._writeJson(filePath, sessions);
 
-    const ended = { ...this.currentSession };
+    const ended = { ...this.currentSession, saved: true };
     this.currentSession = null;
     return ended;
   }
@@ -122,6 +130,31 @@ class ArhatManager {
     const [removed] = sessions.splice(idx, 1);
     this._writeJson(filePath, sessions);
     return { success: true, removed: { id: removed.id, startTime: removed.startTime } };
+  }
+
+  updateSession(dateStr, sessionId, patch) {
+    const filePath = path.join(this.sessionsDir, `${dateStr}.json`);
+    const sessions = this._readJson(filePath);
+    const idx = sessions.findIndex(s => String(s.id) === String(sessionId));
+    if (idx < 0) return { success: false, error: '没找到这条专注记录' };
+    const focusText = String(patch?.focusText || '').trim();
+    const note = String(patch?.note || '').trim();
+    if (!focusText || focusText.length > 160 || note.length > 1000) return { success: false, error: '专注内容无效或过长' };
+    sessions[idx] = { ...sessions[idx], focusText, note };
+    if (!this._writeJson(filePath, sessions)) return { success: false, error: '保存失败' };
+    return { success: true, record: sessions[idx] };
+  }
+
+  updateImportedFocus(dateStr, sessionId, patch) {
+    const focusText = String(patch?.focusText || '').trim();
+    const note = String(patch?.note || '').trim();
+    if (!focusText || focusText.length > 160 || note.length > 1000) return { success: false, error: '专注内容无效或过长' };
+    const filePath = path.join(this.overridesDir, `${dateStr}.json`);
+    const overrides = this._readJson(filePath);
+    const next = Array.isArray(overrides) ? overrides.filter(o => String(o.id) !== String(sessionId)) : [];
+    next.push({ id: sessionId, focusText, note });
+    if (!this._writeJson(filePath, next)) return { success: false, error: '保存失败' };
+    return { success: true };
   }
 
   getActiveSession() {
@@ -161,6 +194,18 @@ class ArhatManager {
   getNotes(date) {
     const dateStr = date ? this._toDateStr(date) : this._toDateStr(new Date());
     return this._readJson(path.join(this.notesDir, `${dateStr}.json`));
+  }
+
+  updateNote(dateStr, noteId, text) {
+    const filePath = path.join(this.notesDir, `${dateStr}.json`);
+    const notes = this._readJson(filePath);
+    const idx = notes.findIndex(n => String(n.id) === String(noteId));
+    const value = String(text || '').trim();
+    if (idx < 0) return { success: false, error: '没找到这条随手记' };
+    if (!value || value.length > 1000) return { success: false, error: '随手记不能为空或过长' };
+    notes[idx] = { ...notes[idx], text: value };
+    if (!this._writeJson(filePath, notes)) return { success: false, error: '保存失败' };
+    return { success: true, note: notes[idx] };
   }
 
   getAllNotes() {

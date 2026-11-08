@@ -188,7 +188,7 @@ class Summarizer {
     try {
       const analytics = require('./analytics');
       context = analytics.renderPromptContext(activities, {
-        ignoredApps: this.config.analysis?.ignoredApps
+        ...(this.config.analysis || {})
       });
       activityText = context.text || '';
     } catch (error) {

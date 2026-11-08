@@ -40,7 +40,7 @@
                 class="seg-cat"
                 :class="{ active: form.category === c }"
                 @click="form.category = c"
-              >{{ c }}</button>
+              >{{ categoryLabels[c] || c }}</button>
             </div>
           </div>
 
@@ -75,6 +75,7 @@ export default {
     anchor: { type: Object, default: null },
     initial: { type: Object, default: () => ({}) },
     categories: { type: Array, default: () => [] },
+    categoryLabels: { type: Object, default: () => ({}) },
     deletable: { type: Boolean, default: false },
     saving: { type: Boolean, default: false }
   },

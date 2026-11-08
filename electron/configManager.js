@@ -130,7 +130,10 @@ class ConfigManager {
       },
       analysis: {
         categoryRules: null,
-        customCategories: []
+        customCategories: [],
+        categoryMeta: {},
+        appCategoryMap: {},
+        windowCategoryRules: []
       },
       // AI 是能力开关，不是一个独立页面：关闭时应用只做本地记录与统计，
       // 数据不出本机；开启后才会自动归类、生成回顾、主动提示。

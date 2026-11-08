@@ -90,7 +90,8 @@ const didaSync = new DidaSync({
   getConfig: () => configManager.getConfig(),
   getDataDir: () => storageManager.getDataDir(),
   broadcast,
-  buildDayReport: (dir, date, options) => analytics.buildDayReport(dir, date, options)
+  buildDayReport: (dir, date, options) => analytics.buildDayReport(dir, date,
+    { ...(options || {}), ...(configManager.getConfig().analysis || {}) })
 });
 
 // --- 专注助手（番茄 / 沉浸 / 罗汉） ---
@@ -886,6 +887,24 @@ ipcMain.handle('delete-focus-session', (event, payload) => {
   return res;
 });
 
+ipcMain.handle('update-focus-session', (event, payload) => {
+  const { date, id, focusText, note } = payload || {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !id) return { success: false, error: '参数不完整' };
+  const res = String(id).startsWith('dida:')
+    ? arhatManager.updateImportedFocus(date, id, { focusText, note })
+    : arhatManager.updateSession(date, id, { focusText, note });
+  if (res.success) notifyDataChanged();
+  return res;
+});
+
+ipcMain.handle('update-focus-note', (event, payload) => {
+  const { date, id, text } = payload || {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !id) return { success: false, error: '参数不完整' };
+  const res = arhatManager.updateNote(date, id, text);
+  if (res.success) notifyDataChanged();
+  return res;
+});
+
 ipcMain.handle('get-activities', (event, date) => {
   return storageManager.getActivities(date);
 });
@@ -895,11 +914,22 @@ ipcMain.handle('get-activities', (event, date) => {
 ipcMain.handle('get-day-analytics', (event, date) => {
   try {
     const dateStr = date || analytics.toDateStr(new Date());
-    const report = analytics.buildDayReport(storageManager.getDataDir(), dateStr);
+    const report = analytics.buildDayReport(storageManager.getDataDir(), dateStr, configManager.getConfig().analysis);
     return { ok: true, report, markdown: analytics.renderDayMarkdown(report, 'normal') };
   } catch (error) {
     return { ok: false, error: error.message };
   }
+});
+
+ipcMain.handle('get-known-apps', async () => {
+  const analysis = configManager.getConfig().analysis || {};
+  const classify = analytics.buildClassifier(analysis.categoryRules);
+  const apps = await analytics.listRecordedAppsAsync(storageManager.getDataDir(), analysis);
+  return apps.map(app => ({
+    ...app,
+    inferredCategory: classify(app.name, ''),
+    mappedCategory: analysis.appCategoryMap?.[app.key] || ''
+  }));
 });
 
 ipcMain.handle('get-annotation-suggestions', (event, payload) => {
@@ -936,7 +966,7 @@ ipcMain.handle('get-range-analytics', (event, payload) => {
     const from = (payload && payload.from) || analytics.toDateStr(
       new Date(new Date(to + 'T00:00:00').getTime() - 6 * 86400000)
     );
-    const report = analytics.buildRangeReport(storageManager.getDataDir(), from, to);
+    const report = analytics.buildRangeReport(storageManager.getDataDir(), from, to, configManager.getConfig().analysis);
     return { ok: true, report, markdown: analytics.renderRangeMarkdown(report, 'normal') };
   } catch (error) {
     return { ok: false, error: error.message };
@@ -951,7 +981,7 @@ ipcMain.handle('get-daily-tracked', (event, payload) => {
     const from = p.from || analytics.toDateStr(
       new Date(new Date(to + 'T00:00:00').getTime() - 83 * 86400000)
     );
-    const days = analytics.buildDailyTrackedMs(storageManager.getDataDir(), from, to);
+    const days = analytics.buildDailyTrackedMs(storageManager.getDataDir(), from, to, configManager.getConfig().analysis);
     return { ok: true, from, to, days, generatedAt: new Date().toISOString() };
   } catch (error) {
     return { ok: false, error: error.message, days: [] };
@@ -1049,23 +1079,36 @@ ipcMain.handle('suggest-categories', async () => {
     for (let daysAgo = 0; daysAgo < 7; daysAgo++) {
       const day = new Date();
       day.setDate(day.getDate() - daysAgo);
-      const report = analytics.buildDayReport(storageManager.getDataDir(), analytics.toDateStr(day));
+      const report = analytics.buildDayReport(storageManager.getDataDir(), analytics.toDateStr(day), config.analysis);
       for (const item of report.recordedWindows || []) {
         if (item.title && !windows.some(w => w.title === item.title)) windows.push(item);
       }
     }
-    if (!windows.length) return { ok: true, categories: [] };
+    if (!windows.length) return { ok: true, categories: [], mappings: [] };
     windows.sort((a, b) => b.durationMs - a.durationMs);
-    const existing = (config.analysis?.customCategories || []).map(c => c.name);
-    const prompt = `根据这些最近的窗口标题，建议最多 3 个比现有七组更有用的自定义生活记录分类。已有分类：工作、学习、生活、娱乐、睡眠、专注、其他${existing.length ? '、' + existing.join('、') : ''}。\n只返回 JSON 数组，每项 {"name":"2-6字中文名称","color":"#六位十六进制颜色","reason":"不超过20字的窗口证据"}。没有必要就返回 []。不要输出 Markdown。\n窗口：${JSON.stringify(windows.slice(0, 25).map(w => ({ title: String(w.title).slice(0, 90), app: w.app, minutes: Math.round(w.durationMs / 60000) })))}`;
+    const existing = (config.analysis?.customCategories || []).map(c => c.key || c.name);
+    const choices = ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...existing];
+    const prompt = `分析最近窗口标题，提出最多 3 个新分类和最多 5 条对现有分类的应用映射建议。已有分类：${choices.join('、')}。同一应用用途多变时，只能建议具体窗口关键词映射，不能把整个应用固定为一种活动。\n只返回 JSON 对象：{"categories":[{"name":"2-6字中文名称","color":"#六位十六进制颜色","reason":"简短证据"}],"mappings":[{"app":"原样应用名","category":"已有分类之一","titleContains":"可选的窗口标题关键词，整个应用通用时留空","reason":"简短证据"}]}。没有建议就使用空数组，不要 Markdown。\n窗口：${JSON.stringify(windows.slice(0, 25).map(w => ({ title: String(w.title).slice(0, 90), app: w.app, minutes: Math.round(w.durationMs / 60000) })))}`;
     const raw = await summarizer.callAI(prompt);
-    const match = String(raw || '').match(/\[[\s\S]*\]/);
-    const parsed = match ? JSON.parse(match[0]) : [];
-    const categories = (Array.isArray(parsed) ? parsed : []).filter(c =>
+    const match = String(raw || '').match(/\{[\s\S]*\}/);
+    const parsed = match ? JSON.parse(match[0]) : {};
+    const categories = (Array.isArray(parsed.categories) ? parsed.categories : []).filter(c =>
       c && typeof c.name === 'string' && /^[\u4e00-\u9fa5]{2,6}$/.test(c.name) &&
       /^#[0-9a-fA-F]{6}$/.test(c.color) && !['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...existing].includes(c.name)
     ).slice(0, 3).map(c => ({ name: c.name, color: c.color, reason: String(c.reason || '').slice(0, 30) }));
-    return { ok: true, categories };
+    const seenApps = new Set(windows.map(w => String(w.app || '').toLowerCase()));
+    const mappings = (Array.isArray(parsed.mappings) ? parsed.mappings : []).filter(m =>
+      m && seenApps.has(String(m.app || '').toLowerCase()) && choices.includes(m.category) &&
+      String(m.titleContains || '').length <= 60 &&
+      (!m.titleContains || String(m.titleContains).trim().length >= 2) &&
+      (!m.titleContains || windows.some(w =>
+        String(w.app).toLowerCase() === String(m.app).toLowerCase() &&
+        String(w.title).toLowerCase().includes(String(m.titleContains).toLowerCase())))
+    ).slice(0, 5).map(m => ({
+      app: String(m.app), category: m.category,
+      titleContains: String(m.titleContains || '').trim(), reason: String(m.reason || '').slice(0, 40)
+    }));
+    return { ok: true, categories, mappings };
   } catch (error) {
     return { ok: false, error: error.message };
   }
