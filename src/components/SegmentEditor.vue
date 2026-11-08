@@ -20,12 +20,12 @@
 
         <div class="seg-body">
           <label class="seg-field">
-            <span>标题</span>
+            <span>事项</span>
             <input
               ref="titleInput"
               v-model="form.app"
               type="text"
-              placeholder="这段时间在做什么"
+              placeholder="这段时间在做什么（必填）"
               @keydown.enter.prevent="submit"
             >
           </label>
@@ -54,7 +54,7 @@
           <button v-if="deletable" class="seg-del" @click="$emit('delete')">删除这一段</button>
           <span class="seg-hint">保存后覆盖展示</span>
           <button class="seg-btn" @click="$emit('close')">取消</button>
-          <button class="seg-btn primary" :disabled="saving" @click="submit">
+          <button class="seg-btn primary" :disabled="saving || !form.app.trim()" @click="submit">
             {{ saving ? '保存中' : '保存' }}
           </button>
         </div>
@@ -147,9 +147,9 @@ export default {
       this.pos = { top: `${Math.round(top)}px`, left: `${Math.round(left)}px` };
     },
     submit() {
-      if (this.saving) return;
+      if (this.saving || !this.form.app.trim()) return;
       this.$emit('save', {
-        app: (this.form.app || '').trim() || '标注',
+        app: this.form.app.trim(),
         category: this.form.category,
         note: (this.form.note || '').trim(),
         startTime: this.form.startTime,

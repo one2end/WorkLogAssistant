@@ -75,7 +75,9 @@ class ConfigManager {
     };
     if (!raw || typeof raw !== 'object') return raw;
     const ui = raw.ui;
-    if (!ui || typeof ui !== 'object' || ui.mode) return raw;
+    if (!ui || typeof ui !== 'object') return raw;
+    if (ui.surface === 'studio') ui.surface = 'nocturne';
+    if (ui.mode) return raw;
     const mapped = MAP[ui.theme];
     if (!mapped) return raw;
     ui.mode = mapped[0];
@@ -171,7 +173,7 @@ class ConfigManager {
         // 外观 = 明暗模式 × 强调色（theme 字段仅保留用于旧配置迁移）
         mode: 'dark',
         accent: 'blue',
-        surface: 'studio',
+        surface: 'nocturne',
         fontSize: 14,
         showTimestamps: true,
         floatWindow: true

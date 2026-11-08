@@ -168,8 +168,8 @@ function createFocusWindow() {
   // 隐藏窗口的 ready-to-show 在部分 Electron 版本不触发，主题用 did-finish-load 兜底
   focusWindow.webContents.once('did-finish-load', () => {
     if (!focusWindow || focusWindow.isDestroyed()) return;
-    const theme = configManager.getConfig().ui?.mode || 'dark';
-    focusWindow.webContents.send('focus-theme', theme);
+    const ui = configManager.getConfig().ui || {};
+    focusWindow.webContents.send('focus-theme', { mode: ui.mode || 'dark', surface: ui.surface || 'nocturne' });
   });
   focusWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   focusWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -457,7 +457,7 @@ function createFloatWindow() {
 
   floatWindow.webContents.once('did-finish-load', () => {
     const ui = configManager.getConfig().ui || {};
-    floatWindow.webContents.send('float-theme', ui.mode || 'dark');
+    floatWindow.webContents.send('float-theme', { mode: ui.mode || 'dark', surface: ui.surface || 'nocturne' });
     floatWindow.webContents.send('float-accent', accentCss(ui));
     floatWindow.webContents.send('float-monitoring-status', isMonitoring);
   });
@@ -831,13 +831,13 @@ ipcMain.handle('save-config', (event, config) => {
   }
 
   if (floatWindow) {
-    floatWindow.webContents.send('float-theme', config.ui?.mode || 'dark');
+    floatWindow.webContents.send('float-theme', { mode: config.ui?.mode || 'dark', surface: config.ui?.surface || 'nocturne' });
     floatWindow.webContents.send('float-accent', accentCss(config.ui || {}));
   }
 
   // 专注 HUD 是懒创建窗口：此刻可能还不存在，创建时会再推一次当前主题
   if (focusWindow && !focusWindow.isDestroyed()) {
-    focusWindow.webContents.send('focus-theme', config.ui?.mode || 'dark');
+    focusWindow.webContents.send('focus-theme', { mode: config.ui?.mode || 'dark', surface: config.ui?.surface || 'nocturne' });
   }
 
   return { success: true };
@@ -989,11 +989,13 @@ function manualRecordFromPayload(payload) {
   if (Number.isNaN(start.getTime())) {
     return { error: '时间无法解析' };
   }
+  const appName = String(p.app || '').trim();
+  if (!appName) return { error: '请填写事项' };
   return { dateStr, durationMin, record: {
     t: start.toISOString(),
     dur: durationMin * 60000,
     kind: 'active',
-    app: String(p.app || '手工记录').trim() || '手工记录',
+    app: appName,
     title: String(p.title || '').trim(),
     platform: 'manual',
     source: 'manual',

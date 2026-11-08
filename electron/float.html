@@ -221,7 +221,7 @@ document.addEventListener('mouseup', () => {
 });
 
 // --- 主题 ---
-// 与 src/styles/tokens.css 的 5 套主题手工对齐（打包后此 HTML 无法 @import src）：
+// 与主窗口的三种风格及明暗模式对齐（独立窗口无法 @import src）：
 // bg/border/hover/accent/text/muted ← --bg-surface / --border-default / --border-strong /
 // --accent / --text-primary / --text-tertiary；sheen ← --surface-sheen；shadow ← --shadow-md
 const themeMap = {
@@ -229,8 +229,25 @@ const themeMap = {
   light:  { bg: 'rgba(255,255,255,0.94)', border: 'rgba(15,23,42,0.12)',   hover: 'rgba(15,23,42,0.24)',   bgHover: 'rgba(255,255,255,0.98)', accent: '#2563eb', text: '#0f172a', muted: '#8a929e', btn: 'rgba(15,23,42,0.06)',     btnHover: 'rgba(15,23,42,0.12)',   sheen: 'rgba(255,255,255,0.8)',   success: '#059669', shadow: '0 4px 16px rgba(15,23,42,0.10)' }
 };
 
+const surfaceMap = {
+  nocturne: {
+    dark: { bg: 'rgba(20,32,51,0.94)', bgHover: 'rgba(27,42,64,0.98)', border: 'rgba(159,197,232,0.18)', text: '#e8eff8', muted: '#96aac0' },
+    light: { bg: 'rgba(249,251,255,0.96)', bgHover: '#ffffff', border: 'rgba(43,79,117,0.18)', text: '#263b50', muted: '#73889e' }
+  },
+  linen: {
+    dark: { bg: 'rgba(36,32,25,0.94)', bgHover: 'rgba(48,42,33,0.98)', border: 'rgba(237,202,148,0.18)', text: '#f3ede3', muted: '#a99b88' },
+    light: { bg: 'rgba(255,250,240,0.96)', bgHover: '#fffdf7', border: 'rgba(112,80,39,0.19)', text: '#30291f', muted: '#887765' }
+  },
+  mist: {
+    dark: { bg: 'rgba(26,42,38,0.94)', bgHover: 'rgba(36,55,47,0.98)', border: 'rgba(157,213,181,0.19)', text: '#e8f2e9', muted: '#91ad9e' },
+    light: { bg: 'rgba(248,252,247,0.96)', bgHover: '#ffffff', border: 'rgba(55,117,83,0.18)', text: '#233b2f', muted: '#799484' }
+  }
+};
+
 function applyTheme(t) {
-  const v = themeMap[t] || themeMap.dark;
+  const mode = typeof t === 'string' ? t : t?.mode || 'dark';
+  const surface = typeof t === 'string' ? 'nocturne' : t?.surface || 'nocturne';
+  const v = { ...(themeMap[mode] || themeMap.dark), ...(surfaceMap[surface]?.[mode] || {}) };
   const root = document.documentElement.style;
   root.setProperty('--float-bg', v.bg);
   root.setProperty('--float-bg-hover', v.bgHover);
@@ -273,7 +290,7 @@ ipcRenderer.on('float-accent', (e, c) => {
   if (c) document.documentElement.style.setProperty('--float-accent', c);
 });
 
-applyTheme('dark');
+applyTheme({ mode: 'dark', surface: 'nocturne' });
 updateUI();
 </script>
 </body>

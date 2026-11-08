@@ -38,6 +38,9 @@ body {
 .app-root.surface-linen .content {
   background-image: radial-gradient(circle at 8% 0%, rgba(193, 151, 85, 0.08), transparent 42%);
 }
+.app-root.surface-mist .content {
+  background-image: radial-gradient(circle at 12% 0%, rgba(89, 177, 145, 0.11), transparent 44%);
+}
 
 .app-root {
   background: var(--bg-canvas);

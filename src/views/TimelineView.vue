@@ -59,25 +59,25 @@
           <span>时长(分)</span>
           <input v-model.number="manualDuration" type="number" min="15" step="15" max="1440">
         </label>
-        <label class="mf grow">
-          <span>分类</span>
-          <select v-model="manualCategory">
-            <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
-          </select>
-        </label>
       </div>
       <label class="mf full">
         <span>事项</span>
-        <input v-model="manualApp" type="text" placeholder="例如：客户走访 / 会议 / 纸质材料">
+        <input v-model="manualApp" type="text" placeholder="这段时间在做什么（必填）">
+      </label>
+      <label class="mf full">
+        <span>分类</span>
+        <select v-model="manualCategory">
+          <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+        </select>
       </label>
       <label class="mf full">
         <span>备注</span>
-        <input v-model="manualTitle" type="text" placeholder="这段没被记录的时间具体在做什么（可选）">
+        <input v-model="manualTitle" type="text" placeholder="补充说明，可留空">
       </label>
       <div class="manual-actions">
-        <span class="manual-hint">最小 15 分钟，按 15 分钟一档对齐，会计入当日工时</span>
+        <span class="manual-hint">最小 15 分钟，按 15 分钟对齐；保存后计入当日记录时长</span>
         <button class="btn btn-ghost btn-sm" @click="manualOpen = false">取消</button>
-        <button class="btn btn-primary btn-sm" :disabled="savingManual" @click="submitManual">
+        <button class="btn btn-primary btn-sm" :disabled="savingManual || !manualApp.trim()" @click="submitManual">
           {{ savingManual ? '保存中' : '保存' }}
         </button>
       </div>
@@ -399,9 +399,9 @@ export default {
       manualOpen: false,
       manualTime: '09:00',
       manualDuration: 30,
-      manualApp: '手工记录',
+      manualApp: '',
       manualTitle: '',
-      manualCategory: '沟通协作',
+      manualCategory: '其他',
       savingManual: false,
       // 记录只需要一眼选中的 7 个分组（细分分类仍由后端自动推断）
       categories: ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他'],
@@ -558,7 +558,8 @@ export default {
         const startMin = slot.startMin;
         const endMin = Math.min(1440, startMin + 15);
         const last = acts[acts.length - 1];
-        if (last && last.category === slot.category && last.endMin === startMin) {
+        if (last && last.category === slot.category && last.endMin === startMin &&
+            last.focusId === (slot.layer === 'focus' ? (slot.focusId || null) : null)) {
           if ((slot.filledMin || 0) > (last.appMin || 0)) {
             last.app = slot.app || last.app;
             last.appMin = slot.filledMin || 0;
@@ -800,7 +801,8 @@ export default {
       for (const slot of slots) {
         if (!slot.filledMin || !slot.category) continue;
         const last = merged[merged.length - 1];
-        if (last && last.category === slot.category && last.endMin === slot.startMin) {
+        if (last && last.category === slot.category && last.endMin === slot.startMin &&
+            last.focusId === (slot.layer === 'focus' ? (slot.focusId || null) : null)) {
           last.endMin = slot.startMin + 15;
           last.minutes += slot.filledMin;
           if (slot.note && !last.notes.includes(slot.note)) last.notes.push(slot.note);
@@ -853,9 +855,9 @@ export default {
     },
     cardNote(b) {
       const app = (b.app || '').trim();
-      const note = this.cleanNote(this.noteOf(b));
+      const note = b.tag === '专注' ? (b.titles || []).join(' · ') : this.cleanNote(this.noteOf(b));
       // 标题已经用了 note 时，不再重复显示一行
-      if (!app || ['记录', '标注', '手工记录', 'unknown'].includes(app)) return '';
+      if (!app || ['记录', '标注', '手工记录', 'unknown'].includes(app) || note === app || note === b.category) return '';
       return note;
     },
 
@@ -864,6 +866,7 @@ export default {
      * 导入记录常带「工作-上班 …」这种前缀，显示前把与分类重复的开头去掉。
      */
     blockLabel(b) {
+      if (b.focusId && b.app) return b.app;
       const note = this.cleanNote(b.note);
       if (note) return note;
       const app = (b.app || '').trim();
@@ -874,6 +877,7 @@ export default {
       // 一天/三天视图里才显示来源，七天视图太窄
       if (this.calSpan > 3) return '';
       const app = (b.app || '').trim();
+      if (b.focusId) return b.note && b.note !== app ? b.note : '';
       if (!app || ['记录', '标注', '手工记录'].includes(app)) return '';
       // 导入记录常是「运动-跑步」，标题里已经去掉前缀，这里再显示就重复了
       if ((b.note || '').startsWith(`${app}-`)) return '';
@@ -978,7 +982,7 @@ export default {
           durationMin: g.endMin - g.startMin,
           durationMs: (g.endMin - g.startMin) * 60000,
           app: '',
-          category: '工作',
+          category: '其他',
           titles: [],
           manual: true,
           focusId: null
@@ -1092,7 +1096,7 @@ export default {
             endMin: startMin + 15,
             durationMin: 15,
             durationMs: 15 * 60000,
-            app: '', category: '工作', titles: [], manual: true, focusId: null
+            app: '', category: '其他', titles: [], manual: true, focusId: null
           }, { currentTarget: null, _rect: menu.rect });
         } else if (action === 'paste') {
           this.pasteAt(menu.date, menu.minute);
@@ -1149,8 +1153,8 @@ export default {
         startTime: this.clock(b.startMin),
         durationMin: Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15),
         app: b.app || '',
-        category: b.category || '工作',
-        note: this.noteOf(b) || ''
+        category: b.category || '其他',
+        note: b.isNew ? '' : (b.note || (b.titles || []).join(' · '))
       };
       this.editorOpen = true;
     },
@@ -1254,7 +1258,7 @@ export default {
         date,
         startTime: this.clock(startMin),
         durationMin,
-        app: b.app || '标注',
+        app: b.app || b.category || '其他',
         title: '',
         category: b.category
       } });
@@ -1277,7 +1281,7 @@ export default {
         date,
         startTime: this.clock(Math.min(1425, startMin)),
         durationMin: c.durationMin,
-        app: c.app || '标注',
+        app: c.app || c.category || '其他',
         title: '',
         category: c.category
       });
@@ -1381,6 +1385,9 @@ export default {
     toggleManual() {
       this.manualOpen = !this.manualOpen;
       if (this.manualOpen) {
+        this.manualApp = '';
+        this.manualTitle = '';
+        this.manualCategory = '其他';
         const now = new Date();
         const m = Math.floor(now.getMinutes() / 5) * 5;
         this.manualTime = `${this.pad(now.getHours())}:${this.pad(m)}`;
@@ -1389,12 +1396,19 @@ export default {
     },
     /** 点空闲块的 + ：把该空白段的起止时间直接带进补记表单 */
     openManualFor(b) {
+      this.manualApp = '';
+      this.manualTitle = '';
+      this.manualCategory = '其他';
       this.manualTime = this.clock(Math.min(1439, b.startMin));
       this.manualDuration = Math.max(1, Math.min(1440, Math.round(b.durationMin)));
       this.manualOpen = true;
       this.$nextTick(() => this.scrollTop());
     },
     async submitManual() {
+      if (!this.manualApp.trim()) {
+        this.$emit('manual-error', '请填写事项');
+        return;
+      }
       const payload = {
         date: this.selectedDate,
         startTime: this.manualTime,

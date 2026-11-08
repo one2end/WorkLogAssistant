@@ -29,8 +29,8 @@
         <button
           class="tb-theme-btn"
           :class="{ active: themeOpen }"
-          title="切换主题"
-          aria-label="切换主题"
+          :title="`当前主题：${currentSurface.label}`"
+          :aria-label="`切换主题，当前为${currentSurface.label}`"
           @click.stop="themeOpen = !themeOpen"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
@@ -41,44 +41,27 @@
             <circle cx="10.5" cy="5.7" r="0.95" fill="currentColor" />
             <circle cx="4.7" cy="10.4" r="0.95" fill="currentColor" />
           </svg>
-          <span class="tb-theme-dot" :style="{ background: currentSwatch }"></span>
+          <span class="tb-theme-dot" :class="surface"></span>
+          <span class="tb-theme-name">{{ currentSurface.label }}</span>
         </button>
 
         <transition name="theme-pop">
           <div v-if="themeOpen" class="theme-pop" @click.stop>
+            <div class="theme-pop-title">主题风格</div>
+            <div class="surface-options">
+              <button v-for="s in surfaces" :key="s.id" class="surface-option"
+                :class="[s.id, { active: surface === s.id }]" :aria-pressed="surface === s.id"
+                @click="pickSurface(s.id)">
+                <span class="surface-sample"><i></i><b></b></span>
+                <span><strong>{{ s.label }}</strong><small>{{ s.hint }}</small></span>
+              </button>
+            </div>
             <div class="theme-pop-title">明暗</div>
             <div class="mode-seg">
-              <button
-                v-for="m in modes"
-                :key="m.id"
-                class="mode-btn"
-                :class="{ active: theme === m.id }"
-                @click="pickMode(m.id)"
-              >
-                {{ m.label }}
-              </button>
+              <button v-for="m in modes" :key="m.id" class="mode-btn" :class="{ active: theme === m.id }"
+                @click="pickMode(m.id)">{{ m.label }}</button>
             </div>
-
-            <div class="theme-pop-title">强调色</div>
-            <div class="accent-grid">
-              <button
-                v-for="a in accentOptions"
-                :key="a.id"
-                class="accent-item"
-                :class="{ active: accent === a.id }"
-                @click="pickAccent(a.id)"
-              >
-                <span class="accent-dot" :style="{ background: swatch(a.id) }">
-                  <svg v-if="accent === a.id" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
-                    <path d="M1.8 5.2 4 7.4l4.2-4.6" fill="none" stroke="#fff" stroke-width="1.6"
-                      stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </span>
-                <span class="accent-label">{{ a.label }}</span>
-              </button>
-            </div>
-
-            <p class="theme-pop-hint">只有按钮与高亮跟随强调色，背景和文字始终是中性灰</p>
+            <button class="theme-more" @click="themeOpen = false; $emit('open-appearance')">更多外观设置 →</button>
           </div>
         </transition>
       </div>
@@ -113,26 +96,26 @@
 </template>
 
 <script>
-import { accentSwatch, MODES } from '../styles/accents.js';
+import { MODES, SURFACES } from '../styles/accents.js';
 
 export default {
   name: 'TitleBar',
   props: {
     monitoring: { type: Boolean, default: false },
     theme: { type: String, default: 'dark' },
-    accent: { type: String, default: 'blue' },
-    accentOptions: { type: Array, default: () => [] }
+    surface: { type: String, default: 'nocturne' }
   },
-  emits: ['minimize', 'close', 'toggle-monitoring', 'theme-change', 'accent-change', 'snap'],
+  emits: ['minimize', 'close', 'toggle-monitoring', 'theme-change', 'surface-change', 'open-appearance', 'snap'],
   data() {
     return {
       themeOpen: false,
-      modes: MODES
+      modes: MODES,
+      surfaces: SURFACES
     };
   },
   computed: {
-    currentSwatch() {
-      return this.swatch(this.accent);
+    currentSurface() {
+      return this.surfaces.find(s => s.id === this.surface) || this.surfaces[0];
     }
   },
   mounted() {
@@ -143,14 +126,11 @@ export default {
     document.removeEventListener('click', this._onDocClick);
   },
   methods: {
-    swatch(id) {
-      return accentSwatch(id, this.theme);
-    },
     pickMode(id) {
       if (id !== this.theme) this.$emit('theme-change', id);
     },
-    pickAccent(id) {
-      if (id !== this.accent) this.$emit('accent-change', id);
+    pickSurface(id) {
+      if (id !== this.surface) this.$emit('surface-change', id);
     }
   }
 };
@@ -297,19 +277,23 @@ export default {
 }
 
 .tb-theme-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--border-default);
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
   flex: 0 0 auto;
 }
+.tb-theme-dot.nocturne { background: linear-gradient(135deg, #0b1728, #77a8d8); }
+.tb-theme-dot.linen { background: linear-gradient(135deg, #9a754c, #f2dfb9); }
+.tb-theme-dot.mist { background: linear-gradient(135deg, #2e544f, #c2dbcb); }
+.tb-theme-name { font-size: var(--fs-11); color: var(--text-secondary); }
 
 .theme-pop {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 350;
-  width: 214px;
+  width: 264px;
   padding: var(--sp-3);
   border-radius: var(--r-md);
   background: var(--bg-elevated);
@@ -360,57 +344,37 @@ export default {
   box-shadow: var(--shadow-sm);
 }
 
-/* 强调色：一排圆点 */
-.accent-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-}
-
-.accent-item {
+.surface-options { display: grid; gap: 5px; }
+.surface-option {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  gap: 9px;
+  width: 100%;
+  padding: 6px;
+  text-align: left;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
-  border: 1px solid transparent;
-  color: var(--text-tertiary);
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
-    border-color var(--dur-1) var(--ease);
-}
-
-.accent-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-}
-
-.accent-item.active {
-  border-color: var(--border-strong);
   color: var(--text-primary);
 }
-
-.accent-dot {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  border-radius: var(--r-full);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+.surface-option:hover { background: var(--bg-hover); }
+.surface-option.active { border-color: var(--accent); background: var(--accent-soft); }
+.surface-option > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.surface-option strong { font-size: var(--fs-11); font-weight: var(--fw-semibold); }
+.surface-option small { font-size: 10px; color: var(--text-tertiary); }
+.surface-sample {
+  display: flex;
+  flex: 0 0 46px;
+  gap: 3px;
+  height: 30px;
+  padding: 4px;
+  border-radius: 5px;
 }
-
-.accent-label {
-  font-size: 9px;
-  white-space: nowrap;
-}
-
-.theme-pop-hint {
-  margin: var(--sp-3) 0 0;
-  font-size: 9px;
-  line-height: 1.5;
-  color: var(--text-tertiary);
-}
+.surface-sample i { width: 9px; border-radius: 2px; background: rgba(255,255,255,.23); }
+.surface-sample b { flex: 1; border-radius: 2px; background: rgba(255,255,255,.13); }
+.nocturne .surface-sample { background: linear-gradient(135deg, #0b1728, #31577f); }
+.linen .surface-sample { background: linear-gradient(135deg, #a77d51, #f3e6c9); }
+.mist .surface-sample { background: linear-gradient(135deg, #2e544f, #d6eadc); }
+.theme-more { display: block; margin: 10px 0 0 auto; color: var(--accent); font-size: var(--fs-11); }
 
 .theme-pop-enter-active {
   transition: opacity 200ms var(--ease), transform 200ms var(--ease);

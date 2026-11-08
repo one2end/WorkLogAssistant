@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="['theme-' + theme, 'accent-' + accent, 'surface-' + (config.ui?.surface || 'studio'), { 'theme-switching': themeSwitching }]">
+  <div class="app-root" :class="['theme-' + theme, 'accent-' + accent, 'surface-' + (config.ui?.surface || 'nocturne'), { 'theme-switching': themeSwitching }]">
     <FocusOverlay
       :state="focusState"
       @end="endFocus"
@@ -48,13 +48,13 @@
     <TitleBar
       :monitoring="isMonitoring"
       :theme="theme"
-      :accent="accent"
-      :accent-options="accentOptions"
+      :surface="config.ui?.surface || 'nocturne'"
       @minimize="minimizeWindow"
       @close="closeWindow"
       @toggle-monitoring="toggleMonitoring"
       @theme-change="onThemeChange"
-      @accent-change="onAccentChange"
+      @surface-change="onSurfaceChange"
+      @open-appearance="openAppearanceSettings"
       @snap="toggleSnap"
     />
 
@@ -120,6 +120,7 @@
         />
 
         <SettingsView
+          ref="settingsView"
           v-else
           :config="config"
           :theme="theme"
@@ -146,6 +147,7 @@
           @toggle-auto-launch="toggleAutoLaunch"
           @theme-change="onThemeChange"
           @accent-change="onAccentChange"
+          @surface-change="onSurfaceChange"
           @select-storage="selectStoragePath"
           @reset-storage="resetStoragePath"
           @export-day="exportData"
@@ -272,7 +274,7 @@ export default {
       accent: 'blue',
       // 外观 = 明暗模式 × 强调色。不再有「整套染成草绿色」这类主题。
       accentOptions: ACCENTS,
-      settingsSection: 'pomodoro',
+      settingsSection: 'appearance',
       didaStatus: {},
       autoLaunch: false,
       storagePath: '',
@@ -614,6 +616,19 @@ export default {
       this.config.ui.accent = accent;
       this.flashThemeSwitch();
       this.saveConfig();
+    },
+
+    onSurfaceChange(surface) {
+      this.config.ui = this.config.ui || {};
+      this.config.ui.surface = surface;
+      this.flashThemeSwitch();
+      this.saveConfig();
+    },
+
+    openAppearanceSettings() {
+      this.settingsSection = 'appearance';
+      this.view = 'settings';
+      this.$nextTick(() => this.$refs.settingsView?.goSection('appearance'));
     },
 
     /** 换肤时给一个很轻的淡入，避免颜色硬跳；不当作「大动效」使用 */

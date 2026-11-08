@@ -542,7 +542,7 @@ function buildSlots(atoms, dateStr, options = {}) {
   for (let i = 0; i < Math.ceil(1440 / slotMin); i += 1) {
     slots.push({
       index: i, startMin: i * slotMin, ms: 0,
-      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, focusMs: {}
+      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, noteMs: {}, focusMs: {}
     });
   }
 
@@ -566,6 +566,8 @@ function buildSlots(atoms, dateStr, options = {}) {
       slot.layerMs[a.source] = (slot.layerMs[a.source] || 0) + mins;
       const t = (a.title || '').trim();
       if (t) slot.titleMs[t] = (slot.titleMs[t] || 0) + mins;
+      const note = (a.note || '').trim();
+      if (note) slot.noteMs[note] = (slot.noteMs[note] || 0) + mins;
       if (a.focusId) slot.focusMs[a.focusId] = (slot.focusMs[a.focusId] || 0) + mins;
       cur = segEnd;
     }
@@ -576,6 +578,7 @@ function buildSlots(atoms, dateStr, options = {}) {
     const app = Object.entries(slot.appMs).sort((x, y) => y[1] - x[1])[0];
     const layer = Object.entries(slot.layerMs).sort((x, y) => y[1] - x[1])[0];
     const title = Object.entries(slot.titleMs).sort((x, y) => y[1] - x[1])[0];
+    const note = Object.entries(slot.noteMs).sort((x, y) => y[1] - x[1])[0];
     const focus = Object.entries(slot.focusMs).sort((x, y) => y[1] - x[1])[0];
     return {
       index: slot.index,
@@ -588,7 +591,7 @@ function buildSlots(atoms, dateStr, options = {}) {
       appPurity: app && slot.ms ? Number((app[1] / (slot.ms / 60000)).toFixed(2)) : 0,
       layerPurity: layer && slot.ms ? Number((layer[1] / (slot.ms / 60000)).toFixed(2)) : 0,
       // 这一格最有代表性的备注（来自人工标注/导入的标题），给日历和时间轴显示
-      note: title ? title[0] : '',
+      note: note ? note[0] : (title ? title[0] : ''),
       // 专注会话 id：界面上要能单独删掉一条专注
       focusId: focus ? focus[0] : null,
       // 主要事件占该格的比例：低于 0.6 说明这段本身是混合的
@@ -773,6 +776,7 @@ function buildDayReport(dataDir, dateStr, options) {
       from: Number(f.startMs),
       dur: Math.max(0, Number(f.durationMs) - Number(f.pauseMs || 0)),
       text: f.title || '专注',
+      note: f.note || '',
       focusId: `dida:${f.id}`
     }))
   ];
@@ -791,6 +795,7 @@ function buildDayReport(dataDir, dateStr, options) {
       kind: 'active',
       app: f.text,
       title: f.text,
+      note: f.note || '',
       category: '专注',
       source: 'focus',
       focusId: f.focusId
@@ -899,6 +904,14 @@ function buildDayReport(dataDir, dateStr, options) {
         durationMs: s.durationMs,
         focusText: s.focusText,
         notesCount: s.notesCount
+      })),
+      didaSessions: didaSessions.map(s => ({
+        id: s.id,
+        start: new Date(s.startMs).toISOString(),
+        end: new Date(Number(s.endMs) || Number(s.startMs) + Number(s.durationMs || 0)).toISOString(),
+        durationMs: Math.max(0, Number(s.durationMs) - Number(s.pauseMs || 0)),
+        focusText: s.title || '专注',
+        note: s.note || ''
       })),
       notes: notes.map(n => ({
         time: n.timestamp,
@@ -1134,11 +1147,14 @@ function renderDayMarkdown(report, detail) {
     lines.push('');
   }
 
-  if (report.focus.arhatSessions.length || report.focus.notes.length) {
+  if (report.focus.arhatSessions.length || (report.focus.didaSessions || []).length || report.focus.notes.length) {
     lines.push('## 专注与随手记');
     lines.push('');
     for (const fs2 of report.focus.arhatSessions) {
       lines.push(`- 罗汉专注 ${toHm(fs2.start)}–${toHm(fs2.end)}（${formatDuration(fs2.durationMs)}）：${fs2.focusText || '未命名'}`);
+    }
+    for (const fs2 of report.focus.didaSessions || []) {
+      lines.push(`- 滴答专注 ${toHm(fs2.start)}–${toHm(fs2.end)}（${formatDuration(fs2.durationMs)}）：${fs2.focusText}${fs2.note ? ` · ${fs2.note}` : ''}`);
     }
     for (const n of report.focus.notes) {
       lines.push(`- ${toHm(n.time)} 〔${n.category}〕${n.text}`);

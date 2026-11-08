@@ -1,6 +1,6 @@
 /* ==========================================================================
    WorkLog Design Tokens
-   语义化 token + 5 套主题。组件只使用语义变量，不直接写色值。
+   语义化 token + 主题风格。组件只使用语义变量，不直接写色值。
    ========================================================================== */
 
 :root {
@@ -232,5 +232,30 @@
   --text-secondary: #65594a;
   --text-tertiary: #8b7c68;
   --shadow-md: 0 3px 10px rgba(96, 71, 33, 0.06), 0 17px 36px rgba(96, 71, 33, 0.06);
+}
+.theme-dark.surface-mist {
+  --bg-canvas: #101b19;
+  --bg-surface: #1a2a26;
+  --bg-elevated: #24372f;
+  --bg-inset: #12221e;
+  --bg-hover: rgba(157, 213, 181, 0.09);
+  --border-subtle: rgba(157, 213, 181, 0.09);
+  --border-default: rgba(157, 213, 181, 0.16);
+  --text-primary: #e8f2e9;
+  --text-secondary: #afc4b8;
+  --text-tertiary: #819e90;
+}
+.theme-light.surface-mist {
+  --bg-canvas: #eaf2ec;
+  --bg-surface: #f8fcf7;
+  --bg-elevated: #ffffff;
+  --bg-inset: #e2eee5;
+  --bg-hover: rgba(55, 117, 83, 0.06);
+  --border-subtle: rgba(55, 117, 83, 0.1);
+  --border-default: rgba(55, 117, 83, 0.16);
+  --text-primary: #233b2f;
+  --text-secondary: #567260;
+  --text-tertiary: #799484;
+  --shadow-md: 0 4px 12px rgba(34, 78, 52, 0.06), 0 18px 40px rgba(34, 78, 52, 0.05);
 }
 

@@ -2,7 +2,7 @@
   <div class="settings">
     <div class="set-intro">
       <h2>设置</h2>
-      <p>插件能力、首页图表与数据</p>
+      <p>先调整外观与记录，再管理连接和扩展能力</p>
     </div>
 
     <div class="sec-nav">
@@ -15,156 +15,149 @@
       >{{ s.label }}</button>
     </div>
 
-    <p class="group-title">插件能力 <span>关闭开关后，该插件的全部设置会收起</span></p>
+    <p class="group-title basic-group">基本设置 <span>界面、记录与数据</span></p>
 
-    <!-- ---------------- 番茄钟 ---------------- -->
-    <section id="sec-pomodoro" class="sec plugin-sec">
+    <!-- ---------------- 外观 ---------------- -->
+    <section id="sec-appearance" class="sec">
       <div class="sec-head">
-        <Icon name="target" :size="13" />
-        <span>番茄钟</span>
-        <span class="sec-badge" :class="{ on: pomodoroOn }">{{ pomodoroOn ? '已开启' : '已关闭' }}</span>
-        <label class="switch">
-          <input type="checkbox" :checked="pomodoroOn" @change="set('focus.enabled', $event.target.checked)">
-          <span class="switch-track"><span class="switch-thumb"></span></span>
-        </label>
-        <button v-if="pomodoroOn" class="chev" :class="{ open: !folded.pomodoro }" title="展开 / 收起" @click="toggleFold('pomodoro')">
-          <Icon name="chevronDown" :size="13" />
-        </button>
+        <Icon name="palette" :size="13" />
+        <span>外观</span>
+        <button class="chev" :class="{ open: !folded.appearance }" title="展开 / 收起" @click="toggleFold('appearance')"><Icon name="chevronDown" :size="13" /></button>
       </div>
-      <div v-if="pomodoroOn && !folded.pomodoro" class="sec-body">
-        <p class="sec-desc">本地专注计时。若专注数据全部来自滴答清单，可以直接关闭这个插件。</p>
-        <div class="row">
-          <span class="row-label">专注时长</span>
-          <div class="row-control sm">
-            <input type="number" min="5" max="120" step="5" :value="focus.pomodoro && focus.pomodoro.workMin" @change="num('focus.pomodoro.workMin', $event.target.value, 5, 120)">
-            <span class="unit">分钟</span>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">休息时长</span>
-          <div class="row-control sm">
-            <input type="number" min="0" max="60" step="1" :value="focus.pomodoro && focus.pomodoro.breakMin" @change="num('focus.pomodoro.breakMin', $event.target.value, 0, 60)">
-            <span class="unit">分钟</span>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">每组轮数</span>
-          <div class="row-control sm">
-            <input type="number" min="0" max="12" step="1" :value="focus.pomodoro && focus.pomodoro.rounds" @change="num('focus.pomodoro.rounds', $event.target.value, 0, 12)">
-            <span class="unit">轮</span>
-          </div>
-        </div>
-      </div>
-      <div v-else-if="!pomodoroOn" class="sec-collapsed">已关闭 · 开启后可自定义计时</div>
-    </section>
-
-    <!-- ---------------- AI 能力 ---------------- -->
-    <section id="sec-ai" class="sec plugin-sec">
-      <div class="sec-head">
-        <Icon name="zap" :size="13" />
-        <span>AI 能力</span>
-        <span class="sec-badge" :class="{ on: aiOn }">{{ aiOn ? '已开启' : '已关闭' }}</span>
-        <label class="switch">
-          <input type="checkbox" :checked="aiOn" @change="set('ai.enabled', $event.target.checked)">
-          <span class="switch-track"><span class="switch-thumb"></span></span>
-        </label>
-        <button v-if="aiOn" class="chev" :class="{ open: !folded.ai }" title="展开 / 收起" @click="toggleFold('ai')">
-          <Icon name="chevronDown" :size="13" />
-        </button>
-      </div>
-      <div v-if="aiOn && !folded.ai" class="sec-body">
-        <p class="sec-desc">开启自动回顾后，后台按时间段增量评估记录。模型会看到相关应用名、窗口标题，以及人工解释与窗口重叠的线索；结果显示在首页 AI 回顾中。</p>
-        <div class="row">
-          <span class="row-label">自动评估与回顾<span class="row-desc">开启后才会定期发送记录；空时段不会调用模型</span></span>
-          <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.summary?.autoGenerate === true" @change="set('summary.autoGenerate', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
-        </div>
-        <div v-if="config.summary?.autoGenerate === true" class="row">
-          <span class="row-label">评估间隔<span class="row-desc">每段仅处理新增记录；建议 60–240 分钟</span></span>
-          <div class="row-control sm"><input type="number" min="30" max="300" step="30" :value="config.summary?.intervalMinutes || 60" @change="num('summary.intervalMinutes', $event.target.value, 30, 300)"><span class="unit">分钟</span></div>
-        </div>
+      <div v-if="!folded.appearance" class="sec-body">
         <div class="row-block">
-          <span class="row-label">Token 用量<span class="row-desc">以最近一个间隔的记录估算单次输入；实际用量优先取服务商返回值</span></span>
-          <p class="hint">{{ aiUsage.next?.records ? `参考单次约 ${aiUsage.next.inputTokens} 输入 Token + 最多 ${aiUsage.next.outputLimit} 输出 Token（${aiUsage.next.records} 条记录）` : '最近一个评估间隔没有已保存记录，暂不预计模型调用' }}。</p>
-          <p class="hint">本机最近 {{ aiUsage.calls || 0 }} 次：输入 {{ aiUsage.inputTokens || 0 }}、输出 {{ aiUsage.outputTokens || 0 }} Token<span v-if="aiUsage.estimatedCalls">；其中 {{ aiUsage.estimatedCalls }} 次由字符数估算</span>。不同模型分词不同，估算仅供控制调用量。</p>
-        </div>
-        <div class="row">
-          <span class="row-label">服务商</span>
-          <div class="row-control">
-            <select :value="api.provider" @change="$emit('provider-change', $event.target.value)">
-              <option v-for="(preset, key) in providerPresets" :key="key" :value="key">{{ preset.name }}</option>
-            </select>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">API Key</span>
-          <div class="row-control wide">
-            <input :value="api.apiKey" type="password" placeholder="sk-..." autocomplete="off" @change="set('api.apiKey', $event.target.value)">
+          <span class="row-label">主题风格<span class="row-desc">决定画布、卡片和文字的整体气质；分类色保持语义</span></span>
+          <div class="surface-grid">
+            <button v-for="s in surfaces" :key="s.id" class="surface-choice" :class="[s.id, { active: (ui.surface || 'nocturne') === s.id }]"
+              :aria-pressed="(ui.surface || 'nocturne') === s.id" @click="$emit('surface-change', s.id)">
+              <span class="surface-preview"><i></i><b></b><em></em></span>
+              <strong>{{ s.label }}</strong><small>{{ s.hint }}</small>
+            </button>
           </div>
         </div>
         <div class="row-block">
-          <span class="row-label">模型</span>
-          <div class="model-chips">
-            <button v-for="m in modelPresets" :key="m.id" class="chip" :class="{ active: api.modelName === m.id }" :title="m.note" @click="set('api.modelName', m.id)">{{ m.label }}</button>
+          <span class="row-label">明暗</span>
+          <div class="mode-row">
+            <button v-for="m in modes" :key="m.id" class="mode-cell" :class="[m.id, { active: theme === m.id }]" @click="$emit('theme-change', m.id)">
+              <span class="mode-preview"><span class="mp-bar"></span><span class="mp-line"></span></span>
+              <span class="mode-name">{{ m.label }}</span>
+              <Icon v-if="theme === m.id" name="check" :size="11" class="mode-check" />
+            </button>
           </div>
-          <div class="row-control wide model-custom">
-            <input type="text" :value="api.modelName" spellcheck="false" @change="set('api.modelName', $event.target.value)">
+        </div>
+        <div class="row-block">
+          <span class="row-label">强调色</span>
+          <div class="accent-row">
+            <button v-for="a in accentOptions" :key="a.id" class="accent-cell" :class="{ active: accent === a.id }" :title="a.label" @click="$emit('accent-change', a.id)">
+              <span class="accent-dot" :style="{ background: accentColor(a.id) }"><Icon v-if="accent === a.id" name="check" :size="10" /></span>
+              <span class="accent-name">{{ a.label }}</span>
+            </button>
           </div>
-          <p class="hint">deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用。当前推荐 deepseek-flash（V4.1 Flash），深度推理用 deepseek-v4-pro。</p>
         </div>
       </div>
-      <div v-else-if="!aiOn" class="sec-collapsed">已关闭 · 开启后可配置模型与 API Key</div>
+      <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
-    <!-- ---------------- MCP 接口 ---------------- -->
-    <section id="sec-bridge" class="sec plugin-sec">
+    <!-- ---------------- 首页与图表 ---------------- -->
+    <section id="sec-dashboard" class="sec">
       <div class="sec-head">
-        <Icon name="plug" :size="13" />
-        <span>MCP 接口</span>
-        <span class="sec-badge" :class="{ on: bridgeOn }">{{ bridgeOn ? '运行中' : (bridgeEnabled ? '未启动' : '已关闭') }}</span>
-        <label class="switch">
-          <input type="checkbox" :checked="bridgeEnabled" :disabled="bridgeLoading" @change="$emit('bridge-toggle', $event.target.checked)">
-          <span class="switch-track"><span class="switch-thumb"></span></span>
-        </label>
-        <button v-if="bridgeEnabled" class="chev" :class="{ open: !folded.bridge }" title="展开 / 收起" @click="toggleFold('bridge')">
-          <Icon name="chevronDown" :size="13" />
-        </button>
+        <Icon name="grid" :size="13" />
+        <span>首页与图表</span>
+        <button class="chev" :class="{ open: !folded.dashboard }" title="展开 / 收起" @click="toggleFold('dashboard')"><Icon name="chevronDown" :size="13" /></button>
       </div>
-      <div v-if="bridgeEnabled && !folded.bridge" class="sec-body">
-        <p class="sec-desc">把聚合后的工时数据开放给支持 MCP 的客户端，配一次即可用自然语言查询。</p>
+      <div v-if="!folded.dashboard" class="sec-body">
         <div class="row">
-          <span class="row-label">端口<span class="row-desc" v-if="bridgeOn">{{ bridge.url }}</span><span class="row-desc" v-else>端口被占用时会自动顺延</span></span>
+          <span class="row-label">首页插件坞<span class="row-desc">在首页最底部显示四个插件状态方块</span></span>
           <div class="row-control">
-            <input :value="bridgePortInput" type="number" min="1024" max="65535" class="port-input" @input="$emit('update:bridgePortInput', $event.target.value)">
-            <button class="btn btn-secondary btn-sm" :disabled="bridgeLoading" @click="$emit('bridge-apply-port')">应用</button>
+            <label class="switch">
+              <input type="checkbox" :checked="dashboard.showPluginDock !== false" @change="set('dashboard.showPluginDock', $event.target.checked)">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
           </div>
         </div>
-        <div class="row">
-          <span class="row-label">访问 Token</span>
+        <div class="hr"></div>
+        <div class="row" v-for="c in dashboardCards" :key="c.key">
+          <span class="row-label">显示「{{ c.label }}」</span>
           <div class="row-control">
-            <code class="token-box">{{ bridge ? bridge.token : '' }}</code>
-            <button class="btn-icon" title="复制" @click="copy(bridge ? bridge.token : '', 'token')"><Icon :name="bridgeCopied === 'token' ? 'check' : 'copy'" :size="13" /></button>
-            <button class="btn-icon" title="重新生成" :disabled="bridgeLoading" @click="$emit('bridge-regen')"><Icon name="refresh" :size="13" /></button>
+            <label class="switch">
+              <input type="checkbox" :checked="cardOn(c.key)" @change="set('dashboard.cards.' + c.key, $event.target.checked)">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
           </div>
         </div>
+        <div class="hr"></div>
         <div class="row">
-          <span class="row-label">连通性</span>
-          <div class="row-control">
-            <button class="btn btn-secondary btn-sm" :disabled="bridgeTesting" @click="$emit('bridge-test')">{{ bridgeTesting ? '测试中' : '测试' }}</button>
-            <button v-if="bridgeOn" class="btn btn-ghost btn-sm" @click="$emit('bridge-open')">打开 <Icon name="external" :size="11" /></button>
-            <span v-if="bridgeTestResult" class="test-result" :class="{ ok: bridgeTestResult.ok }">{{ bridgeTestResult.ok ? 'HTTP ' + bridgeTestResult.statusCode : (bridgeTestResult.error || '失败') }}</span>
+          <span class="row-label">热力图周数<span class="row-desc">同时改变首页热力图的跨度与标题</span></span>
+          <div class="row-control sm">
+            <input type="number" min="4" max="52" :value="dashboard.heatmapWeeks || 12" @change="num('dashboard.heatmapWeeks', $event.target.value, 4, 52)">
+            <span class="unit">周</span>
           </div>
-        </div>
-        <div class="mcp-box">
-          <div class="mcp-head">
-            <span>MCP 配置</span>
-            <button class="btn btn-ghost btn-sm" @click="copy(bridge ? bridge.mcpConfig : '', 'mcp')"><Icon :name="bridgeCopied === 'mcp' ? 'check' : 'copy'" :size="11" /> {{ bridgeCopied === 'mcp' ? '已复制' : '复制' }}</button>
-          </div>
-          <pre class="mcp-pre">{{ bridge ? bridge.mcpConfig : '加载中…' }}</pre>
-          <p class="hint">粘贴到客户端的 <code>mcp.json</code> 后重启。可用工具：日报告、区间报告、应用排行、关键词检索、时间线。</p>
         </div>
       </div>
-      <div v-else-if="!bridgeEnabled" class="sec-collapsed">已关闭 · 本地数据服务已停止</div>
+      <div v-else class="sec-collapsed">已折叠</div>
     </section>
+
+    <!-- ---------------- 采集前隐私排除 ---------------- -->
+    <section id="sec-privacy" class="sec">
+      <div class="sec-head">
+        <Icon name="shield" :size="13" />
+        <span>隐私与采集</span>
+        <button class="chev" :class="{ open: !folded.privacy }" title="展开 / 收起" @click="toggleFold('privacy')"><Icon name="chevronDown" :size="13" /></button>
+      </div>
+      <div v-if="!folded.privacy" class="sec-body">
+        <p class="sec-desc">以下规则在新片段形成前生效。命中时不写入应用名和窗口标题；已有历史记录不会自动删除。</p>
+        <div class="row-block">
+          <label class="row-label" for="exclude-apps">排除应用名</label>
+          <textarea id="exclude-apps" class="rule-input" :value="monitoring.excludeApps || ''" rows="3" placeholder="每行一个，例如 bankapp.exe" spellcheck="false" @change="set('monitoring.excludeApps', $event.target.value)"></textarea>
+          <p class="hint">与采集到的进程名完整匹配，不区分大小写；也可用逗号分隔。</p>
+        </div>
+        <div class="row-block">
+          <label class="row-label" for="exclude-titles">排除标题关键词</label>
+          <textarea id="exclude-titles" class="rule-input" :value="monitoring.excludeTitleContains || ''" rows="3" placeholder="每行一个，例如 客户资料" spellcheck="false" @change="set('monitoring.excludeTitleContains', $event.target.value)"></textarea>
+          <p class="hint">标题包含任一关键词即排除，不区分大小写。请避免填写过短的通用词。</p>
+        </div>
+      </div>
+      <div v-else class="sec-collapsed">已折叠 · 管理新记录的隐私排除规则</div>
+    </section>
+
+    <!-- ---------------- 数据 ---------------- -->
+    <section id="sec-data" class="sec">
+      <div class="sec-head">
+        <Icon name="database" :size="13" />
+        <span>数据</span>
+        <button class="chev" :class="{ open: !folded.data }" title="展开 / 收起" @click="toggleFold('data')"><Icon name="chevronDown" :size="13" /></button>
+      </div>
+      <div v-if="!folded.data" class="sec-body">
+        <div class="row-block">
+          <span class="row-label">存储路径</span>
+          <code class="path-box" :title="storagePath">{{ storagePath || '默认路径' }}</code>
+          <div class="path-actions">
+            <button class="btn btn-secondary btn-sm" @click="$emit('select-storage')">更改</button>
+            <button v-if="config.storage && config.storage.customPath" class="btn btn-danger btn-sm" @click="$emit('reset-storage')">恢复默认</button>
+          </div>
+          <p class="hint">指向 iCloud / OneDrive / 坚果云 目录可实现跨设备同步；更改后立即生效，无需重启。</p>
+        </div>
+        <div class="row-block">
+          <span class="row-label">导出</span>
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" @click="$emit('export-day')"><Icon name="download" :size="12" /> 当日 JSON</button>
+            <button class="btn btn-secondary btn-sm" @click="$emit('export-full-json')"><Icon name="download" :size="12" /> 全部 JSON</button>
+            <button class="btn btn-secondary btn-sm" @click="$emit('export-csv')"><Icon name="download" :size="12" /> CSV</button>
+          </div>
+        </div>
+        <div class="row-block">
+          <span class="row-label">导入</span>
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" @click="$emit('import-merge')"><Icon name="upload" :size="12" /> 合并</button>
+            <button class="btn btn-danger btn-sm" @click="$emit('import-overwrite')"><Icon name="upload" :size="12" /> 覆盖</button>
+          </div>
+          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」。选目录会直接切换过去并立即生效，不覆盖已有数据；「覆盖」仅对单文件导入生效。</p>
+        </div>
+      </div>
+      <div v-else class="sec-collapsed">已折叠</div>
+    </section>
+
+    <p class="group-title plugin-group">连接与能力 <span>关闭开关后，对应设置会收起</span></p>
 
     <!-- ---------------- 滴答同步 ---------------- -->
     <section id="sec-dida" class="sec plugin-sec">
@@ -271,173 +264,172 @@
       <div v-else-if="!didaOn" class="sec-collapsed">已关闭 · 开启后可配置拉取与推送通道</div>
     </section>
 
-    <!-- ---------------- 首页与图表 ---------------- -->
-    <section id="sec-dashboard" class="sec">
+    <!-- ---------------- AI 能力 ---------------- -->
+    <section id="sec-ai" class="sec plugin-sec">
       <div class="sec-head">
-        <Icon name="grid" :size="13" />
-        <span>首页与图表</span>
-        <button class="chev" :class="{ open: !folded.dashboard }" title="展开 / 收起" @click="toggleFold('dashboard')"><Icon name="chevronDown" :size="13" /></button>
+        <Icon name="zap" :size="13" />
+        <span>AI 能力</span>
+        <span class="sec-badge" :class="{ on: aiOn }">{{ aiOn ? '已开启' : '已关闭' }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="aiOn" @change="set('ai.enabled', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="aiOn" class="chev" :class="{ open: !folded.ai }" title="展开 / 收起" @click="toggleFold('ai')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
       </div>
-      <div v-if="!folded.dashboard" class="sec-body">
+      <div v-if="aiOn && !folded.ai" class="sec-body">
+        <p class="sec-desc">开启自动回顾后，后台按时间段增量评估记录。模型会看到相关应用名、窗口标题，以及人工解释与窗口重叠的线索；结果显示在首页 AI 回顾中。</p>
         <div class="row">
-          <span class="row-label">首页插件坞<span class="row-desc">在首页最底部显示四个插件状态方块</span></span>
+          <span class="row-label">自动评估与回顾<span class="row-desc">开启后才会定期发送记录；空时段不会调用模型</span></span>
+          <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.summary?.autoGenerate === true" @change="set('summary.autoGenerate', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
+        </div>
+        <div v-if="config.summary?.autoGenerate === true" class="row">
+          <span class="row-label">评估间隔<span class="row-desc">每段仅处理新增记录；建议 60–240 分钟</span></span>
+          <div class="row-control sm"><input type="number" min="30" max="300" step="30" :value="config.summary?.intervalMinutes || 60" @change="num('summary.intervalMinutes', $event.target.value, 30, 300)"><span class="unit">分钟</span></div>
+        </div>
+        <div class="row-block">
+          <span class="row-label">Token 用量<span class="row-desc">以最近一个间隔的记录估算单次输入；实际用量优先取服务商返回值</span></span>
+          <p class="hint">{{ aiUsage.next?.records ? `参考单次约 ${aiUsage.next.inputTokens} 输入 Token + 最多 ${aiUsage.next.outputLimit} 输出 Token（${aiUsage.next.records} 条记录）` : '最近一个评估间隔没有已保存记录，暂不预计模型调用' }}。</p>
+          <p class="hint">本机最近 {{ aiUsage.calls || 0 }} 次：输入 {{ aiUsage.inputTokens || 0 }}、输出 {{ aiUsage.outputTokens || 0 }} Token<span v-if="aiUsage.estimatedCalls">；其中 {{ aiUsage.estimatedCalls }} 次由字符数估算</span>。不同模型分词不同，估算仅供控制调用量。</p>
+        </div>
+        <div class="row">
+          <span class="row-label">服务商</span>
           <div class="row-control">
-            <label class="switch">
-              <input type="checkbox" :checked="dashboard.showPluginDock !== false" @change="set('dashboard.showPluginDock', $event.target.checked)">
-              <span class="switch-track"><span class="switch-thumb"></span></span>
-            </label>
+            <select :value="api.provider" @change="$emit('provider-change', $event.target.value)">
+              <option v-for="(preset, key) in providerPresets" :key="key" :value="key">{{ preset.name }}</option>
+            </select>
           </div>
         </div>
-        <div class="hr"></div>
-        <div class="row" v-for="c in dashboardCards" :key="c.key">
-          <span class="row-label">显示「{{ c.label }}」</span>
-          <div class="row-control">
-            <label class="switch">
-              <input type="checkbox" :checked="cardOn(c.key)" @change="set('dashboard.cards.' + c.key, $event.target.checked)">
-              <span class="switch-track"><span class="switch-thumb"></span></span>
-            </label>
+        <div class="row">
+          <span class="row-label">API Key</span>
+          <div class="row-control wide">
+            <input :value="api.apiKey" type="password" placeholder="sk-..." autocomplete="off" @change="set('api.apiKey', $event.target.value)">
           </div>
         </div>
-        <div class="hr"></div>
+        <div class="row-block">
+          <span class="row-label">模型</span>
+          <div class="model-chips">
+            <button v-for="m in modelPresets" :key="m.id" class="chip" :class="{ active: api.modelName === m.id }" :title="m.note" @click="set('api.modelName', m.id)">{{ m.label }}</button>
+          </div>
+          <div class="row-control wide model-custom">
+            <input type="text" :value="api.modelName" spellcheck="false" @change="set('api.modelName', $event.target.value)">
+          </div>
+          <p class="hint">deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用。当前推荐 deepseek-flash（V4.1 Flash），深度推理用 deepseek-v4-pro。</p>
+        </div>
+      </div>
+      <div v-else-if="!aiOn" class="sec-collapsed">已关闭 · 开启后可配置模型与 API Key</div>
+    </section>
+
+    <!-- ---------------- 番茄钟 ---------------- -->
+    <section id="sec-pomodoro" class="sec plugin-sec">
+      <div class="sec-head">
+        <Icon name="target" :size="13" />
+        <span>本地专注</span>
+        <span class="sec-badge" :class="{ on: pomodoroOn }">{{ pomodoroOn ? '已开启' : '已关闭' }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="pomodoroOn" @change="set('focus.enabled', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="pomodoroOn" class="chev" :class="{ open: !folded.pomodoro }" title="展开 / 收起" @click="toggleFold('pomodoro')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
+      </div>
+      <div v-if="pomodoroOn && !folded.pomodoro" class="sec-body">
+        <p class="sec-desc">本地专注计时。若专注数据全部来自滴答清单，可以直接关闭这个插件。</p>
         <div class="row">
-          <span class="row-label">热力图周数<span class="row-desc">同时改变首页热力图的跨度与标题</span></span>
+          <span class="row-label">专注时长</span>
           <div class="row-control sm">
-            <input type="number" min="4" max="52" :value="dashboard.heatmapWeeks || 12" @change="num('dashboard.heatmapWeeks', $event.target.value, 4, 52)">
-            <span class="unit">周</span>
-          </div>
-        </div>
-      </div>
-      <div v-else class="sec-collapsed">已折叠</div>
-    </section>
-
-    <!-- ---------------- 外观 ---------------- -->
-    <section id="sec-appearance" class="sec">
-      <div class="sec-head">
-        <Icon name="palette" :size="13" />
-        <span>外观</span>
-        <button class="chev" :class="{ open: !folded.appearance }" title="展开 / 收起" @click="toggleFold('appearance')"><Icon name="chevronDown" :size="13" /></button>
-      </div>
-      <div v-if="!folded.appearance" class="sec-body">
-        <div class="row-block">
-          <span class="row-label">明暗</span>
-          <div class="mode-row">
-            <button v-for="m in modes" :key="m.id" class="mode-cell" :class="[m.id, { active: theme === m.id }]" @click="$emit('theme-change', m.id)">
-              <span class="mode-preview"><span class="mp-bar"></span><span class="mp-line"></span></span>
-              <span class="mode-name">{{ m.label }}</span>
-              <Icon v-if="theme === m.id" name="check" :size="11" class="mode-check" />
-            </button>
-          </div>
-        </div>
-        <div class="row-block">
-          <span class="row-label">强调色</span>
-          <div class="accent-row">
-            <button v-for="a in accentOptions" :key="a.id" class="accent-cell" :class="{ active: accent === a.id }" :title="a.label" @click="$emit('accent-change', a.id)">
-              <span class="accent-dot" :style="{ background: accentColor(a.id) }"><Icon v-if="accent === a.id" name="check" :size="10" /></span>
-              <span class="accent-name">{{ a.label }}</span>
-            </button>
-          </div>
-        </div>
-        <div class="row-block">
-          <span class="row-label">界面气质<span class="row-desc">改变画布、卡片与层次；分类颜色仍保持含义</span></span>
-          <div class="surface-grid">
-            <button v-for="s in surfaces" :key="s.id" class="surface-choice" :class="[s.id, { active: (ui.surface || 'studio') === s.id }]"
-              :aria-pressed="(ui.surface || 'studio') === s.id" @click="set('ui.surface', s.id)">
-              <span class="surface-preview"><i></i><b></b><em></em></span>
-              <strong>{{ s.label }}</strong><small>{{ s.hint }}</small>
-            </button>
+            <input type="number" min="5" max="120" step="5" :value="focus.pomodoro && focus.pomodoro.workMin" @change="num('focus.pomodoro.workMin', $event.target.value, 5, 120)">
+            <span class="unit">分钟</span>
           </div>
         </div>
         <div class="row">
-          <span class="row-label">最小化时显示浮窗</span>
-          <div class="row-control">
-            <label class="switch">
-              <input type="checkbox" :checked="ui.floatWindow !== false" @change="set('ui.floatWindow', $event.target.checked)">
-              <span class="switch-track"><span class="switch-thumb"></span></span>
-            </label>
+          <span class="row-label">休息时长</span>
+          <div class="row-control sm">
+            <input type="number" min="0" max="60" step="1" :value="focus.pomodoro && focus.pomodoro.breakMin" @change="num('focus.pomodoro.breakMin', $event.target.value, 0, 60)">
+            <span class="unit">分钟</span>
           </div>
         </div>
         <div class="row">
-          <span class="row-label">开机自启动</span>
+          <span class="row-label">每组轮数</span>
+          <div class="row-control sm">
+            <input type="number" min="0" max="12" step="1" :value="focus.pomodoro && focus.pomodoro.rounds" @change="num('focus.pomodoro.rounds', $event.target.value, 0, 12)">
+            <span class="unit">轮</span>
+          </div>
+        </div>
+      </div>
+      <div v-else-if="!pomodoroOn" class="sec-collapsed">已关闭 · 开启后可自定义计时</div>
+    </section>
+
+    <!-- ---------------- MCP 接口 ---------------- -->
+    <section id="sec-bridge" class="sec plugin-sec">
+      <div class="sec-head">
+        <Icon name="plug" :size="13" />
+        <span>MCP 接口</span>
+        <span class="sec-badge" :class="{ on: bridgeOn }">{{ bridgeOn ? '运行中' : (bridgeEnabled ? '未启动' : '已关闭') }}</span>
+        <label class="switch">
+          <input type="checkbox" :checked="bridgeEnabled" :disabled="bridgeLoading" @change="$emit('bridge-toggle', $event.target.checked)">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <button v-if="bridgeEnabled" class="chev" :class="{ open: !folded.bridge }" title="展开 / 收起" @click="toggleFold('bridge')">
+          <Icon name="chevronDown" :size="13" />
+        </button>
+      </div>
+      <div v-if="bridgeEnabled && !folded.bridge" class="sec-body">
+        <p class="sec-desc">把聚合后的工时数据开放给支持 MCP 的客户端，配一次即可用自然语言查询。</p>
+        <div class="row">
+          <span class="row-label">端口<span class="row-desc" v-if="bridgeOn">{{ bridge.url }}</span><span class="row-desc" v-else>端口被占用时会自动顺延</span></span>
           <div class="row-control">
-            <label class="switch">
-              <input type="checkbox" :checked="autoLaunch" @change="$emit('toggle-auto-launch', $event.target.checked)">
-              <span class="switch-track"><span class="switch-thumb"></span></span>
-            </label>
+            <input :value="bridgePortInput" type="number" min="1024" max="65535" class="port-input" @input="$emit('update:bridgePortInput', $event.target.value)">
+            <button class="btn btn-secondary btn-sm" :disabled="bridgeLoading" @click="$emit('bridge-apply-port')">应用</button>
           </div>
         </div>
-      </div>
-      <div v-else class="sec-collapsed">已折叠</div>
-    </section>
-
-    <!-- ---------------- 数据 ---------------- -->
-    <section id="sec-data" class="sec">
-      <div class="sec-head">
-        <Icon name="database" :size="13" />
-        <span>数据</span>
-        <button class="chev" :class="{ open: !folded.data }" title="展开 / 收起" @click="toggleFold('data')"><Icon name="chevronDown" :size="13" /></button>
-      </div>
-      <div v-if="!folded.data" class="sec-body">
-        <div class="row-block">
-          <span class="row-label">存储路径</span>
-          <code class="path-box" :title="storagePath">{{ storagePath || '默认路径' }}</code>
-          <div class="path-actions">
-            <button class="btn btn-secondary btn-sm" @click="$emit('select-storage')">更改</button>
-            <button v-if="config.storage && config.storage.customPath" class="btn btn-danger btn-sm" @click="$emit('reset-storage')">恢复默认</button>
-          </div>
-          <p class="hint">指向 iCloud / OneDrive / 坚果云 目录可实现跨设备同步；更改后立即生效，无需重启。</p>
-        </div>
-        <div class="row-block">
-          <span class="row-label">导出</span>
-          <div class="btn-row">
-            <button class="btn btn-secondary btn-sm" @click="$emit('export-day')"><Icon name="download" :size="12" /> 当日 JSON</button>
-            <button class="btn btn-secondary btn-sm" @click="$emit('export-full-json')"><Icon name="download" :size="12" /> 全部 JSON</button>
-            <button class="btn btn-secondary btn-sm" @click="$emit('export-csv')"><Icon name="download" :size="12" /> CSV</button>
+        <div class="row">
+          <span class="row-label">访问 Token</span>
+          <div class="row-control">
+            <code class="token-box">{{ bridge ? bridge.token : '' }}</code>
+            <button class="btn-icon" title="复制" @click="copy(bridge ? bridge.token : '', 'token')"><Icon :name="bridgeCopied === 'token' ? 'check' : 'copy'" :size="13" /></button>
+            <button class="btn-icon" title="重新生成" :disabled="bridgeLoading" @click="$emit('bridge-regen')"><Icon name="refresh" :size="13" /></button>
           </div>
         </div>
-        <div class="row-block">
-          <span class="row-label">导入</span>
-          <div class="btn-row">
-            <button class="btn btn-secondary btn-sm" @click="$emit('import-merge')"><Icon name="upload" :size="12" /> 合并</button>
-            <button class="btn btn-danger btn-sm" @click="$emit('import-overwrite')"><Icon name="upload" :size="12" /> 覆盖</button>
+        <div class="row">
+          <span class="row-label">连通性</span>
+          <div class="row-control">
+            <button class="btn btn-secondary btn-sm" :disabled="bridgeTesting" @click="$emit('bridge-test')">{{ bridgeTesting ? '测试中' : '测试' }}</button>
+            <button v-if="bridgeOn" class="btn btn-ghost btn-sm" @click="$emit('bridge-open')">打开 <Icon name="external" :size="11" /></button>
+            <span v-if="bridgeTestResult" class="test-result" :class="{ ok: bridgeTestResult.ok }">{{ bridgeTestResult.ok ? 'HTTP ' + bridgeTestResult.statusCode : (bridgeTestResult.error || '失败') }}</span>
           </div>
-          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」。选目录会直接切换过去并立即生效，不覆盖已有数据；「覆盖」仅对单文件导入生效。</p>
+        </div>
+        <div class="mcp-box">
+          <div class="mcp-head">
+            <span>MCP 配置</span>
+            <button class="btn btn-ghost btn-sm" @click="copy(bridge ? bridge.mcpConfig : '', 'mcp')"><Icon :name="bridgeCopied === 'mcp' ? 'check' : 'copy'" :size="11" /> {{ bridgeCopied === 'mcp' ? '已复制' : '复制' }}</button>
+          </div>
+          <pre class="mcp-pre">{{ bridge ? bridge.mcpConfig : '加载中…' }}</pre>
+          <p class="hint">粘贴到客户端的 <code>mcp.json</code> 后重启。可用工具：日报告、区间报告、应用排行、关键词检索、时间线。</p>
         </div>
       </div>
-      <div v-else class="sec-collapsed">已折叠</div>
-    </section>
-
-    <!-- ---------------- 采集前隐私排除 ---------------- -->
-    <section id="sec-privacy" class="sec">
-      <div class="sec-head">
-        <Icon name="shield" :size="13" />
-        <span>隐私与采集</span>
-        <button class="chev" :class="{ open: !folded.privacy }" title="展开 / 收起" @click="toggleFold('privacy')"><Icon name="chevronDown" :size="13" /></button>
-      </div>
-      <div v-if="!folded.privacy" class="sec-body">
-        <p class="sec-desc">以下规则在新片段形成前生效。命中时不写入应用名和窗口标题；已有历史记录不会自动删除。</p>
-        <div class="row-block">
-          <label class="row-label" for="exclude-apps">排除应用名</label>
-          <textarea id="exclude-apps" class="rule-input" :value="monitoring.excludeApps || ''" rows="3" placeholder="每行一个，例如 bankapp.exe" spellcheck="false" @change="set('monitoring.excludeApps', $event.target.value)"></textarea>
-          <p class="hint">与采集到的进程名完整匹配，不区分大小写；也可用逗号分隔。</p>
-        </div>
-        <div class="row-block">
-          <label class="row-label" for="exclude-titles">排除标题关键词</label>
-          <textarea id="exclude-titles" class="rule-input" :value="monitoring.excludeTitleContains || ''" rows="3" placeholder="每行一个，例如 客户资料" spellcheck="false" @change="set('monitoring.excludeTitleContains', $event.target.value)"></textarea>
-          <p class="hint">标题包含任一关键词即排除，不区分大小写。请避免填写过短的通用词。</p>
-        </div>
-      </div>
-      <div v-else class="sec-collapsed">已折叠 · 管理新记录的隐私排除规则</div>
+      <div v-else-if="!bridgeEnabled" class="sec-collapsed">已关闭 · 本地数据服务已停止</div>
     </section>
 
     <!-- ---------------- 高级：内部技术参数 ---------------- -->
     <section id="sec-advanced" class="sec">
       <div class="sec-head">
         <Icon name="terminal" :size="13" />
-        <span>高级</span>
+        <span>运行与高级</span>
         <button class="chev" :class="{ open: !folded.advanced }" title="展开 / 收起" @click="toggleFold('advanced')"><Icon name="chevronDown" :size="13" /></button>
       </div>
       <div v-if="!folded.advanced" class="sec-body">
-        <p class="sec-desc">这些是采集与模型调用的内部参数，一般不用改。</p>
+        <p class="sec-desc">窗口运行、开机行为和采集参数。</p>
+        <div class="row">
+          <span class="row-label">最小化时显示浮窗</span>
+          <div class="row-control"><label class="switch"><input type="checkbox" :checked="ui.floatWindow !== false" @change="set('ui.floatWindow', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
+        </div>
+        <div class="row">
+          <span class="row-label">开机自启动</span>
+          <div class="row-control"><label class="switch"><input type="checkbox" :checked="autoLaunch" @change="$emit('toggle-auto-launch', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
+        </div>
         <div class="row">
           <span class="row-label">空闲判定阈值</span>
           <div class="row-control sm">
@@ -518,7 +510,7 @@ export default {
     theme: { type: String, default: 'dark' },
     accent: { type: String, default: 'blue' },
     accentOptions: { type: Array, default: () => ACCENTS },
-    activeSection: { type: String, default: 'pomodoro' },
+    activeSection: { type: String, default: 'appearance' },
     providerPresets: { type: Object, default: () => ({}) },
     aiUsage: { type: Object, default: () => ({}) },
     didaStatus: { type: Object, default: () => ({}) },
@@ -536,7 +528,7 @@ export default {
     storagePath: { type: String, default: '' }
   },
   emits: [
-    'save', 'provider-change', 'toggle-auto-launch', 'theme-change', 'accent-change',
+    'save', 'provider-change', 'toggle-auto-launch', 'theme-change', 'accent-change', 'surface-change',
     'select-storage', 'reset-storage',
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
@@ -546,25 +538,25 @@ export default {
   data() {
     return {
       // 注意：不能叫 activeSection —— 那会覆盖同名 prop，导致从首页跳分区永远失效
-      section: this.activeSection || 'pomodoro',
+      section: this.activeSection || 'appearance',
       modes: MODES,
       surfaces: SURFACES,
       sections: [
-        { id: 'pomodoro', label: '番茄钟' },
-        { id: 'ai', label: 'AI' },
-        { id: 'bridge', label: 'MCP' },
-        { id: 'dida', label: '滴答' },
-        { id: 'dashboard', label: '首页' },
         { id: 'appearance', label: '外观' },
-        { id: 'data', label: '数据' },
+        { id: 'dashboard', label: '首页' },
         { id: 'privacy', label: '隐私' },
-        { id: 'advanced', label: '高级' },
-        { id: 'about', label: '关于' }
+        { id: 'data', label: '数据' },
+        { id: 'dida', label: '滴答' },
+        { id: 'ai', label: 'AI' },
+        { id: 'pomodoro', label: '本地专注' },
+        { id: 'bridge', label: 'MCP' },
+        { id: 'advanced', label: '运行与高级' },
+        { id: 'about', label: '诊断与关于' }
       ],
       // 插件相关默认展开，次要分区默认折叠
       folded: {
-        pomodoro: false, ai: false, bridge: false, dida: false,
-        dashboard: false, appearance: true, data: true, privacy: false, advanced: true, about: true
+        pomodoro: true, ai: true, bridge: true, dida: true,
+        dashboard: true, appearance: false, data: true, privacy: true, advanced: true, about: true
       }
     };
   },
@@ -665,6 +657,7 @@ export default {
   gap: var(--sp-3);
   padding: var(--sp-4);
 }
+.settings > .plugin-group { margin-top: var(--sp-3); }
 
 .set-intro h2 {
   margin: 0;
@@ -1050,9 +1043,9 @@ export default {
 .surface-preview i { width: 7px; height: 100%; border-radius: 2px; background: rgba(255,255,255,.25); }
 .surface-preview b { flex: 1; height: 100%; border-radius: 3px; background: rgba(255,255,255,.18); }
 .surface-preview em { width: 25%; height: 65%; border-radius: 3px; background: rgba(255,255,255,.27); }
-.studio .surface-preview { background: #252b35; }
 .nocturne .surface-preview { background: linear-gradient(135deg, #0d192b, #31557e); }
 .linen .surface-preview { background: linear-gradient(135deg, #a77d51, #f3e6c9); }
+.mist .surface-preview { background: linear-gradient(135deg, #2e544f, #d6eadc); }
 @media (max-width: 600px) { .surface-grid { grid-template-columns: 1fr; } }
 
 /* 强调色：一排圆点 */

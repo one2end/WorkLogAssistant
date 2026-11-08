@@ -70,6 +70,22 @@ test('Dida focus overrides recorded time and is counted once', t => {
   assert.ok(report.sessions.some(s => s.category === '专注'));
 });
 
+test('Dida focus note reaches the display slot alongside its title', t => {
+  const dir = fixture(t, [{ t: at('09:00'), dur: 30 * 60000, app: 'chrome', title: 'Background' }]);
+  const focusDir = path.join(dir, 'dida', 'focus');
+  fs.mkdirSync(focusDir, { recursive: true });
+  fs.writeFileSync(path.join(focusDir, '2026-11-08.json'), JSON.stringify([{
+    id: 'note-1', startMs: new Date(at('09:00')).getTime(), durationMs: 30 * 60000,
+    pauseMs: 0, title: '阅读资料', note: '重点是第三章'
+  }]));
+  const report = analytics.buildDayReport(dir, '2026-11-08');
+  const slot = report.slots.find(s => s.startMin === 540);
+  assert.equal(slot.app, '阅读资料');
+  assert.equal(slot.note, '重点是第三章');
+  assert.equal(slot.focusId, 'dida:note-1');
+  assert.equal(report.focus.didaSessions[0].note, '重点是第三章');
+});
+
 test('AI prompt context respects manual overlap instead of adding both layers', () => {
   const items = [
     { timestamp: at('09:00'), durationMs: 60 * 60000, processName: 'chrome', windowTitle: 'Research', source: 'auto' },

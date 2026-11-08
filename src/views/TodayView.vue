@@ -274,7 +274,7 @@
       <ul v-if="focus.sessions.length" class="focus-list">
         <li v-for="(s, i) in focus.sessions" :key="'s' + i" class="focus-row">
           <Icon name="zen" :size="13" />
-          <span class="focus-text">{{ s.focusText || '未命名专注' }}</span>
+          <span class="focus-text"><strong>{{ s.focusText || '未命名专注' }}</strong><small v-if="s.note">{{ s.note }}</small></span>
           <span class="focus-time">{{ fmt(s.durationMs) }}</span>
         </li>
       </ul>
@@ -456,7 +456,8 @@ export default {
     focus() {
       const f = (this.report && this.report.focus) || {};
       return {
-        sessions: f.arhatSessions || f.sessions || [],
+        sessions: [...(f.arhatSessions || f.sessions || []), ...(f.didaSessions || [])]
+          .sort((a, b) => new Date(a.start) - new Date(b.start)),
         notes: f.notes || []
       };
     },
@@ -1198,11 +1199,14 @@ export default {
 .focus-text {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
   color: var(--text-primary);
 }
+.focus-text strong,
+.focus-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-text strong { font-size: var(--fs-12); font-weight: var(--fw-medium); }
+.focus-text small { color: var(--text-secondary); font-size: var(--fs-11); }
 
 .focus-time {
   font-size: var(--fs-11);

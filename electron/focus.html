@@ -370,15 +370,32 @@ el.noteInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') setExpanded(false);
 });
 
-// 主题与主窗口 src/styles/tokens.css 的 5 套主题手工对齐
+// 主题与主窗口的三种风格及明暗模式对齐
 // （打包后此 HTML 无法 @import src）。--tint 是专注模式强调色，不在此覆盖。
 const themeMap = {
   dark:   { bg: 'rgba(18,20,24,0.9)',     bgBreak: 'rgba(14,26,21,0.92)',    border: 'rgba(255,255,255,0.1)',  borderBreak: 'rgba(52,211,153,0.34)',  text: '#eceef2', secondary: '#9aa1ad', muted: '#6b7280', divider: 'rgba(255,255,255,0.12)', barTrack: 'rgba(255,255,255,0.08)',   sheen: 'rgba(255,255,255,0.055)', success: '#34d399', danger: '#fb7185', shadow: '0 8px 28px rgba(0,0,0,0.42)' },
   light:  { bg: 'rgba(255,255,255,0.94)', bgBreak: 'rgba(236,253,245,0.95)', border: 'rgba(15,23,42,0.12)',   borderBreak: 'rgba(5,150,105,0.34)',   text: '#0f172a', secondary: '#5b6472', muted: '#8a929e', divider: 'rgba(15,23,42,0.12)',   barTrack: 'rgba(15,23,42,0.08)',     sheen: 'rgba(255,255,255,0.8)',   success: '#059669', danger: '#dc2626', shadow: '0 8px 28px rgba(15,23,42,0.14)' }
 };
 
+const surfaceMap = {
+  nocturne: {
+    dark: { bg: 'rgba(20,32,51,0.95)', border: 'rgba(159,197,232,0.18)', text: '#e8eff8', secondary: '#bac9d9', muted: '#8ca2b9' },
+    light: { bg: 'rgba(249,251,255,0.96)', border: 'rgba(43,79,117,0.18)', text: '#263b50', secondary: '#526b84', muted: '#7990a6' }
+  },
+  linen: {
+    dark: { bg: 'rgba(36,32,25,0.95)', border: 'rgba(237,202,148,0.18)', text: '#f3ede3', secondary: '#c9bdad', muted: '#9c8d79' },
+    light: { bg: 'rgba(255,250,240,0.96)', border: 'rgba(112,80,39,0.19)', text: '#30291f', secondary: '#65594a', muted: '#8b7c68' }
+  },
+  mist: {
+    dark: { bg: 'rgba(26,42,38,0.95)', border: 'rgba(157,213,181,0.19)', text: '#e8f2e9', secondary: '#afc4b8', muted: '#819e90' },
+    light: { bg: 'rgba(248,252,247,0.96)', border: 'rgba(55,117,83,0.18)', text: '#233b2f', secondary: '#567260', muted: '#799484' }
+  }
+};
+
 function applyTheme(t) {
-  const v = themeMap[t] || themeMap.dark;
+  const mode = typeof t === 'string' ? t : t?.mode || 'dark';
+  const surface = typeof t === 'string' ? 'nocturne' : t?.surface || 'nocturne';
+  const v = { ...(themeMap[mode] || themeMap.dark), ...(surfaceMap[surface]?.[mode] || {}) };
   const r = document.documentElement.style;
   r.setProperty('--hud-bg', v.bg);
   r.setProperty('--hud-bg-break', v.bgBreak);
@@ -396,7 +413,7 @@ function applyTheme(t) {
 }
 
 ipcRenderer.on('focus-theme', (e, t) => applyTheme(t));
-applyTheme('dark');
+applyTheme({ mode: 'dark', surface: 'nocturne' });
 </script>
 </body>
 </html>
