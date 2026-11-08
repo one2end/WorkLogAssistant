@@ -285,39 +285,93 @@ ${activityText}
     }
   }
 
+  /**
+   * 推理模型（deepseek-flash / reasoner 一类）会先烧 `reasoning_content`，
+   * 再产出 `content`。max_tokens 只管输出总量，推理也算在里面——
+   * 实测 500 tokens 全被推理吃掉，content 直接是空字符串，
+   * finish_reason 是 length。上层看到空内容就返回 null，
+   * 前端于是报「没有可总结的记录」，把「模型想不完」说成了「没有记录」。
+   *
+   * 所以这里按模型类型给预算：推理模型额外留出思考空间，并在被截断时
+   * 抛出明确错误，不再静默返回 null。
+   */
+  _isReasoningModel() {
+    const m = String(this.config.api?.modelName || '').toLowerCase();
+    return /reason|flash|thinking|o1|o3|o4/.test(m);
+  }
+
+  /**
+   * 给多少 max_tokens。
+   *
+   * 推理模型的思考长度和输入长度强相关：一份 2800 字的日记录能想四千多字，
+   * 而一句短提问几百字就想完了。所以不能拍死一个数——
+   * 按 prompt 规模估预算，让第一次请求就有较大概率成功，
+   * 避免「先截断、再翻倍」那种白烧一轮（实测多花 100 秒）。
+   */
+  _maxTokens(prompt = '') {
+    const base = Number(this.config.summary?.maxTokens) || 500;
+    if (!this._isReasoningModel()) return base;
+    // 经验值：推理量约为输入字数的 1.5 倍（中文 1 字≈1 token 上下），
+    // 再留出正文预算和一份安全余量。
+    const inputChars = String(prompt).length;
+    const estimate = Math.round(inputChars * 1.5) + base + 800;
+    return Math.max(base + 2000, Math.min(16000, estimate));
+  }
+
+  /**
+   * 推理模型的思考长度没法完全预判，所以仍保留一层保险：
+   * 万一还是被截断，按实际消耗翻倍重试，最多三次。
+   * 只有「截断」才重试——其它错误重试只会重复烧钱。
+   */
   async _callOpenAICompatible(prompt) {
-    try {
-      const response = await axios.post(
-        this.config.api.baseUrl,
-        {
-          model: this.config.api.modelName,
-          messages: [
-            { role: 'system', content: this._systemPrompt() },
-            { role: 'user', content: prompt }
-          ],
-          max_tokens: this.config.summary.maxTokens,
-          temperature: 0.7
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.config.api.apiKey}`
-          },
-          timeout: 30000,
-          // 本机环境变量带代理时，axios 会把 https 请求以明文发到 443，
-          // DeepSeek 官方域名直连可用；其它服务商仍走系统代理。
-          ...(/api\.deepseek\.com/i.test(String(this.config.api.baseUrl || '')) ? { proxy: false } : {})
-        }
-      );
-      if (response.data?.choices?.[0]?.message?.content) {
-        this._recordUsage(prompt, response.data.choices[0].message.content, response.data.usage);
-        return response.data.choices[0].message.content;
+    let budget = this._maxTokens(prompt);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await this._requestOnce(prompt, budget);
+      if (result.ok) {
+        this._recordUsage(prompt, result.content, result.usage);
+        return result.content;
       }
-      return null;
-    } catch (error) {
-      console.error('OpenAI兼容API调用失败:', error.response?.data || error.message);
-      throw new Error('API调用失败: ' + (error.response?.data?.error?.message || error.message));
+      budget = result.suggestedBudget;
     }
+    throw new Error('模型连续三次输出被截断，请减少总结范围或换一个非推理模型');
+  }
+
+  async _requestOnce(prompt, budget) {
+    const response = await axios.post(
+      this.config.api.baseUrl,
+      {
+        model: this.config.api.modelName,
+        messages: [
+          { role: 'system', content: this._systemPrompt() },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: budget,
+        temperature: 0.7
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.api.apiKey}`
+        },
+        timeout: 60000,
+        // 本机环境变量带代理时，axios 会把 https 请求以明文发到 443，
+        // DeepSeek 官方域名直连可用；其它服务商仍走系统代理。
+        ...(/api\.deepseek\.com/i.test(String(this.config.api.baseUrl || '')) ? { proxy: false } : {})
+      }
+    );
+    const choice = response.data?.choices?.[0];
+    const content = choice?.message?.content;
+    if (content && String(content).trim()) {
+      return { ok: true, content, usage: response.data.usage };
+    }
+    // 拿到空正文：要么被 max_tokens 截断（推理吃光预算），要么模型只吐了推理
+    const truncated = choice?.finish_reason === 'length';
+    if (truncated) {
+      // 按已消耗量估下一轮：推理占了多少，正文还得再留一份
+      const used = Number(response.data.usage?.completion_tokens) || budget;
+      return { ok: false, suggestedBudget: Math.min(16000, Math.max(budget * 2, used + 1500)) };
+    }
+    throw new Error('模型没有返回正文内容，请重试或更换模型');
   }
   async _callClaude(prompt) {
     try {

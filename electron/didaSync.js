@@ -183,6 +183,56 @@ class DidaSync {
     return Array.isArray(res.data) ? res.data : [];
   }
 
+  /**
+   * 拉取账号下的清单列表，供设置页下拉选择推送目标。
+   *
+   * 只读缓存到 Data/dida/projects.json：滴答的清单接口没有增量参数，
+   * 每次都要全量取一遍，缓存下来可以让设置页打开就能显示，
+   * 不必等一次网络往返，也不至于每次进设置都打一次接口。
+   */
+  async listProjects({ force = false } = {}) {
+    const cfg = this.cfg();
+    if (!cfg.token) return { ok: false, error: '请先填写滴答 API 口令' };
+
+    const d = this.dirs();
+    const cacheFile = path.join(d.root, 'projects.json');
+    const cache = readJson(cacheFile, { at: 0, items: [] });
+    const fresh = Date.now() - (cache.at || 0) < 10 * 60000;
+    if (!force && fresh && Array.isArray(cache.items) && cache.items.length) {
+      return { ok: true, items: cache.items, cached: true };
+    }
+
+    try {
+      const res = await axios.get(`${API_BASE}/project`, {
+        headers: { Authorization: `Bearer ${cfg.token}` },
+        timeout: 15000,
+        proxy: false
+      });
+      const rows = Array.isArray(res.data) ? res.data : [];
+      const items = rows
+        .map((p) => ({
+          id: String(p.id || ''),
+          name: String(p.name || '').trim() || '未命名清单',
+          color: p.color || '',
+          // 滴答里「收集箱」是 kind 或 closed 为空的那一类，界面上标一下
+          closed: p.closed === true,
+          kind: p.kind || ''
+        }))
+        .filter((p) => p.id && !p.closed)
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+
+      fs.mkdirSync(d.root, { recursive: true });
+      writeJson(cacheFile, { at: Date.now(), items });
+      return { ok: true, items };
+    } catch (e) {
+      // 网络失败时退回旧缓存，总比设置页一片空白强
+      if (Array.isArray(cache.items) && cache.items.length) {
+        return { ok: true, items: cache.items, cached: true, warning: `清单列表刷新失败，显示上次结果：${e.message || e}` };
+      }
+      return { ok: false, error: `读取清单失败：${e.response?.status || ''} ${e.message || e}`.trim() };
+    }
+  }
+
   /** 把一条滴答专注拆成本地日镜像记录（跨午夜按天切开） */
   normalize(row) {
     const id = String(row.id || '');
@@ -378,11 +428,26 @@ class DidaSync {
           tags: ['LifeLog'],
           isAllDay: false
         };
-        await axios.post(`${API_BASE}/task`, body, {
+        const res = await axios.post(`${API_BASE}/task`, body, {
           headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
           timeout: 15000,
           proxy: false
         });
+        // 这些都是「已经发生完的事」，推进去就该是已完成状态。
+        // 滴答的创建接口只建任务，完成要走单独端点，所以补一刀。
+        // 拿不到 id 也不影响已创建的事实：先记账，别把整轮推送打断。
+        const taskId = res && res.data && (res.data.id || (res.data.task && res.data.task.id));
+        if (taskId) {
+          try {
+            await axios.post(`${API_BASE}/project/${encodeURIComponent(cfg.pushProjectId)}/task/${encodeURIComponent(taskId)}/complete`,
+              {}, { headers: { Authorization: `Bearer ${cfg.token}` }, timeout: 15000, proxy: false });
+          } catch (e) {
+            // 完成失败就记在状态里，任务本身已经建好，重试会造成重复
+            const st0 = this.status();
+            st0.lastError = `任务已创建但标记完成失败：${e.response?.status || ''} ${e.message || e}`.trim();
+            this.writeStatus(st0);
+          }
+        }
         pushed[c.key] = new Date().toISOString();
         writeJson(d.pushed, pushed);
         sent += 1;

@@ -316,9 +316,20 @@
             </div>
           </div>
           <div class="row">
-            <span class="row-label">目标清单 ID<span class="row-desc">留空时推送不会执行</span></span>
+            <span class="row-label">目标清单<span class="row-desc">{{ projectHint }}</span></span>
             <div class="row-control wide">
-              <input type="text" :value="dida.pushProjectId" placeholder="滴答清单项目 ID" spellcheck="false" @change="set('dida.pushProjectId', $event.target.value)">
+              <select
+                class="select"
+                :value="dida.pushProjectId || ''"
+                :disabled="loadingProjects"
+                @change="set('dida.pushProjectId', $event.target.value)"
+              >
+                <option value="">{{ loadingProjects ? '正在读取清单…' : (didaProjects.length ? '请选择要推送到的清单' : '尚未读取到清单') }}</option>
+                <option v-for="p in didaProjects" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" :disabled="loadingProjects" @click="loadProjects(true)">
+                {{ loadingProjects ? '读取中…' : '刷新' }}
+              </button>
             </div>
           </div>
           <div class="row">
@@ -635,12 +646,22 @@ export default {
       categoryError: '',
       mergeSource: '', mergeTarget: '',
       appQuery: '',
-      newRuleApp: '', newRuleTitle: '', newRuleCategory: '工作'
+      newRuleApp: '', newRuleTitle: '', newRuleCategory: '工作',
+      // 滴答清单列表：打开推送设置时按需拉取，不阻塞设置页首屏
+      didaProjects: [],
+      loadingProjects: false,
+      projectError: ''
     };
   },
   watch: {
     activeSection(val) {
       if (val) this.goSection(val);
+    },
+    // 开启推送就顺手把清单拉回来，省得用户再点一次「刷新」
+    'config.dida.pushEnabled': {
+      handler(val) {
+        if (val === true && this.didaOn) this.loadProjects(false);
+      }
     }
   },
   mounted() {
@@ -695,6 +716,14 @@ export default {
       const s = this.didaStat;
       if (!s.lastPushAt) return '尚未推送';
       return `上次 ${this.fmtTime(s.lastPushAt)} · 新增 ${s.lastPushCount || 0} 条`;
+    },
+    /** 目标清单下方的说明：已经选中的显示清单名，没选的说清后果 */
+    projectHint() {
+      if (this.projectError) return this.projectError;
+      const id = this.dida.pushProjectId;
+      if (!id) return '留空时推送不会执行';
+      const hit = this.didaProjects.find(p => p.id === id);
+      return hit ? `已选择：${hit.name}` : '已选择（清单名未读取，点刷新可显示）';
     }
   },
   methods: {
@@ -818,6 +847,10 @@ export default {
     goSection(id) {
       this.section = id;
       this.$nextTick(() => this.scrollTo(id));
+      // 进到滴答分区且已开推送时，顺手把清单列表准备好
+      if (id === 'dida' && this.didaOn && this.dida.pushEnabled === true && !this.didaProjects.length) {
+        this.loadProjects(false);
+      }
     },
     scrollTo(id) {
       const el = this.$el.querySelector(`#sec-${id}`);
@@ -829,7 +862,29 @@ export default {
       const p = n => String(n).padStart(2, '0');
       return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     },
-    syncDida(direction) { this.$emit('dida-sync', direction); }
+    syncDida(direction) { this.$emit('dida-sync', direction); },
+    /** 读取滴答清单列表。force=true 时忽略主进程的 10 分钟缓存 */
+    async loadProjects(force) {
+      if (this.loadingProjects) return;
+      if (!this.dida.token) { this.projectError = '先填写 API 口令才能读取清单'; return; }
+      this.loadingProjects = true;
+      this.projectError = '';
+      try {
+        const { ipcRenderer } = require('electron');
+        const res = await ipcRenderer.invoke('dida-projects', { force: !!force });
+        if (res && res.ok) {
+          this.didaProjects = res.items || [];
+          if (res.warning) this.projectError = res.warning;
+          else if (!this.didaProjects.length) this.projectError = '账号下没有可用清单';
+        } else {
+          this.projectError = (res && res.error) || '读取清单失败';
+        }
+      } catch (e) {
+        this.projectError = `读取清单失败：${e.message || e}`;
+      } finally {
+        this.loadingProjects = false;
+      }
+    }
   }
 };
 </script>
@@ -941,6 +996,14 @@ export default {
 
 .row-control.wide input[type="text"] {
   width: 100%;
+}
+
+/* 清单下拉：需要比普通行控制更宽，否则清单名被截成两三个字 */
+.row-control.wide select {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 240px;
 }
 
 .row-control input[type="text"],

@@ -278,12 +278,17 @@ function createWindow() {
   const display = screen.getPrimaryDisplay();
   const workArea = display.workArea;
 
+  // 默认就用最窄宽度：这是贴在屏幕右侧的一条竖窗，不抢桌面。
+  // 想临时看宽版可以手动拉宽，或按贴边键切换。
+  const DEFAULT_W = 520;
+  const MIN_W = 520;
+
   mainWindow = new BrowserWindow({
-    width: 620,
+    width: DEFAULT_W,
     height: workArea.height,
-    x: workArea.x + workArea.width - 620,
+    x: workArea.x + workArea.width - DEFAULT_W,
     y: workArea.y,
-    minWidth: 520,
+    minWidth: MIN_W,
     minHeight: 600,
     // Windows 下用 .ico 才能在任务栏/Alt+Tab 拿到多尺寸清晰图标
     icon: process.platform === 'win32' ? assetPath('icon.ico') : assetPath('icon.png'),
@@ -771,6 +776,11 @@ ipcMain.handle('get-provider-presets', () => {
 // --- 滴答清单同步插件 ---
 ipcMain.handle('dida-status', () => didaSync.status());
 
+// 设置页选推送目标清单用：返回账号下的清单列表（带 10 分钟缓存）
+ipcMain.handle('dida-projects', async (event, payload) => {
+  return didaSync.listProjects({ force: !!(payload && payload.force) });
+});
+
 ipcMain.handle('dida-sync-now', async (event, payload) => {
   const direction = (payload && payload.direction) || 'pull';
   if (direction === 'push') return didaSync.push({ manual: true });
@@ -992,6 +1002,28 @@ ipcMain.handle('get-recorder-status', () => {
   return activityRecorder.getStatus();
 });
 
+/**
+ * 历史备注候选：写备注时给出以前用过的说法，可直接复用。
+ * 默认只回看最近一年，避免每次翻全量历史。
+ */
+ipcMain.handle('find-note-hints', (event, payload) => {
+  try {
+    const p = payload || {};
+    const to = p.to || analytics.toDateStr(new Date());
+    const days = Math.max(1, Math.min(365, Number(p.days) || 365));
+    const from = p.from || analytics.toDateStr(
+      new Date(new Date(to + 'T00:00:00').getTime() - days * 86400000)
+    );
+    const result = analytics.findNoteHints(
+      storageManager.getDataDir(), p.keyword, from, to,
+      { ...(configManager.getConfig().analysis || {}), app: p.app || '', category: p.category || '' }
+    );
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, error: error.message, hints: [] };
+  }
+});
+
 // 手工补记与编辑共用同一套 15 分钟校验，避免两个入口写出不同口径。
 function manualRecordFromPayload(payload) {
   const p = payload || {};
@@ -1051,11 +1083,31 @@ ipcMain.handle('replace-display-ranges', (event, payload) => {
   const parsed = manualRecordFromPayload(payload?.record);
   if (parsed.error) return { ok: false, error: parsed.error };
   const ranges = payload?.ranges || [];
-  if (!Array.isArray(ranges) || ranges.length > 2 ||
+  // 上限放宽到 200 段：「当天同应用全部同步」会一次覆盖该应用的多个时段。
+  // 相邻区间不能重叠，否则前一次写的标注会被后一次删掉。
+  if (!Array.isArray(ranges) || ranges.length > 200 ||
       payload?.record?.date !== parsed.dateStr) return { ok: false, error: '日期或区间无效' };
   const result = storageManager.replaceDisplayRanges(parsed.dateStr, ranges, parsed.record);
   if (result.success) notifyDataChanged();
   return { ok: result.success, error: result.error };
+});
+
+/**
+ * 把某一天里某个应用的所有时段改成同一分类。
+ * 记录层不可改，所以通过展示层覆盖实现：用户自己写的标注就地改分类，
+ * 自动录制占用的时段写覆盖标注，别的应用不动。
+ */
+ipcMain.handle('recategorize-app-for-day', (event, payload) => {
+  const p = payload || {};
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(p.date || '') ? p.date : analytics.toDateStr(new Date());
+  const app = String(p.app || '').trim();
+  const category = String(p.category || '').trim();
+  if (!app || !category) return { ok: false, error: '缺少应用或分类' };
+  const spans = Array.isArray(p.spans) ? p.spans : [];
+  if (!spans.length) return { ok: false, error: '当天没有找到该应用的其它时段' };
+  const result = storageManager.recategorizeAppForDay(dateStr, app, category, spans, String(p.note || ''));
+  if (result.success) notifyDataChanged();
+  return { ok: result.success, error: result.error, ...result };
 });
 
 ipcMain.handle('flush-recorder', () => {

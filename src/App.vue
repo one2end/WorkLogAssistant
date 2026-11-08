@@ -119,6 +119,7 @@
           @today="goToToday"
           @refresh="onDataChanged"
           @manual-error="showToast($event, 'error')"
+          @manual-success="showToast($event, 'success')"
           @focus-consumed="timelineTarget = null"
           @focus-missed="onFocusMissed"
           @add-category="addCategoryQuick"

@@ -127,24 +127,57 @@ class StorageManager {
       source: rec.source === 'manual' ? 'manual'
         : (rec.source === 'dida' || rec.source === 'uptimer') ? 'imported'
         : 'auto',
+      // src='appcat'：由「当天同应用全部同步」生成的覆盖标注
+      src: rec.src || undefined,
       category: rec.cat || undefined
     };
   }
 
-  /** 读某天全部活动：旧版 JSON + 新版 JSONL，按时间排序 */
+  /**
+   * 读某天全部活动：旧版 JSON + 新版 JSONL，按时间排序。
+   *
+   * 还要合并 iCloud 冲突副本：数据目录放在 iCloud / OneDrive 时，
+   * 同步进程发现同名文件被别处改过，会生成 "2026-11-08 2.jsonl" 这样的副本。
+   * 主文件虽然能读到，但副本里的记录会被漏掉——表现为「那段时间凭空消失了」。
+   * 所以这里把同名前缀的文件一起读进来。
+   */
   _readActivityFile(dateStr) {
     const items = [];
 
     const legacy = this._readJsonFile(this._activityFile(dateStr));
     if (Array.isArray(legacy)) items.push(...legacy);
 
-    const segments = this._readJsonlFile(this._activityJsonlFile(dateStr));
-    segments.forEach((rec, i) => {
-      if (rec && rec.t) items.push(this._fromSegment(rec, i));
-    });
+    let index = 0;
+    for (const file of this._activityFilesOfDay(dateStr)) {
+      const segments = this._readJsonlFile(file);
+      segments.forEach((rec) => {
+        if (rec && rec.t) items.push(this._fromSegment(rec, index++));
+      });
+    }
 
     items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     return items;
+  }
+
+  /**
+   * 某一天的所有活动文件：主文件 + iCloud 冲突副本。
+   * 副本命名形如 "2026-11-08 2.jsonl"（数字后缀），也可能是 "2026-11-08 (1).jsonl"。
+   */
+  _activityFilesOfDay(dateStr) {
+    const main = this._activityJsonlFile(dateStr);
+    const files = [main];
+    try {
+      const dir = path.dirname(main);
+      if (!fs.existsSync(dir)) return files;
+      const base = path.basename(main);
+      for (const name of fs.readdirSync(dir)) {
+        if (name === base) continue;
+        if (!name.startsWith(dateStr)) continue;
+        if (!name.endsWith('.jsonl')) continue;
+        files.push(path.join(dir, name));
+      }
+    } catch (_) { /* 目录读不到就只用主文件 */ }
+    return files;
   }
 
   _readJsonFile(filePath) {
@@ -288,6 +321,9 @@ class StorageManager {
             title: r.title || '',
             platform: r.platform || 'windows',
             ...(r.source === 'manual' ? { source: 'manual' } : {}),
+            // src 用于区分标注来源：'appcat' = 「当天同应用全部同步」生成的覆盖标注，
+            // 下次同步时会被替换掉，不会越叠越多。
+            ...(r.src ? { src: r.src } : {}),
             ...(r.cat ? { cat: r.cat } : {})
           }))
           .join('\n') + '\n';
@@ -460,6 +496,82 @@ class StorageManager {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       writeFileAtomic(file, out.join('\n') + '\n');
       return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * 把某一天里某个应用的所有时段改成同一分类。
+   *
+   * 记录层（自动采样）不可改，所以走「展示层覆盖」的思路：
+   *   · 用户自己为该应用写过的标注 → 就地改分类，保留原备注与时间
+   *   · 上一次同步生成的覆盖标注（src='appcat'）→ 先删掉，避免叠加
+   *   · 自动录制占用的时段 → 写一条新的覆盖标注（优先级最高，自动生效）
+   *   · 其它应用的标注 → 一律不动
+   *
+   * @param {string} dateStr  YYYY-MM-DD
+   * @param {string} app      应用名
+   * @param {string} category 新分类
+   * @param {Array}  spans    该应用当天占用的时段 [{startMin, durationMin}]
+   * @param {string} note     备注（写进覆盖标注）
+   */
+  recategorizeAppForDay(dateStr, app, category, spans, note) {
+    const file = this._activityJsonlFile(dateStr);
+    const target = String(app || '').trim().toLowerCase();
+    if (!target) return { success: false, error: '缺少应用名' };
+
+    const isTarget = (rec) => {
+      const name = String(rec.app || '').trim().toLowerCase();
+      return name === target || (name && target && name.includes(target));
+    };
+
+    try {
+      const out = [];
+      const lines = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
+      let updated = 0;
+      let removedOverlay = 0;
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let rec;
+        try { rec = JSON.parse(line); } catch (_) { out.push(line); continue; }
+        if (StorageManager.layerOf(rec) === 'display' && isTarget(rec)) {
+          if (rec.src === 'appcat') { removedOverlay += 1; continue; }  // 旧覆盖标注，删掉重写
+          // 用户自己写的标注：只改分类，其余保留
+          rec.cat = category;
+          updated += 1;
+          out.push(JSON.stringify(rec));
+          continue;
+        }
+        out.push(line);
+      }
+
+      // 为自动录制占用的时段写覆盖标注
+      const pad = (n) => String(n).padStart(2, '0');
+      let added = 0;
+      for (const span of (spans || [])) {
+        const startMin = Math.max(0, Math.min(1440 - 15, Math.floor((Number(span.startMin) || 0) / 15) * 15));
+        const durMin = Math.max(15, Math.round((Number(span.durationMin) || 15) / 15) * 15);
+        const start = new Date(`${dateStr}T00:00:00`);
+        start.setMinutes(startMin);
+        const end = new Date(start.getTime() + durMin * 60000);
+        out.push(JSON.stringify({
+          t: start.toISOString(),
+          dur: durMin * 60000,
+          kind: 'active',
+          app: String(app),
+          title: note || '',
+          platform: 'windows',
+          source: 'manual',
+          src: 'appcat',
+          cat: category
+        }));
+        added += 1;
+      }
+
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      writeFileAtomic(file, out.join('\n') + '\n');
+      return { success: true, updated, removedOverlay, added };
     } catch (error) {
       return { success: false, error: error.message };
     }

@@ -41,8 +41,27 @@
 
           <label class="seg-field">
             <span>备注</span>
-            <textarea ref="titleInput" v-model="form.note" rows="2" placeholder="这段时间做了什么，可留空" />
+            <textarea ref="titleInput" v-model="form.note" rows="2" placeholder="这段时间做了什么，可留空" @input="onNoteInput" />
+            <div v-if="noteHints.length" class="seg-hints">
+              <span class="seg-hints-label">用过：</span>
+              <button
+                v-for="(h, i) in noteHints"
+                :key="i"
+                type="button"
+                class="seg-hint-chip"
+                :title="`${h.text}（用过 ${h.count} 次）`"
+                @click="form.note = h.text"
+              >{{ h.text }}</button>
+            </div>
           </label>
+        </div>
+
+        <div v-if="showApplyAll" class="seg-applyall">
+          <label class="switch">
+            <input type="checkbox" v-model="applyToAllDay">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+          <span>当天「{{ form.app }}」全部改成「{{ form.category }}」</span>
         </div>
 
         <div class="seg-foot">
@@ -72,7 +91,13 @@ export default {
     categories: { type: Array, default: () => [] },
     categoryLabels: { type: Object, default: () => ({}) },
     deletable: { type: Boolean, default: false },
-    saving: { type: Boolean, default: false }
+    saving: { type: Boolean, default: false },
+    /** 历史备注候选：搜索应用名或关键词即可复用以前的说法 */
+    noteHints: { type: Array, default: () => [] },
+    /** 是否提供「当天同应用全部同步」开关（自动录制的应用才有意义） */
+    showApplyAll: { type: Boolean, default: false },
+    /** 触发编辑的元素：点它不算「点外部」，用于「再点一次关闭」 */
+    anchorEl: { type: Object, default: null }
   },
   emits: ['save', 'delete', 'close', 'add-category'],
   data() {
@@ -82,7 +107,8 @@ export default {
       origin: 'top left',
       addingCategory: false,
       newCategoryName: '',
-      newCategoryColor: '#6f9fe8'
+      newCategoryColor: '#6f9fe8',
+      applyToAllDay: false
     };
   },
   computed: {
@@ -96,15 +122,19 @@ export default {
     }
   },
   watch: {
-    // 已经打开时再点另一个块：必须刷新表单，否则改的是上一段的字段
+    // 已经打开时再点另一个块：必须刷新表单，否则改的是上一段的字段。
+    // 注意：initial.key 在 openSegment 里可能不存在，这里同时监听整个 initial。
     'initial.key'(val) {
       if (!this.open || val === undefined) return;
-      this.form = { ...this.form, ...this.initial };
-      this.$nextTick(() => this.place());
+      this.resetToInitial();
+    },
+    initial() {
+      if (!this.open) return;
+      this.resetToInitial();
     },
     open(val) {
       if (val) {
-        this.form = { ...this.form, ...this.initial };
+        this.resetToInitial();
         this.$nextTick(() => {
           this.place();
           if (this.$refs.titleInput) this.$refs.titleInput.focus();
@@ -119,6 +149,15 @@ export default {
     this.unbindGlobal();
   },
   methods: {
+    resetToInitial() {
+      this.form = { ...this.form, ...this.initial };
+      this.applyToAllDay = false;
+      this.$nextTick(() => this.place());
+    },
+    /** 备注输入时给出历史候选：优先匹配当前应用，其次全局 */
+    onNoteInput() {
+      this.$emit('note-input', this.form.note || '');
+    },
     place() {
       const el = this.$refs.panel;
       const h = el ? el.offsetHeight : 250;
@@ -148,11 +187,13 @@ export default {
     submit() {
       if (this.saving) return;
       this.$emit('save', {
-        app: '手工标注',
+        // 保留原应用名：写死「手工标注」会让这段时间在应用统计里凭空多出一个应用
+        app: (this.form.app || '').trim() || '手工标注',
         category: this.form.category,
         note: (this.form.note || '').trim(),
         startTime: this.form.startTime,
-        durationMin: this.form.durationMin
+        durationMin: this.form.durationMin,
+        applyToAllDay: this.applyToAllDay
       });
     },
     createCategory() {
@@ -167,6 +208,10 @@ export default {
       this.unbindGlobal();
       this._onDown = (ev) => {
         if (this.$refs.panel && this.$refs.panel.contains(ev.target)) return;
+        // 触发编辑的那个元素（卡片/色块）不算「外部」：
+        // 否则再点同一张卡时，pointerdown 先把面板关了，
+        // 随后的 click 又把它打开，看起来像「点不掉」。
+        if (this.anchorEl && this.anchorEl.contains(ev.target)) return;
         this.$emit('close');
       };
       this._onKey = (ev) => {
@@ -396,4 +441,47 @@ export default {
   opacity: 0;
   transform: scale(0.96) translateY(-4px);
 }
+
+/* ---------- 备注候选 ---------- */
+.seg-hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.seg-hints-label {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  flex: none;
+}
+.seg-hint-chip {
+  max-width: 150px;
+  padding: 3px 8px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seg-hint-chip:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* ---------- 当天全部同步 ---------- */
+.seg-applyall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+}
+.seg-applyall .switch { flex: none; }
 </style>

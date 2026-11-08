@@ -76,7 +76,18 @@
       </div>
       <label class="mf full">
         <span>备注</span>
-        <input v-model="manualTitle" type="text" placeholder="这段时间做了什么，可留空">
+        <input v-model="manualTitle" type="text" placeholder="这段时间做了什么，可留空" @input="onManualNoteInput">
+        <div v-if="manualHints.length" class="manual-hints">
+          <span class="manual-hints-label">用过：</span>
+          <button
+            v-for="(h, i) in manualHints"
+            :key="i"
+            type="button"
+            class="manual-hint-chip"
+            :title="`${h.text}（用过 ${h.count} 次）`"
+            @click="manualTitle = h.text"
+          >{{ h.text }}</button>
+        </div>
       </label>
       <div class="manual-actions">
         <span class="manual-hint">最小 15 分钟，按 15 分钟对齐；保存后计入当日记录时长</span>
@@ -151,11 +162,14 @@
               <span class="tl-line" />
             </div>
 
-            <!-- 活动卡片 -->
+            <!-- 活动卡片：整卡可点。
+                 点一次打开编辑器，再点同一张卡关闭它；三点菜单已移除。 -->
             <div
               v-if="b.type === 'activity'"
               class="tl-card"
+              :class="{ 'is-editing': isEditing(b) }"
               :style="{ borderLeftColor: colorOf(b.category), background: cardBg(b.category) }"
+              @click="toggleEditor(b, $event)"
               @contextmenu.prevent.stop="openCtx($event, selectedDate, b)"
             >
               <div class="card-top">
@@ -164,7 +178,6 @@
                 </span>
                 <span class="card-app" :title="cardTitle(b)">{{ cardTitle(b) }}</span>
                 <span class="card-dur"><Icon name="clock" :size="11" /> {{ fmtCN(b.durationMs) }}</span>
-                <button class="card-more" title="编辑或删除这一段" @click.stop="openSegment(b, $event)">⋯</button>
               </div>
               <div v-if="cardNote(b)" class="card-note" :title="cardNote(b)">{{ cardNote(b) }}</div>
               <div class="card-meta">
@@ -313,10 +326,14 @@
       :category-labels="categoryLabels"
       :deletable="editorDeletable"
       :saving="editSaving"
+      :note-hints="noteHints"
+      :show-apply-all="canApplyAllDay"
+      :anchor-el="editorAnchorEl"
       @save="saveSegment"
       @delete="deleteSegment"
       @close="closeSegment"
       @add-category="createCategoryFromEditor"
+      @note-input="onNoteInput"
     />
   </div>
 </template>
@@ -370,7 +387,7 @@ export default {
     theme: { type: String, default: 'dark' }
   },
   emits: ['update:selectedDate', 'shift', 'today', 'refresh',
-    'manual-error', 'focus-consumed', 'focus-missed', 'add-category'],
+    'manual-error', 'manual-success', 'focus-consumed', 'focus-missed', 'add-category'],
   data() {
     return {
       // mode 同时表达「视图」和「层」：timeline/calendar 是展示层，record 是只读事实层。
@@ -400,16 +417,22 @@ export default {
       // 统一的分段编辑器（贴近被点的块弹出）
       editorOpen: false,
       editorAnchor: null,
+      editorAnchorEl: null,
       editorDeletable: false,
       editorTarget: null,
-      editorForm: { range: '', startTime: '00:00', durationMin: 15, app: '', category: '其他', note: '' },
+      editorForm: { key: '', range: '', startTime: '00:00', durationMin: 15, app: '', category: '其他', note: '' },
       editSaving: false,
+      // 备注候选：历史用过的说法，可直接复用
+      noteHints: [],
+      noteHintSource: { app: '', date: '' },
       highlightMin: null,
       manualOpen: false,
       manualTime: '09:00',
       manualDuration: 30,
       manualTitle: '',
       manualCategory: '其他',
+      // 补记备注的历史候选
+      manualHints: [],
       addingManualCategory: false,
       newManualCategory: '',
       newManualCategoryColor: '#6f9fe8',
@@ -440,6 +463,20 @@ export default {
     },
     categoryLabels() {
       return Object.fromEntries(this.categories.map(key => [key, this.categoryLabel(key)]));
+    },
+    /**
+     * 「当天同应用全部同步」只在自动录制的应用上有意义：
+     * 手工标注本来就是一条一条的，同步反而会覆盖掉别的标注。
+     */
+    canApplyAllDay() {
+      const b = this.editorTarget || {};
+      if (!b || b.isNew) return false;
+      const app = (this.editorForm && this.editorForm.app) || '';
+      if (!app || app === '手工标注') return false;
+      const date = b.date || this.selectedDate;
+      // 当天这个应用散落在多处时才提供同步；只出现一处就没有「全部」可言
+      const spans = this.appSpansOfDay(date, app);
+      return spans.length > 1 || (spans.length === 1 && spans[0].durationMin > 15);
     },
     todayStr() {
       const n = new Date();
@@ -1059,7 +1096,8 @@ export default {
       const onUp = async () => {
         this.endDrag();
         if (!moved) {
-          this.openSegment(this.blockOf(date, b), { currentTarget: el });
+          // 点一下打开编辑器，再点同一块关闭它
+          this.toggleEditor(this.blockOf(date, b), { currentTarget: el });
           return;
         }
         if (targetStart === originStart) return;
@@ -1167,6 +1205,25 @@ export default {
         focusId: b.focusId || null
       };
     },
+    /**
+     * 点一下打开编辑器，再点同一项就关闭它。
+     * 点别处关闭由 SegmentEditor 自己的「点外部关闭」处理，这里只管「同一项再点一次」。
+     */
+    toggleEditor(b, ev) {
+      if (this.editorOpen && this.isEditing(b)) {
+        this.closeSegment();
+        return;
+      }
+      this.openSegment(b, ev);
+    },
+    /** 当前编辑器是不是正在编辑这一块 */
+    isEditing(b) {
+      const t = this.editorTarget;
+      if (!t || !b) return false;
+      const sameKey = !!(t.key && b.key && t.key === b.key);
+      const sameRange = !sameKey && t.startMin === b.startMin && t.endMin === b.endMin;
+      return sameKey || sameRange;
+    },
     /** 打开编辑器：浮层贴在触发块旁边，而不是整页居中弹窗 */
     openSegment(b, ev) {
       if (!b || b.type !== 'activity') return;
@@ -1178,25 +1235,36 @@ export default {
       this.editorAnchor = rect
         ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom }
         : null;
+      // 记住触发元素：再点同一张卡时，编辑器的「点外部关闭」要放过它
+      this.editorAnchorEl = el || null;
       // 删除按钮始终可见（红色高亮），记录层的段点下去会解释为什么不能删，
       // 比「按钮凭空消失」更容易理解，也不破坏记录层只读约束。
       this.editorDeletable = !b.isNew;
       this.editorTarget = { ...b, date: b.date || this.selectedDate };
       this.editorForm = {
+        key: b.key || `${b.date || this.selectedDate}-${b.startMin}`,
         range: `${this.clock(b.startMin)} – ${this.clock(b.endMin)}`,
         startTime: this.clock(b.startMin),
         durationMin: Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15),
-        app: '手工标注',
+        // 保留原应用名：写死「手工标注」会让这段时间在应用统计里凭空多出一个应用
+        app: b.app || '手工标注',
         category: b.category || '其他',
         note: b.isNew ? '' : this.entryRemark(b)
       };
       this.editorOpen = true;
+      // 打开即给出该应用/分类的常用备注，省得每次从零写
+      this.onNoteInput('');
     },
     closeSegment() {
       this.editorOpen = false;
       this.editorTarget = null;
+      this.editorAnchorEl = null;
+      this.noteHints = [];
     },
-    /** 保存 = 写一条人工标注覆盖这段（优先级最高） */
+    /**
+     * 保存 = 写一条人工标注覆盖这段（优先级最高）。
+     * 勾了「当天全部」时，把当天该应用的所有时段逐段覆盖成同一个分类。
+     */
     async saveSegment(payload) {
       if (this.editSaving) return;
       this.editSaving = true;
@@ -1204,13 +1272,13 @@ export default {
         const b = this.editorTarget || {};
         // 块属于哪一天就用哪一天：日历会同时显示好几天，不能用「当前选中日期」
         const date = b.date || this.selectedDate;
+        const toIso = (min) => {
+          const d = new Date(`${date}T00:00:00`);
+          d.setMinutes(min);
+          return d.toISOString();
+        };
         let ranges = [];
         if (b.startMin !== undefined && b.manual && !b.isNew) {
-          const toIso = (min) => {
-            const d = new Date(`${date}T00:00:00`);
-            d.setMinutes(min);
-            return d.toISOString();
-          };
           ranges = [{ start: toIso(b.startMin), end: toIso(b.endMin) }];
         }
         const record = {
@@ -1221,6 +1289,32 @@ export default {
           title: payload.note,
           category: payload.category
         };
+
+        // 当天同应用全部同步：逐段写覆盖标注，不去改记录层的原始采样
+        if (payload.applyToAllDay && payload.app) {
+          const spans = this.appSpansOfDay(date, payload.app);
+          if (!spans.length) {
+            this.$emit('manual-error', `当天没有找到「${payload.app}」的其它时段`);
+            return;
+          }
+          const res = await ipcRenderer.invoke('recategorize-app-for-day', {
+            date,
+            app: payload.app,
+            category: payload.category,
+            note: payload.note,
+            spans: spans.map(s => ({ startMin: s.startMin, durationMin: s.durationMin }))
+          });
+          if (!res || !res.ok) {
+            this.$emit('manual-error', (res && res.error) || '同步失败');
+            return;
+          }
+          this.$emit('manual-success',
+            `已把当天「${payload.app}」的 ${spans.length} 段改成「${payload.category}」`);
+          this.closeSegment();
+          await this.refreshAfterWrite();
+          return;
+        }
+
         const res = ranges.length
           ? await ipcRenderer.invoke('replace-display-ranges', { ranges, record })
           : await ipcRenderer.invoke('add-manual-record', record);
@@ -1233,6 +1327,93 @@ export default {
       } finally {
         this.editSaving = false;
       }
+    },
+    /**
+     * 当天某个应用占用的所有时段（15 分钟格口径，按连续段合并）。
+     * 时间轴视图用 report.slots；日历视图里 report 只是当前选中日，
+     * 所以改用日历自己的 blocks（它带 date，能定位到具体那一天）。
+     */
+    appSpansOfDay(date, app) {
+      const spans = [];
+      let cur = null;
+      const push = (startMin, endMin) => {
+        if (!cur) cur = { startMin, endMin };
+        else cur.endMin = endMin;
+      };
+      const flush = () => { if (cur) { spans.push(cur); cur = null; } };
+
+      const inCalendar = this.mode === 'calendar';
+      const day = inCalendar ? this.calDays.find(d => d.date === date) : null;
+      const items = day
+        ? day.blocks.map(b => ({ startMin: b.startMin, endMin: b.endMin, app: b.app }))
+        : ((this.report && this.report.slots) || [])
+          .filter(s => s.filledMin > 0)
+          .map(s => ({ startMin: s.startMin, endMin: s.startMin + 15, app: s.app }));
+
+      // 按时间排序后再合并连续段，否则同一应用的多个区间会连成一大段
+      const owned = items
+        .filter(x => x.app === app)
+        .sort((a, b) => a.startMin - b.startMin);
+      for (const x of owned) {
+        if (cur && x.startMin !== cur.endMin) flush();
+        push(x.startMin, x.endMin);
+      }
+      flush();
+
+      return spans
+        .map(s => ({ startMin: s.startMin, endMin: s.endMin, durationMin: s.endMin - s.startMin }))
+        .filter(s => s.durationMin >= 15);
+    },
+    /**
+     * 当天这个应用一共占了几格。
+     * 用格子数而不是段数：一段 2 小时的连续占用也算多格，
+     * 但「当天全部同步」只有在它散落在多处时才值得提供。
+     */
+    appSlotCountOfDay(app) {
+      const slots = (this.report && this.report.slots) || [];
+      return slots.filter(s => s.app === app && s.filledMin > 0).length;
+    },
+    /**
+     * 备注候选：随输入实时检索历史用过的说法。
+     * 关键词为空时返回「当前应用 + 当前分类」的常用说法，
+     * 输入关键词后（如一个人名）转为跨应用检索。
+     */
+    /** 补记面板的备注候选：随输入实时检索历史用过的说法 */
+    async onManualNoteInput(keyword) {
+      this._manualHintSeq = (this._manualHintSeq || 0) + 1;
+      const seq = this._manualHintSeq;
+      try {
+        const res = await ipcRenderer.invoke('find-note-hints', { keyword: String(keyword || '').trim() });
+        if (!res || !res.ok) return;
+        if (seq !== this._manualHintSeq) return;
+        this.manualHints = (res.hints || []).slice(0, 6);
+      } catch (_) { /* 检索失败不影响手动输入 */ }
+    },
+    async onNoteInput(keyword) {
+      const app = (this.editorForm && this.editorForm.app) || '';
+      const category = (this.editorForm && this.editorForm.category) || '';
+      const src = this.noteHintSource;
+      // 应用或分类变了要重新检索，不能沿用上一次的结果
+      if (src.app !== app || src.category !== category) {
+        src.app = app;
+        src.category = category;
+        this.noteHints = [];
+      }
+      const kw = String(keyword || '').trim();
+      // 用请求序号判断新旧，而不是比对输入框内容：
+      // 打开编辑器时备注已预填了窗口标题，与传入的空关键词并不相等。
+      this._hintSeq = (this._hintSeq || 0) + 1;
+      const seq = this._hintSeq;
+      try {
+        const res = await ipcRenderer.invoke('find-note-hints', {
+          keyword: kw,
+          app: kw ? '' : app,
+          category: kw ? '' : category
+        });
+        if (!res || !res.ok) return;
+        if (seq !== this._hintSeq) return;   // 已有更新的请求，丢弃这次结果
+        this.noteHints = (res.hints || []).slice(0, 6);
+      } catch (_) { /* 检索失败不影响手动输入 */ }
     },
     async deleteSegment() {
       const b = this.editorTarget;
@@ -1432,6 +1613,7 @@ export default {
         const now = new Date();
         const m = Math.floor(now.getMinutes() / 5) * 5;
         this.manualTime = `${this.pad(now.getHours())}:${this.pad(m)}`;
+        this.onManualNoteInput('');
         this.$nextTick(() => this.scrollTop());
       }
     },
@@ -1459,8 +1641,10 @@ export default {
       this.manualTitle = '';
       this.manualCategory = '其他';
       this.manualTime = this.clock(Math.min(1439, b.startMin));
-      this.manualDuration = Math.max(1, Math.min(1440, Math.round(b.durationMin)));
+      // 空档按 15 分钟对齐：补记时长必须与格口径一致
+      this.manualDuration = Math.max(15, Math.round((b.durationMin || 15) / 15) * 15);
       this.manualOpen = true;
+      this.onManualNoteInput('');
       this.$nextTick(() => this.scrollTop());
     },
     async submitManual() {
@@ -1736,24 +1920,9 @@ export default {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
-/* 三点按钮是时间轴卡片唯一的编辑入口，得让人一眼看见 */
-.card-more {
-  flex: none;
-  width: 28px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--r-xs);
-  font-size: 18px;
-  line-height: 1;
-  letter-spacing: 1px;
-  color: var(--text-tertiary);
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
-}
-.card-more:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+/* 正在编辑的卡片：给出明确反馈，让人知道「再点一下会关掉」 */
+.tl-card.is-editing {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .card-note {
   overflow: hidden;
@@ -2275,4 +2444,35 @@ export default {
 }
 .empty-title { font-size: var(--fs-14); color: var(--text-secondary); }
 .empty-desc { font-size: var(--fs-11); }
+
+/* ---------- 补记备注候选 ---------- */
+.manual-hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.manual-hints-label {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  flex: none;
+}
+.manual-hint-chip {
+  max-width: 160px;
+  padding: 3px 8px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.manual-hint-chip:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+}
 </style>

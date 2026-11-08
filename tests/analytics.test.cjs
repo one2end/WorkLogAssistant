@@ -48,13 +48,56 @@ test('recorded time includes life and sleep while effective work remains separat
 
 test('coverage starts at midnight and counts populated 15 minute slots', t => {
   const date = '2026-11-07';
-  const dir = fixture(t, [{ t: new Date(`${date}T00:04:00`).toISOString(), dur: 10 * 60000,
+  // 自动录制占满一整格才算「这一格有记录」：
+  // 打开软件十分钟就关掉，那一格仍是空的，可以手工补记。
+  const dir = fixture(t, [{ t: new Date(`${date}T00:00:00`).toISOString(), dur: 15 * 60000,
     app: 'chrome', title: 'Early activity' }], date);
   const report = analytics.buildDayReport(dir, date);
   assert.equal(report.stats.coveredSlots, 1);
   assert.equal(report.stats.elapsedSlots, 96);
   assert.equal(report.stats.coverage, 1 / 96);
-  assert.equal(report.slots[0].filledMin, 10);
+  assert.equal(report.slots[0].filledMin, 15);
+});
+
+test('a short auto sample leaves the slot open for manual annotation', t => {
+  const date = '2026-11-07';
+  const dir = fixture(t, [{ t: new Date(`${date}T00:04:00`).toISOString(), dur: 3 * 60000,
+    app: 'chrome', title: 'Early activity' }], date);
+  const report = analytics.buildDayReport(dir, date);
+  assert.equal(report.stats.coveredSlots, 0, '三分钟的采样不算这一格已记录');
+  assert.equal(report.slots[0].filledMin, 0);
+  assert.ok(report.stats.blankSlotCount > 0, '这格应算空白，可以补记');
+});
+
+/*
+ * 回归：曾经要求自动录制占满整格（100%）才算已记录。
+ * 但真实录制永远凑不满——切应用、游戏加载、采样间隔都会留几秒空隙，
+ * 结果是一小时游戏四格覆盖 51.7% / 94.1% / 97.8% / 74.2%，全部判成空白，
+ * 表现为「一直在玩，一分钟都没记上」。
+ * 现在的规则是占满 60%（9 分钟）即可，这几条覆盖真实取值。
+ */
+test('a nearly-full auto slot counts even with a few seconds of gap', t => {
+  const date = '2026-11-07';
+  const dir = fixture(t, [
+    // 14 分钟连续停留：模拟切换应用留下的 1 分钟空隙
+    { t: new Date(`${date}T10:00:00`).toISOString(), dur: 14 * 60000, app: 'game', title: 'Match' }
+  ], date);
+  const report = analytics.buildDayReport(dir, date);
+  const slot = report.slots.find(s => s.startMin === 600);
+  assert.equal(slot.filledMin, 15, '覆盖 93% 应算已记录');
+  assert.equal(report.stats.coveredSlots, 1);
+});
+
+test('an auto slot below the fill ratio stays blank', t => {
+  const date = '2026-11-07';
+  const dir = fixture(t, [
+    // 8 分钟：不足九分钟，仍应留作空白
+    { t: new Date(`${date}T10:00:00`).toISOString(), dur: 8 * 60000, app: 'game', title: 'Match' }
+  ], date);
+  const report = analytics.buildDayReport(dir, date);
+  const slot = report.slots.find(s => s.startMin === 600);
+  assert.equal(slot.filledMin, 0, '覆盖 53% 不算已记录');
+  assert.equal(slot.sampledMin, 8, '但采样值仍保留，时间轴上要能看到');
 });
 
 test('custom manual category remains visible in time slots and composition', t => {

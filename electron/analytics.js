@@ -20,6 +20,19 @@ const path = require('path');
 // 常量与默认参数
 // ---------------------------------------------------------------------------
 
+/**
+ * 自动录制要多满才把一格算成「已记录」。
+ *
+ * 为什么不是 1.0：真实录制永远凑不满整格。切应用、游戏加载、
+ * 采样间隔、锁屏边界都会留几秒空隙，实测一段连续一小时游戏，
+ * 四格覆盖率是 51.7% / 94.1% / 97.8% / 74.2%——按 100% 判会全部落空，
+ * 用户看到的就是「一直在玩，却一分钟都没记上」。
+ *
+ * 0.6（9 分钟）的好处：打开软件瞟几秒、几分钟的零碎停留仍然不算，
+ * 那几格依然可以手工补记；而一段真正坐下来的时间能正常落格。
+ */
+const AUTO_SLOT_FILL_RATIO = 0.6;
+
 const DEFAULT_OPTIONS = {
   // 采样间隔（毫秒）。仅用于给「当日最后一条」这类无后继记录兜底
   sampleGapMs: 60 * 1000,
@@ -94,6 +107,21 @@ const DEFAULT_CATEGORY_RULES = [
     titles: ['bilibili', 'youtube', '网易云音乐', '哔哩哔哩']
   },
   {
+    // 游戏单独成类，不并进「影音娱乐」：
+    // 玩游戏和看视频在「今天过得怎么样」这件事上完全是两回事，
+    // 混在一起看统计会得出错误结论。也避免落到「其他」里被当成未归类。
+    //
+    // 只列确定的游戏进程。javaw（通用 Java 进程）、tencentdl（下载器）
+    // 这类会误伤其他软件的名字不收——宁可不认，也不要给错标签。
+    name: '游戏',
+    apps: ['league of legends', 'leagueclientux', 'leagueclient', 'riotclientservices',
+      'valorant', 'valorant-win64-shipping', 'genshinimpact', 'yuanshen',
+      'starrail', 'cs2', 'csgo', 'dota2', 'pubg', 'apex_legends',
+      'overwatch', 'minecraft', 'robloxplayerbeta', 'gta5', 'rdr2', 'eldenring',
+      'hoyoplay', 'battle.net', 'ace-helper'],
+    titles: ['league of legends', 'valorant', '原神', '崩坏：星穹铁道']
+  },
+  {
     name: '文件系统',
     apps: ['explorer', 'everything', 'totalcmd'],
     titles: []
@@ -126,7 +154,7 @@ const SIMPLE_GROUPS = [
   ['工作', ['沟通协作', '文档写作', '开发编码', '任务与效率', 'AI 助手', '文件系统', '系统工具', '浏览检索']],
   ['学习', ['学习', '阅读']],
   ['生活', ['生活事务']],
-  ['娱乐', ['影音娱乐']],
+  ['娱乐', ['影音娱乐', '游戏']],
   ['睡眠', ['睡眠']],
   ['专注', ['专注']],
   ['其他', ['其他', '空档']]
@@ -256,11 +284,26 @@ function readDayRaw(dataDir, dateStr) {
   const legacy = safeReadJson(path.join(dataDir, 'activities', `${dateStr}.json`), []);
   if (Array.isArray(legacy)) items.push(...legacy);
 
-  const jsonlPath = path.join(dataDir, 'activities', `${dateStr}.jsonl`);
+  // iCloud 冲突副本：数据目录在同步盘里时，同名文件被别处改过会生成
+  // "2026-11-08 2.jsonl" 这样的副本。只读主文件的话，那部分记录会凭空消失。
+  const actDir = path.join(dataDir, 'activities');
+  const base = `${dateStr}.jsonl`;
+  let files = [path.join(actDir, base)];
   try {
-    if (fs.existsSync(jsonlPath)) {
+    if (fs.existsSync(actDir)) {
+      for (const name of fs.readdirSync(actDir)) {
+        if (name === base || !name.endsWith('.jsonl')) continue;
+        if (!name.startsWith(dateStr)) continue;
+        files.push(path.join(actDir, name));
+      }
+    }
+  } catch (_) { /* 目录读不到就只用主文件 */ }
+
+  let index = 0;
+  for (const jsonlPath of files) {
+    try {
+      if (!fs.existsSync(jsonlPath)) continue;
       const raw = fs.readFileSync(jsonlPath, 'utf8');
-      let i = 0;
       for (const line of raw.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -268,7 +311,7 @@ function readDayRaw(dataDir, dateStr) {
           const rec = JSON.parse(trimmed);
           if (!rec || !rec.t) continue;
           items.push({
-            id: `${rec.t}#${i++}`,
+            id: `${rec.t}#${index++}`,
             timestamp: rec.t,
             processName: rec.app,
             windowTitle: rec.title || '',
@@ -284,8 +327,8 @@ function readDayRaw(dataDir, dateStr) {
           });
         } catch (e) { /* 单行损坏跳过 */ }
       }
-    }
-  } catch (e) { /* ignore */ }
+    } catch (e) { /* ignore */ }
+  }
 
   items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   return items;
@@ -623,9 +666,39 @@ function buildSlots(atoms, dateStr, options = {}) {
   for (let i = 0; i < Math.ceil(1440 / slotMin); i += 1) {
     slots.push({
       index: i, startMin: i * slotMin, ms: 0,
-      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, noteMs: {}, focusMs: {}
+      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, noteMs: {}, focusMs: {},
+      // 有效占用（毫秒）：决定这一格算不算「已记录」
+      substantiveMs: 0,
+      // 自动录制在该格里的占用：只有占满整格才算数
+      autoMs: 0
     });
   }
+
+  /**
+   * 一格要不要算「有记录」，取决于这一格有没有实质占用。
+   *
+   * 问题是自动录制：打开一个软件一秒、扫一眼、关掉，会在某个 15 分钟格里
+   * 留下十几秒的采样。如果「有采样就算这一格有记录」，
+   * 那用户看到的是「这 15 分钟我记过了」，可实际上什么都没做，
+   * 于是那一格永远轮不到手工补记——而那正是最该补的地方。
+   *
+   * 规则（按来源分层）：
+   *   · 专注（focus）      ：整格都算，这是用户明确声明过的
+   *   · 手工标注（manual） ：整格都算，用户自己填的
+   *   · 自动录制（auto）    ：占满一定比例就算「有记录」
+   *   · 导入（imported）   ：同自动录制
+   *
+   * 关于那个「一定比例」——之前要求 100% 占满，是错的。
+   * 真实录制永远凑不满整格：切换应用、游戏加载画面、采样间隔、锁屏边界
+   * 都会留几秒到几十秒的空隙。实测玩了一小时游戏，四格覆盖分别是
+   * 51.7% / 94.1% / 97.8% / 74.2%，按 100% 判全部落空——
+   * 用户看到的就是「一直在玩，但一分钟都没记上」。
+   * 现在按 60%（9 分钟）判：几秒钟的窥探仍然不算，
+   * 但一段真正的停留能正常落格。
+   */
+  const autoThresholdMs = Number.isFinite(options.autoSlotThresholdMs)
+    ? options.autoSlotThresholdMs
+    : slotMs * AUTO_SLOT_FILL_RATIO;
 
   for (const a of atoms) {
     if (a.kind === 'idle') continue;
@@ -643,10 +716,17 @@ function buildSlots(atoms, dateStr, options = {}) {
       const isCustom = (options.customCategories || []).some(c => (c.key || c.name) === a.category);
       const cat = (isCustom || a.source === 'manual') && a.category && !CAT_TO_GROUP[a.category]
         ? a.category : simpleCategory(a.category || '其他');
-      slot.ms += segEnd - cur;
+      const segMs = segEnd - cur;
+      slot.ms += segMs;
       slot.catMs[cat] = (slot.catMs[cat] || 0) + mins;
       slot.appMs[a.app] = (slot.appMs[a.app] || 0) + mins;
       slot.layerMs[a.source] = (slot.layerMs[a.source] || 0) + mins;
+      if (a.source === 'focus' || a.source === 'manual') {
+        slot.substantiveMs += segMs;
+      } else {
+        // 自动录制：累计占用要达到阈值，这一格才算「有记录」
+        slot.autoMs += segMs;
+      }
       const t = (a.title || '').trim();
       if (t) slot.titleMs[t] = (slot.titleMs[t] || 0) + mins;
       const note = (a.note || '').trim();
@@ -657,6 +737,10 @@ function buildSlots(atoms, dateStr, options = {}) {
   }
 
   return slots.map((slot) => {
+    // 自动录制累计达到阈值 → 整格算满；否则维持 0（视为空白）
+    if (slot.autoMs >= autoThresholdMs && slot.substantiveMs < slotMs) {
+      slot.substantiveMs = slotMs;
+    }
     const top = Object.entries(slot.catMs).sort((x, y) => y[1] - x[1])[0];
     const app = Object.entries(slot.appMs).sort((x, y) => y[1] - x[1])[0];
     const layer = Object.entries(slot.layerMs).sort((x, y) => y[1] - x[1])[0];
@@ -667,7 +751,12 @@ function buildSlots(atoms, dateStr, options = {}) {
       index: slot.index,
       startMin: slot.startMin,
       endMin: Math.min(1440, slot.startMin + slotMin),
-      filledMin: Math.round(slot.ms / 60000),
+      // filledMin 是「有效占用」：
+      //   专注/手工标注 → 有多少算多少（但专注独占的格算满）
+      //   自动录制     → 累计占用达到整格才算数，否则这格是空的、可以手工补记
+      filledMin: Math.min(slotMin, Math.round(slot.substantiveMs / 60000)),
+      // sampledMin 是「采样占用」（含自动录制的零碎占用），只用于展示
+      sampledMin: Math.round(slot.ms / 60000),
       category: top ? top[0] : null,
       app: app ? app[0] : null,
       layer: layer ? layer[0] : null,
@@ -955,6 +1044,55 @@ function buildDayReport(dataDir, dateStr, options) {
     : slots.length;
   const coveredSlots = slots.slice(0, elapsedSlots).filter(s => s.filledMin > 0).length;
   const slotCoverage = elapsedSlots > 0 ? coveredSlots / elapsedSlots : 0;
+
+  /**
+   * 15 分钟对齐的「当日记录时长」。
+   *
+   * 为什么必须单独算：stats.recordedMs 来自 foldSessions → aggregate，
+   * 它把原子之间的空隙也算进时长（endMs - startMs），因此既不是 15 的倍数，
+   * 也不是「实际有记录的时间」。而 slots 才是真正的 15 分钟格口径。
+   *
+   * 口径定义：一个 15 分钟格只有被「占满」才算一格。
+   * 记录只占 4 分钟的那一格不算满格——否则「21 小时」这种数字没有意义：
+   * 用户看到 21 小时，就会认为剩下 3 小时需要补录，而实际是零碎地占了几百格。
+   * 所以：满格数 = 记录时长 >= 15 分钟的格数；总时长 = 满格数 × 15 分钟。
+   *
+   * 两种「欠账」要分清，不能混：
+   *   · 未满格（partial）：格子里有记录，只是没占满 15 分钟。它不是空白，
+   *     用户点进去能看到已有内容，所以只统计数量，不单独成段。
+   *   · 完全空白（blank）：一格都没有记录。这才是真正的空缺，
+   *     可以集中成一长段，是补录的目标。
+   */
+  const elapsedSlotList = slots.slice(0, elapsedSlots);
+  const slotMinUsed = opts.slotMin || 15;
+  const slotMsUsed = slotMinUsed * 60000;
+  const fullSlots = elapsedSlotList.filter(s => s.filledMin * 60000 >= slotMsUsed).length;
+  const partialSlots = elapsedSlotList.filter(s => s.filledMin > 0 && s.filledMin * 60000 < slotMsUsed).length;
+  const slotFilledMs = fullSlots * slotMsUsed;
+  const blankSlotCount = elapsedSlotList.filter(s => s.filledMin <= 0).length;
+  // 未满格已记录的那部分（记了 4 分钟的那种）
+  const partialMs = elapsedSlotList.reduce(
+    (sum, s) => sum + (s.filledMin > 0 && s.filledMin * 60000 < slotMsUsed ? s.filledMin * 60000 : 0), 0
+  );
+  // 真正的空缺 = 完全空白的格子；未满格不算空白
+  const blankMs = blankSlotCount * slotMsUsed;
+
+  // 连续空白段：只有完全空白的格子才算入，是补录的目标
+  const blankRanges = [];
+  let blankStart = -1;
+  for (let i = 0; i <= elapsedSlotList.length; i += 1) {
+    const empty = i < elapsedSlotList.length && elapsedSlotList[i].filledMin <= 0;
+    if (empty && blankStart < 0) blankStart = i;
+    if (!empty && blankStart >= 0) {
+      blankRanges.push({
+        startMin: blankStart * slotMinUsed,
+        endMin: i * slotMinUsed,
+        durationMin: (i - blankStart) * slotMinUsed
+      });
+      blankStart = -1;
+    }
+  }
+
   if (elapsedSlots - coveredSlots > 0) {
     dataNotes.push(`当天已有 ${elapsedSlots - coveredSlots} 个 15 分钟格尚无记录，可在时间轴补充`);
   }
@@ -976,6 +1114,16 @@ function buildDayReport(dataDir, dateStr, options) {
       coverage: slotCoverage,
       coveredSlots,
       elapsedSlots,
+      // 15 分钟对齐口径：首页「当日记录时长」用这个，必为 15 的倍数
+      slotFilledMs,
+      slotMin: slotMinUsed,
+      fullSlots,
+      partialSlots,
+      partialMs,
+      // 空档：已经过去但没有任何记录的时间，可用于提示「今天还欠多少」
+      blankMs,
+      blankSlotCount,
+      blankRanges,
       firstAt: firstMs ? new Date(firstMs).toISOString() : null,
       lastAt: lastEndMs ? new Date(lastEndMs).toISOString() : null,
       bigGapCount: bigGaps.length
@@ -1181,6 +1329,79 @@ function searchActivities(dataDir, keyword, from, to, options) {
       durationMs: h.durationMs
     }))
   };
+}
+
+/**
+ * 历史备注候选：找出过去用过的说法，供写备注时复用。
+ *
+ * 与 searchActivities 的区别：这里按「文本」聚合，统计同一句话用过几次，
+ * 并优先返回与当前应用、当前分类相关的候选——人写备注是重复劳动，
+ * 「上次写的那句」往往正是现在要的。
+ *
+ * @param {string} keyword  关键词，空则返回该应用/分类的常用说法
+ */
+function findNoteHints(dataDir, keyword, from, to, options = {}) {
+  const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
+  const kw = String(keyword || '').trim().toLowerCase();
+  const appKey = String((options.app || '')).trim().toLowerCase();
+  const categoryKey = String((options.category || '')).trim();
+
+  const raw = readRangeRaw(dataDir, from, to);
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
+  const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))),
+    opts.windowCategoryRules || [], opts.categoryMerges || {});
+
+  const tally = new Map();
+  for (const a of atoms) {
+    const text = String(a.title || '').trim();
+    if (!text || text.length > 120) continue;
+    const lower = text.toLowerCase();
+    if (kw && !lower.includes(kw)) continue;
+    // 应用过滤只在没有关键词时生效：搜「张三」时要能跨应用找到人名
+    if (!kw && appKey && !String(a.app || '').toLowerCase().includes(appKey)) continue;
+
+    const key = text;
+    const hit = tally.get(key) || {
+      text, count: 0, lastAt: 0, apps: new Set(), categories: new Set(), manual: 0
+    };
+    hit.count += 1;
+    hit.lastAt = Math.max(hit.lastAt, a.ms || 0);
+    if (a.app) hit.apps.add(a.app);
+    if (a.category) hit.categories.add(a.category);
+    // 手工写过的备注比自动抓到的窗口标题更值得复用
+    if (a.source === 'manual') hit.manual += 1;
+    tally.set(key, hit);
+  }
+
+  let list = [...tally.values()].map(h => ({
+    text: h.text,
+    count: h.count,
+    manual: h.manual,
+    lastAt: h.lastAt ? new Date(h.lastAt).toISOString() : '',
+    apps: [...h.apps].slice(0, 3),
+    categories: [...h.categories].slice(0, 3)
+  }));
+
+  // 排序：自己写过的备注 > 同一分类/应用的 > 用得多的 > 最近用的
+  list.sort((x, y) => {
+    if (x.manual !== y.manual) return y.manual - x.manual;
+    const sx = (x.categories.includes(categoryKey) ? 2 : 0) + (x.apps.some(a => appKey && a.toLowerCase().includes(appKey)) ? 1 : 0);
+    const sy = (y.categories.includes(categoryKey) ? 2 : 0) + (y.apps.some(a => appKey && a.toLowerCase().includes(appKey)) ? 1 : 0);
+    if (sx !== sy) return sy - sx;
+    if (x.count !== y.count) return y.count - x.count;
+    return String(y.lastAt).localeCompare(String(x.lastAt));
+  });
+
+  // 按应用过滤后一条都没有时，回退到全局候选：
+  // 用户想不起这个应用以前写过什么时，全局候选比空白有用得多。
+  let filtered = list;
+  if (!kw && appKey) {
+    const scoped = list.filter(h => h.apps.some(a => a.toLowerCase().includes(appKey)));
+    if (scoped.length) filtered = scoped;
+  }
+
+  return { keyword, hints: filtered.slice(0, 12) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1422,6 +1643,7 @@ module.exports = {
   buildRangeReport,
   buildDailyTrackedMs,
   searchActivities,
+  findNoteHints,
   renderDayMarkdown,
   renderRangeMarkdown,
   renderPromptContext
