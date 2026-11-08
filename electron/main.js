@@ -765,6 +765,21 @@ app.on('window-all-closed', () => {
   }
 });
 
+/**
+ * 退出前兜底收尾。
+ *
+ * 正常情况下走 quitApp()，它会停掉录制并落盘。但从菜单、系统关机、
+ * 其它进程请求退出这几条路径不一定经过那里，当前片段就会留在内存里。
+ * 这里再关一次是幂等的：已经停了就什么都不做。
+ */
+app.on('before-quit', () => {
+  try {
+    if (activityRecorder && typeof activityRecorder.stop === 'function') {
+      activityRecorder.stop();
+    }
+  } catch (_) { /* 退出路径上不再抛错 */ }
+});
+
 ipcMain.handle('get-config', () => {
   return configManager.getConfig();
 });

@@ -23,7 +23,20 @@ const DEFAULTS = {
   idleThresholdMs: 180000, // 连续 3 分钟无键鼠输入判定为离开
   minSegmentMs: 3000,      // 短于此的片段并入上一段
   flushIntervalMs: 15000,  // 落盘节流
-  flushBufferSize: 30
+  flushBufferSize: 30,
+  /**
+   * 当前片段最长挂多久就必须「封口重开」一次。
+   *
+   * 之前一段只在窗口切走时才关闭并落盘，于是有个要命的副作用：
+   * 一直待在同一个窗口（打两小时游戏、写一下午文档），那几个小时全在内存里，
+   * 一条都没写进文件。此时若应用被杀掉（崩溃、任务管理器结束、断电），
+   * 整段时间直接蒸发——实测丢过两个多小时。
+   *
+   * 现在到点就把当前段关掉、立刻重开一条同应用的新段：
+   * 数据最多落后 5 分钟，而展示层的 foldSessions 会把相邻同应用段合并回一段，
+   * 时间线看起来仍是连续的。
+   */
+  checkpointMs: 5 * 60 * 1000
 };
 
 class ActivityRecorder {
@@ -160,8 +173,16 @@ class ActivityRecorder {
     if (changed || idleChanged) {
       this._closeCurrent(now);
       this._openSegment(sample, now, idleNow);
-    } else {
-      this._cur.lastSeen = now;
+      return;
+    }
+
+    this._cur.lastSeen = now;
+
+    // 长时间不切窗口也要定期封口，否则这段时间只活在内存里，
+    // 应用一旦被强杀就整段丢失（见 checkpointMs 的注释）。
+    if (now - this._cur.start >= opts.checkpointMs) {
+      this._closeCurrent(now);
+      this._openSegment(sample, now, idleNow);
     }
   }
 
