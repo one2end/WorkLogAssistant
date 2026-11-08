@@ -41,11 +41,12 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <span class="pill"><span class="dot"></span> v0.9.0 · Windows 10 / 11</span>
+    <span class="pill"><span class="dot"></span> v0.10.0 · Windows 10 / 11</span>
     <h1>你的一天，<br><span class="accent">值得被记下来</span></h1>
     <p class="lead">
       一个停驻在后台的小工具。自动记录窗口活动、算准每一段停留时间，
       一天切成 96 个 15 分钟格——需要你做的，只是确认那一下。
+      打开就是两件事：今天记了多久，此刻正在记什么。
       记录的不只是工作，还有睡眠和生活。数据全在本地，还能通过 MCP 交给 AI 自己来查。
     </p>
     <div class="cta-row">
@@ -93,8 +94,8 @@
             <path d="M14 2.5V8h5"/><path d="M8.5 13.5h7M8.5 17h4.5"/>
           </svg>
         </div>
-        <h3>AI 汇总</h3>
-        <p>按你设的时段自动生成工作日志。喂给模型的是带真实时长的会话时间线，所以它能算出时间分配。</p>
+        <h3>AI 回顾</h3>
+        <p>把带真实时长的会话时间线交给模型，它能算出时间分配、指出需要核对的时段，而不是复述应用名。</p>
       </div>
 
       <div class="card">
@@ -122,7 +123,7 @@
         <ul class="check-list">
           <li>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5L20 6.5"/></svg>
-            <span>连续 3 分钟没有键鼠输入，判定为离座，从有效工时里剔除</span>
+            <span>连续 3 分钟没有键鼠输入，记为「空档」，不算进有效工时</span>
           </li>
           <li>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5L20 6.5"/></svg>
@@ -225,8 +226,11 @@
   <div class="wrap">
     <div class="sec-head">
       <div class="sec-tag">界面</div>
-      <h2>五套主题，两种天色</h2>
-      <p>白天用浅色，晚上换回深色。所有视图共用同一套设计规范，不会有一块亮一块暗。</p>
+      <h2>五套气质，两种天色</h2>
+      <p>
+        夜航 / 纸本 / 晨雾 / 极光 / 晚霞，各配深浅两版，另有六种强调色可单独调。
+        分类颜色始终按语义走，换肤不会把「工作」变成别的颜色。
+      </p>
     </div>
     <div class="grid" style="grid-template-columns:1fr 1fr;align-items:start">
       <div class="shot">
@@ -234,6 +238,51 @@
       </div>
       <div class="shot">
         <img src="assets/settings.png" alt="LifeLog 设置页主题选择" width="1240" height="1960" loading="lazy">
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-tag">可控</div>
+      <h2>不想要的部分，可以真的关掉</h2>
+      <p>
+        番茄钟、AI、MCP 接口、滴答同步是四个独立插件。关掉不是隐藏入口，
+        而是那个能力彻底不干活——不联网、不调用、不占资源。
+      </p>
+    </div>
+
+    <div class="grid grid-3">
+      <div class="card">
+        <div class="card-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3.2v8.4"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>
+          </svg>
+        </div>
+        <h3>插件各自开关</h3>
+        <p>首页底部一块插件坞，点方块切开关、点齿轮跳到参数。开关状态落在原有配置里，不另存一份。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h16M4 12h16M4 17h10"/>
+          </svg>
+        </div>
+        <h3>采集前就排除</h3>
+        <p>按应用名或窗口标题关键词过滤，命中时<strong>根本不写入</strong>记录，不是先记下来再删掉。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 7.5v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9"/><path d="M9 4.5h6"/><path d="M12 11v4M10 13h4"/>
+          </svg>
+        </div>
+        <h3>滴答清单双向</h3>
+        <p>把已完成的专注读成本地镜像参与统计；也能把确认过的时段写成滴答任务，推过去就是已完成状态。</p>
       </div>
     </div>
   </div>
@@ -267,7 +316,8 @@
     </div>
 
     <p class="dl-note">
-      都在 <a href="https://github.com/one2end/WorkLogAssistant/releases/latest" style="color:var(--brand-1)">GitHub Releases</a> 上，含历史版本。<br>
+      当前安装包为 <strong>v0.9.0</strong>；v0.10.0 的改动已在源码里，构建产物稍后发布。
+      全部版本在 <a href="https://github.com/one2end/WorkLogAssistant/releases" style="color:var(--brand-1)">GitHub Releases</a>。<br>
       数据存在本机 <code style="font-family:var(--mono);font-size:11px">%APPDATA%\worklog-assistant\Data</code>，卸载不会自动删除。
     </p>
   </div>
@@ -286,7 +336,11 @@
         <p>
           不会。记录的数据全部写在本地 JSONL 文件里，程序本身不发起任何上传请求。
           唯一的联网行为是「检查更新」时读一下 GitHub 的 release 信息。
-          只有当你用 AI 摘要功能时，才会把那一小段活动记录发给你自己配置的模型服务商——用不用、用谁的，由你决定。
+          只有当你用 AI 回顾功能时，才会把那一小段活动记录发给你自己配置的模型服务商——用不用、用谁的，由你决定。
+        </p>
+        <p>
+          另外可以在设置里按应用名或窗口标题关键词排除：命中的内容<strong>根本不会被写入</strong>，
+          不是先记下来再删掉。
         </p>
       </details>
 
@@ -336,7 +390,7 @@
 
 <footer>
   <div class="wrap foot-inner">
-    <span>LifeLog · v0.9.0 · 本地运行，数据归你</span>
+    <span>LifeLog · v0.10.0 · 本地运行，数据归你</span>
     <div class="foot-links">
       <a href="https://github.com/one2end/WorkLogAssistant" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/one2end/WorkLogAssistant/releases" target="_blank" rel="noopener">版本历史</a>
