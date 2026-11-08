@@ -40,6 +40,18 @@ const DEFAULT_OPTIONS = {
   maxSegmentMs: 20 * 60 * 1000,
   // 相邻记录间隔超过此值，判定为数据空档（休眠、应用未运行等）
   idleGapMs: 10 * 60 * 1000,
+  /**
+   * 夹在两段「同一件事」中间的短活动，短于此值时被跨过去。
+   *
+   * 实测一天的原始记录：一场 15 分钟的游戏，中间会插进
+   * LeagueClientUx（客户端）、ACE-Helper（反作弊）和切出去看一眼的窗口，
+   * 每段 3–30 秒，加起来不到一分钟，却把整场游戏切断成 8 分钟 + 5 分钟。
+   * 于是「我明明打了两小时游戏」在时间线上是一堆几分钟的碎片。
+   *
+   * 90 秒是分界：几秒钟的客户端闪动、切出去瞄一眼，属于这件事里的间隙；
+   * 而真正离开去看别的东西，往往在两分钟以上，仍然独立成段。
+   */
+  bridgeFragmentMs: 90 * 1000,
   // 时间线中默认隐藏的短会话阈值
   minSessionMs: 60 * 1000,
   // 每个应用最多展示多少个窗口标题
@@ -772,9 +784,40 @@ function buildSlots(atoms, dateStr, options = {}) {
   });
 }
 
+/**
+ * 两段活动算不算「同一件事」。
+ *
+ * 同进程当然算。不同进程也可能算——英雄联盟一场游戏里前后台会轮换
+ * League of Legends（游戏本体）、LeagueClientUx（客户端）、
+ * ACE-Helper（反作弊），三个进程名不同，但都是这场游戏的一部分。
+ *
+ * 兜底分类（「其他」）不参与：那里什么杂项都有，按分类粘合会糊成一团。
+ */
+function isSameThread(a, b) {
+  if (a.app === b.app) return true;
+  if (!a.category || a.category !== b.category) return false;
+  return a.category !== FALLBACK_CATEGORY;
+}
+
 function foldSessions(atoms, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
+  const bridgeMs = Number.isFinite(opts.bridgeFragmentMs) ? opts.bridgeFragmentMs : 90000;
   const sessions = [];
+
+  const absorb = (target, atom) => {
+    target.endMs = atom.ms + Math.max(atom.durationMs, 0);
+    target.durationMs = target.endMs - target.startMs;
+    target.recordCount += 1;
+    if (atom.source === 'manual') target.manualCount += 1;
+    if (atom.app !== target.app) {
+      target.mixedApps = true;
+      target.appMs[atom.app] = (target.appMs[atom.app] || 0) + Math.max(atom.durationMs, 0);
+    }
+    if (atom.title && !target.titles.includes(atom.title)) {
+      target.titles.push(atom.title);
+    }
+    if (atom.durationExact === false) target.hasUncertainty = true;
+  };
 
   for (const atom of atoms) {
     if (atom.durationMs <= 0) continue;
@@ -784,28 +827,67 @@ function foldSessions(atoms, options) {
       && last.app === atom.app
       && (atom.ms - last.endMs) <= Math.max(opts.sampleGapMs * 2, 120000);
 
-    if (mergeable) {
-      last.endMs = atom.ms + Math.max(atom.durationMs, 0);
-      last.durationMs = last.endMs - last.startMs;
-      last.recordCount += 1;
-      if (atom.source === 'manual') last.manualCount += 1;
-      if (atom.title && !last.titles.includes(atom.title)) {
-        last.titles.push(atom.title);
-      }
-      if (atom.durationExact === false) last.hasUncertainty = true;
-    } else {
-      sessions.push({
-        app: atom.app,
-        category: atom.category,
-        startMs: atom.ms,
-        endMs: atom.ms + atom.durationMs,
-        durationMs: atom.durationMs,
-        recordCount: 1,
-        manualCount: atom.source === 'manual' ? 1 : 0,
-        titles: atom.title ? [atom.title] : [],
-        hasUncertainty: atom.durationExact === false
-      });
+    /**
+     * 同分类紧邻也算同一件事。
+     *
+     * 一场英雄联盟里前台会在游戏本体和客户端之间来回跳，一次 20 分钟；
+     * 按进程名分会显示成「15m 游戏 + 24m 客户端」，但对你来说就是打了 39 分钟。
+     * 间隔限制在 1 分钟内，真离开去干别的不会被粘回来。
+     */
+    const sameCategoryAdjacent = last
+      && last.category === atom.category
+      && last.category !== FALLBACK_CATEGORY
+      && (atom.ms - last.endMs) <= Math.max(opts.sampleGapMs, 60000);
+
+    if (mergeable || sameCategoryAdjacent) {
+      absorb(last, atom);
+      continue;
     }
+
+    /**
+     * 跨过一段短碎片把同一件事接上。
+     *
+     * 不加这一步，一场 15 分钟的游戏会显示成「8 分钟 + 5 分钟」两段，
+     * 因为中间插了十几秒的客户端窗口。碎片本身让位，时间由 endMs
+     * 覆盖回来——所以两段之间的几十秒会算给正在做的事，
+     * 这正是「连续做一件事」的实际感受。
+     */
+    const prev = sessions.length >= 2 ? sessions[sessions.length - 2] : null;
+    if (last && prev
+        && last.durationMs <= bridgeMs
+        && (atom.ms - prev.endMs) <= bridgeMs * 2
+        && isSameThread(prev, atom)) {
+      sessions.pop();
+      prev.absorbedCount = (prev.absorbedCount || 0) + 1;
+      absorb(prev, atom);
+      continue;
+    }
+
+    sessions.push({
+      app: atom.app,
+      category: atom.category,
+      startMs: atom.ms,
+      endMs: atom.ms + atom.durationMs,
+      durationMs: atom.durationMs,
+      recordCount: 1,
+      manualCount: atom.source === 'manual' ? 1 : 0,
+      titles: atom.title ? [atom.title] : [],
+      hasUncertainty: atom.durationExact === false,
+      appMs: { [atom.app]: Math.max(atom.durationMs, 0) }
+    });
+  }
+
+  /**
+   * 合并过的会话用「待得最久的那个进程名」作代表。
+   * 一场游戏里客户端和本体轮流在前台，若固定取第一个，
+   * 会出现「49 分钟 LeagueClientUx」这种误导——主体其实是游戏本体。
+   */
+  for (const s of sessions) {
+    if (s.mixedApps && s.appMs) {
+      const top = Object.entries(s.appMs).sort((a, b) => b[1] - a[1])[0];
+      if (top) s.app = top[0];
+    }
+    delete s.appMs;
   }
 
   return sessions.filter(s => s.durationMs > 0);
@@ -1636,6 +1718,7 @@ module.exports = {
   formatDuration,
   buildClassifier,
   resolveCategoryMerge,
+  foldSessions,
   buildIgnoreSet,
   listRecordedApps,
   listRecordedAppsAsync,
