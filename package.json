@@ -1,6 +1,6 @@
 {
   "name": "worklog-assistant",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "LifeLog — 本地优先的人生记录器",
   "main": "electron/main.js",
   "scripts": {
