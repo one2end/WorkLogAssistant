@@ -28,17 +28,14 @@
         <span class="dock-name">{{ p.name }}</span>
         <span class="dock-info" :title="info(p)">{{ info(p) }}</span>
 
-        <!-- 滴答同步：两条通道各自的数据与状态 -->
+        <!-- 滴答单向推送状态 -->
         <template v-if="p.id === 'dida' && on(p)">
           <div class="dock-metrics">
-            <span><b>{{ num(didaStatus.pulledTotal) }}</b>拉取</span>
-            <i />
             <span><b>{{ num(didaStatus.pushedTotal) }}</b>推送</span>
             <i />
-            <span><b>{{ num(didaStatus.todayFocusCount) }}</b>今日</span>
+            <span><b>{{ num(didaStatus.todayPushed) }}</b>今日</span>
           </div>
           <div class="dock-channels">
-            <span :class="{ on: pullOn }">↓ 拉取 {{ pullOn ? '开' : '关' }}</span>
             <span :class="{ on: pushOn }">↑ 推送 {{ pushOn ? '开' : '关' }}</span>
           </div>
         </template>
@@ -83,9 +80,6 @@ export default {
       const d = this.config && this.config.dashboard;
       return !d || d.showPluginDock !== false;
     },
-    pullOn() {
-      return this.onById('dida') && this.config.dida?.pullFocus !== false;
-    },
     pushOn() {
       return this.onById('dida') && this.config.dida?.pushEnabled === true;
     }
@@ -113,11 +107,9 @@ export default {
         return this.on(p) ? `端口 ${(c.bridge && c.bridge.port) || 47821}` : '本地服务已停止';
       }
       if (p.id === 'dida') {
-        if (!this.on(p)) return '拉取与推送均已停用';
+        if (!this.on(p)) return '推送已停用';
         const s = this.didaStatus || {};
-        const today = this.num(s.todayFocusCount);
-        const mins = this.num(s.todayFocusMinutes);
-        return today ? `今日 ${today} 条专注 · ${mins} 分钟` : (s.lastPullAt ? `镜像 ${this.num(s.mirrorRecords)} 条` : '尚未同步');
+        return this.pushOn ? `今日推送 ${this.num(s.todayPushed)} 条` : '推送未开启';
       }
       return p.desc;
     }

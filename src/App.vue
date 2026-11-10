@@ -419,18 +419,14 @@ export default {
       } catch (_) { /* 插件未加载时保持空状态 */ }
     },
 
-    /** 设置页「立即拉取 / 立即推送」：只走主进程通道，推送仍需三重保护 */
-    async syncDida(direction) {
+    /** 设置页单向推送；仍需启用和选择目标清单。 */
+    async syncDida() {
       try {
-        const res = await ipcRenderer.invoke('dida-sync-now', { direction: direction || 'pull' });
-        const r = direction === 'push' ? res : (res && res.pull) || res;
-        const plans = direction === 'push' ? null : res?.plans;
+        const res = await ipcRenderer.invoke('dida-sync-now', { direction: 'push' });
+        const r = res;
         if (r && r.error) this.showToast(r.error, 'error');
-        else if (r && r.skipped && (!plans || plans.error || plans.skipped)) {
-          this.showToast(plans?.error || plans?.reason || r.reason || '该通道未开启', 'error');
-        }
-        else if (direction === 'push') this.showToast(`已推送 ${(r && r.count) || 0} 条`, 'success');
-        else this.showToast(`拉取完成 · 新增 ${(r && r.added) || 0} 条专注 · 计划 ${plans?.count || 0} 项`, 'success');
+        else if (r && r.skipped) this.showToast(r.reason || '推送未开启', 'error');
+        else this.showToast(`已推送 ${(r && r.count) || 0} 条`, 'success');
         await this.loadDidaStatus();
         await this.reloadDate(true);
       } catch (e) {

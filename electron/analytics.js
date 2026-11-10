@@ -55,7 +55,8 @@ const DEFAULT_OPTIONS = {
   // 时间线中默认隐藏的短会话阈值
   minSessionMs: 60 * 1000,
   // 每个应用最多展示多少个窗口标题
-  maxTitlesPerApp: 6
+  maxTitlesPerApp: 6,
+  includeDidaFocus: false
 };
 
 /**
@@ -290,7 +291,7 @@ function listDates(dataDir) {
  * 读某天原始记录。
  * JSONL 片段自带 dur，是精确值；旧版 JSON 只有裸时间戳，需要后续推断。
  */
-function readDayRaw(dataDir, dateStr) {
+function readDayRaw(dataDir, dateStr, includePreviousSpill = true) {
   const items = [];
 
   const legacy = safeReadJson(path.join(dataDir, 'activities', `${dateStr}.json`), []);
@@ -342,6 +343,25 @@ function readDayRaw(dataDir, dateStr) {
         } catch (e) { /* 单行损坏跳过 */ }
       }
     } catch (e) { /* ignore */ }
+  }
+
+  // 旧版写入器把跨日片段整条留在开始日，次日没有对应文件。
+  // 读取时投影越过午夜的部分，不改动同步盘上的历史文件。
+  if (includePreviousSpill) {
+    const midnight = new Date(`${dateStr}T00:00:00`).getTime();
+    if (Number.isFinite(midnight)) {
+      const previous = new Date(midnight);
+      previous.setDate(previous.getDate() - 1);
+      const previousDate = `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}-${String(previous.getDate()).padStart(2, '0')}`;
+      for (const row of readDayRaw(dataDir, previousDate, false)) {
+        const start = new Date(row.timestamp).getTime();
+        const duration = row.durationMs;
+        if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0 || duration > 86400000) continue;
+        if (start >= midnight || start + duration <= midnight) continue;
+        items.push({ ...row, id: `${row.id}:next-day`, timestamp: new Date(midnight).toISOString(),
+          durationMs: Math.min(start + duration - midnight, 86400000) });
+      }
+    }
   }
 
   items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -1164,7 +1184,7 @@ function buildDayReport(dataDir, dateStr, options) {
   const arhatSessions = readArhatSessions(dataDir, dateStr);
   const focusOverrides = safeReadJson(path.join(dataDir, 'arhat', 'overrides', `${dateStr}.json`), []);
   const overrideMap = new Map((Array.isArray(focusOverrides) ? focusOverrides : []).map(o => [String(o.id), o]));
-  const didaSessions = readDidaFocus(dataDir, dateStr).map(f => {
+  const didaSessions = (opts.includeDidaFocus ? readDidaFocus(dataDir, dateStr) : []).map(f => {
     const override = overrideMap.get(`dida:${f.id}`);
     return override ? { ...f, title: override.focusText, note: override.note } : f;
   });

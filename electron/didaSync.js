@@ -396,6 +396,9 @@ class DidaSync {
   /**
    * 拉取《记录》里的生效任务作为只读计划模板。
    *
+   * 已停用（2026-11-10）：计划全部改为本地计划，滴答只负责专注拉取与展示层推送。
+   * 方法保留仅为兼容旧数据与回退，任何新代码都不应再调用它。
+   *
    * 计划与事实必须分层：这里只写 Data/dida/plans/templates.json，绝不写
    * activities/，也不进入 trackedMs。没有显式选择清单时，自动匹配名称为
    * “记录”的清单，兼容前面带 emoji 的命名。
@@ -468,7 +471,10 @@ class DidaSync {
     }
   }
 
-  /** 按需展开某一天的计划实例；只读投影，不落成活动记录。 */
+  /**
+   * 按需展开某一天的计划实例；只读投影，不落成活动记录。
+   * 已停用（2026-11-10）：计划全部本地化，日报告不再合并滴答计划。
+   */
   getPlanForDate(dateStr) {
     const cfg = this.cfg();
     if (!cfg.enabled || cfg.pullPlans === false || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr || '')) return [];
@@ -780,13 +786,8 @@ class DidaSync {
     if (this.timer) return;
     this.timer = setInterval(() => { this.tick().catch(() => {}); }, 60000);
     const cfg = this.cfg();
-    if (cfg.enabled && cfg.autoSyncOnStart && cfg.token) {
-      setTimeout(() => {
-        const jobs = [];
-        if (cfg.pullFocus) jobs.push(this.pull({ manual: false }));
-        if (cfg.pullPlans !== false) jobs.push(this.pullPlans({ manual: false }));
-        Promise.all(jobs).catch(() => {});
-      }, 8000);
+    if (cfg.enabled && cfg.pushEnabled && cfg.pushProjectId && cfg.token && cfg.autoSyncOnStart) {
+      setTimeout(() => { this.push({ manual: false }).catch(() => {}); }, 8000);
     }
   }
 
@@ -804,8 +805,6 @@ class DidaSync {
       return !at || (Date.now() - new Date(at).getTime() >= interval);
     };
     const jobs = [];
-    if (cfg.pullFocus && due(s.lastPullAt, cfg.pullIntervalMin)) jobs.push(this.pull());
-    if (cfg.pullPlans !== false && due(s.lastPlanPullAt, cfg.pullIntervalMin)) jobs.push(this.pullPlans());
     if (cfg.pushEnabled && cfg.pushProjectId && due(s.lastPushAt, cfg.pushIntervalMin)) jobs.push(this.push());
     await Promise.all(jobs);
   }

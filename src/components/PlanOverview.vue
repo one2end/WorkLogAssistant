@@ -3,7 +3,7 @@
     <div class="card-head">
       <div>
         <span class="card-title">今日节奏</span>
-        <span class="head-note">来自滴答《记录》· 按时间与活动大类自动对照</span>
+        <span class="head-note">按时间与实际活动对照 · 点击计划查看时间轴</span>
       </div>
       <span class="plan-count">{{ plan.length }} 段</span>
     </div>
@@ -21,7 +21,9 @@
     <div class="plan-ticks"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
 
     <div class="plan-list">
-      <div v-for="item in visible" :key="item.id" class="plan-row">
+      <div v-for="item in visible" :key="item.id" class="plan-row" role="button" tabindex="0"
+        :aria-label="`查看 ${item.label} 对应的时间轴`"
+        @click="$emit('open', item)" @keydown.enter.prevent="$emit('open', item)" @keydown.space.prevent="$emit('open', item)">
         <span class="plan-time">{{ clock(item.startMin) }}<small>{{ clock(item.endMin) }}</small></span>
         <span class="plan-main">
           <strong>{{ item.label }}</strong>
@@ -41,6 +43,7 @@ import { colorForCategory } from '../styles/palette.js';
 
 export default {
   name: 'PlanOverview',
+  emits: ['open'],
   props: {
     plan: { type: Array, default: () => [] },
     threads: { type: Array, default: () => [] },
@@ -95,7 +98,7 @@ export default {
       return { minutes, dominant, ratio: minutes / Math.max(1, item.durationMin || item.endMin - item.startMin) };
     },
     comparisonOf(item) {
-      const base = `${item.category}${item.repeat ? ' · 重复计划' : ''}`;
+      const base = `${item.category}${item.repeat && item.repeat !== 'none' ? ' · 重复计划' : ''}`;
       if (item.actual) {
         const source = item.actual.source === 'screen' ? '屏幕活动' : '计划确认';
         const detail = `${base} · ${source} ${this.fmtMinutes(item.actual.durationMin)}`;
@@ -138,6 +141,8 @@ export default {
 .plan-ticks { display: flex; justify-content: space-between; margin-top: 3px; color: var(--text-tertiary); font: 9px var(--font-mono); }
 .plan-list { display: grid; margin-top: var(--sp-3); }
 .plan-row { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); padding: 7px 0; border-top: 1px solid var(--border-subtle); }
+.plan-row { cursor: pointer; border-radius: var(--r-sm); }
+.plan-row:hover, .plan-row:focus-visible { background: var(--bg-hover); outline: none; }
 .plan-time { display: flex; flex-direction: column; color: var(--text-secondary); font: var(--fs-11) var(--font-mono); }.plan-time small { color: var(--text-tertiary); font-size: 9px; }
 .plan-main { display: flex; min-width: 0; flex-direction: column; }.plan-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-11); }.plan-main small { color: var(--text-tertiary); font-size: var(--fs-10); }
 .plan-state { padding: 2px 7px; border-radius: 999px; color: var(--text-tertiary); background: var(--bg-inset); font-size: var(--fs-10); white-space: nowrap; }

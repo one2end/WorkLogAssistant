@@ -24,19 +24,16 @@
 
     <!-- 常用视图直接可见，原始记录作为次级入口 -->
     <div class="view-head">
-      <div class="view-switch" role="group" aria-label="时间视图">
-        <button v-for="opt in viewOptions.slice(0, 2)" :key="opt.id" class="view-tab"
+      <div class="view-switch" role="group" aria-label="视图模块">
+        <button v-for="opt in viewOptions.filter(o => o.id !== 'record')" :key="opt.id" class="view-tab"
           :class="{ active: mode === opt.id }" :aria-pressed="mode === opt.id"
           :title="opt.title" @click="setMode(opt.id)">
           <Icon :name="opt.icon" :size="13" />{{ opt.label }}
         </button>
       </div>
       <span class="view-date">{{ dateLabel }}</span>
-      <button class="record-toggle" :class="{ active: mode === 'record' }"
-        :aria-pressed="mode === 'record'" title="查看只读的原始窗口采样"
-        @click="setMode(mode === 'record' ? 'timeline' : 'record')">
-        <Icon name="database" :size="12" />原始记录
-      </button>
+      <button v-if="mode !== 'record'" class="record-link" @click="setMode('record')">查看原始采样</button>
+      <button v-else class="record-link" @click="setMode('timeline')">返回时间轴</button>
       <button
         v-if="mode === 'timeline'"
         class="order-btn"
@@ -48,113 +45,8 @@
       </button>
     </div>
 
-    <!-- 手工补记（记录层是只读事实层，不提供写入入口） -->
-    <div v-if="manualOpen && mode !== 'record'" class="manual-panel">
-      <div class="manual-fields">
-        <label class="mf">
-          <span>开始</span>
-          <input v-model="manualTime" type="time" step="900">
-        </label>
-        <label class="mf narrow">
-          <span>时长(分)</span>
-          <input v-model.number="manualDuration" type="number" min="15" step="15" max="1440">
-        </label>
-      </div>
-      <div class="mf full">
-        <span>分类</span>
-        <div class="manual-categories" role="group" aria-label="分类">
-          <button v-for="c in categories" :key="c" type="button" class="manual-category"
-            :class="{ selected: manualCategory === c }" :aria-pressed="manualCategory === c"
-            :style="{ '--category-color': colorOf(c) }" @click="manualCategory = c">{{ categoryLabel(c) }}</button>
-          <button type="button" class="manual-category" title="新增分类" @click="addingManualCategory = !addingManualCategory">＋</button>
-        </div>
-        <div v-if="addingManualCategory" class="manual-new-category">
-          <input v-model="newManualCategory" type="text" maxlength="16" placeholder="分类名称" aria-label="新分类名称">
-          <input v-model="newManualCategoryColor" type="color" aria-label="新分类颜色">
-          <button class="btn btn-secondary btn-sm" :disabled="!newManualCategory.trim()" @click="createManualCategory">添加</button>
-        </div>
-      </div>
-      <label class="mf full">
-        <span>备注</span>
-        <input v-model="manualTitle" type="text" placeholder="这段时间做了什么，可留空" @input="onManualNoteInput">
-        <div v-if="manualHints.length" class="manual-hints">
-          <span class="manual-hints-label">用过：</span>
-          <button
-            v-for="(h, i) in manualHints"
-            :key="i"
-            type="button"
-            class="manual-hint-chip"
-            :title="`${h.text}（用过 ${h.count} 次）`"
-            @click="manualTitle = h.text"
-          >{{ h.text }}</button>
-        </div>
-      </label>
-      <div class="manual-actions">
-        <span class="manual-hint">最小 15 分钟，按 15 分钟对齐；保存后计入当日记录时长</span>
-        <button class="btn btn-ghost btn-sm" @click="manualOpen = false">取消</button>
-        <button class="btn btn-primary btn-sm" :disabled="savingManual" @click="submitManual">
-          {{ savingManual ? '保存中' : '保存' }}
-        </button>
-      </div>
-    </div>
+    <!-- 计划层只在日历里呈现；时间轴专心做展示层本身 -->
 
-    <section v-if="mode === 'timeline'" class="plan-reference">
-      <div class="plan-reference-head">
-        <div>
-          <span>计划层</span>
-          <em>先安排，确认后才成为事实</em>
-        </div>
-        <button class="btn btn-secondary btn-sm" @click="togglePlanEditor()">
-          {{ planOpen ? '收起' : '＋ 添加计划' }}
-        </button>
-      </div>
-
-      <div v-if="planOpen" class="plan-editor">
-        <div class="manual-fields">
-          <label class="mf"><span>开始</span><input v-model="planTime" type="time" step="900"></label>
-          <label class="mf narrow"><span>时长(分)</span><input v-model.number="planDuration" type="number" min="15" step="15" max="1440"></label>
-          <label class="mf grow"><span>计划内容</span><input v-model="planTitle" type="text" maxlength="100" placeholder="例如：整理周报"></label>
-        </div>
-        <div class="mf full">
-          <span>分类</span>
-          <div class="manual-categories">
-            <button v-for="c in categories" :key="c" type="button" class="manual-category"
-              :class="{ selected: planCategory === c }" :style="{ '--category-color': colorOf(c) }"
-              @click="planCategory = c">{{ categoryLabel(c) }}</button>
-          </div>
-        </div>
-        <div class="manual-actions">
-          <span class="manual-hint">保存后仍是计划，不计入工时</span>
-          <button class="btn btn-ghost btn-sm" @click="closePlanEditor">取消</button>
-          <button class="btn btn-primary btn-sm" :disabled="savingPlan || !planTitle.trim()" @click="submitPlan">
-            {{ savingPlan ? '保存中' : (editingPlanId ? '更新计划' : '保存计划') }}
-          </button>
-        </div>
-      </div>
-
-      <div v-if="report.plan?.length" class="plan-reference-list">
-        <article v-for="item in report.plan" :key="item.id" class="plan-reference-item"
-          :style="{ '--plan-color': colorOf(item.category) }">
-          <span class="plan-range"><b>{{ clock(item.startMin) }}</b><small>{{ clock(item.endMin) }}</small></span>
-          <span class="plan-copy">
-            <strong>{{ item.label }}</strong>
-            <small>{{ categoryLabel(item.category) }} · {{ planSourceLabel(item) }}</small>
-          </span>
-          <span v-if="item.actual" class="plan-fact" :title="item.actual.label">
-            {{ item.actual.source === 'screen' ? '屏幕活动生成' : '已转为事实' }}
-          </span>
-          <span v-else class="plan-actions">
-            <button class="btn btn-primary btn-sm" :disabled="convertingPlanKey === item.planKey" @click="convertPlan(item, 'plan')">按计划记入</button>
-            <button class="btn btn-secondary btn-sm" :disabled="convertingPlanKey === item.planKey || !planEvidence(item)" @click="convertPlan(item, 'screen')">从屏幕活动生成</button>
-          </span>
-          <span v-if="item.source === 'local-plan'" class="plan-local-actions">
-            <button title="编辑本地计划" @click="editLocalPlan(item)">编辑</button>
-            <button title="删除本地计划" @click="removeLocalPlan(item)">删除</button>
-          </span>
-        </article>
-      </div>
-      <div v-else-if="!planOpen" class="plan-empty">当天还没有计划；也可以继续从滴答《记录》同步。</div>
-    </section>
 
     <!-- 记录层：原始采样，只读；按小时分组 + 可筛选，避免一天几百行平铺 -->
     <div v-if="mode === 'record'" class="record-layer">
@@ -253,10 +145,9 @@
 
             <!-- 空闲卡片：整卡可点补记。
                  原先右侧那个圆形 + 会和右下角 FAB 撞在一起，像两个重复按钮。 -->
-            <div v-else class="tl-card is-gap" @click="openManualFor(b)">
-              <span class="gap-mark">?</span>
-              <span class="gap-label">空闲：{{ fmtCN(b.durationMin * 60000) }}</span>
-              <span class="gap-hint">点击补记 ›</span>
+            <div v-else class="tl-card is-gap" :class="{ 'is-short': b.durationMin < 60 }" @click="openManualFor(b, $event)">
+              <span class="gap-label">{{ b.durationMin >= 60 ? '待补充' : '未记录' }} · {{ fmtCN(b.durationMin * 60000) }}</span>
+              <span class="gap-hint">补记 ›</span>
             </div>
           </div>
         </template>
@@ -270,78 +161,29 @@
 
       <!-- 日历：列数随窗口宽度自适应（窄=1 天 / 中=3 天 / 宽=7 天） -->
       <div v-else class="cal-workspace">
-        <aside class="cal-plan-sidebar">
-          <div class="cal-plan-head">
-            <div><strong>计划层</strong><small>{{ selectedDate.slice(5) }}</small></div>
-            <button class="btn btn-secondary btn-sm" @click="togglePlanEditor()">＋</button>
-          </div>
-          <p class="cal-plan-tip">拖到右侧日历；滴答计划拖入后会生成本地副本。</p>
-
-          <div v-if="planOpen" class="plan-editor compact">
-            <label class="mf"><span>日期</span><input v-model="planDate" type="date"></label>
-            <div class="manual-fields">
-              <label class="mf"><span>开始</span><input v-model="planTime" type="time" step="900"></label>
-              <label class="mf narrow"><span>分钟</span><input v-model.number="planDuration" type="number" min="15" step="15" max="1440"></label>
-            </div>
-            <label class="mf"><span>计划内容</span><input v-model="planTitle" type="text" maxlength="100" placeholder="准备做什么"></label>
-            <div class="manual-categories compact-categories">
-              <button v-for="c in categories" :key="c" type="button" class="manual-category"
-                :class="{ selected: planCategory === c }" :style="{ '--category-color': colorOf(c) }"
-                @click="planCategory = c">{{ categoryLabel(c) }}</button>
-            </div>
-            <div class="compact-plan-actions">
-              <button v-if="editingPlanId" class="btn btn-ghost btn-sm danger-text" @click="removeEditingPlan">删除</button>
-              <button class="btn btn-ghost btn-sm" @click="closePlanEditor">取消</button>
-              <button class="btn btn-primary btn-sm" :disabled="savingPlan || !planTitle.trim()" @click="submitPlan">保存</button>
-            </div>
-          </div>
-
-          <div v-if="report.plan?.length" class="cal-plan-pool">
-            <article
-              v-for="item in report.plan"
-              :key="item.id"
-              class="cal-plan-item"
-              :class="{ done: !!item.actual }"
-              :style="{ '--plan-color': colorOf(item.category) }"
-              draggable="true"
-              @dragstart="startPlanNativeDrag($event, item)"
-              @dragend="endPlanNativeDrag"
-              @click="editPlanFromCalendar(item)"
-              @contextmenu.prevent.stop="openPlanCtx($event, selectedDate, item)"
-            >
-              <span class="cal-plan-item-time">{{ clock(item.startMin) }}</span>
-              <span class="cal-plan-item-copy"><strong>{{ item.label }}</strong><small>{{ planSourceLabel(item) }}</small></span>
-              <span class="cal-plan-grip" title="拖到日历">⋮⋮</span>
-            </article>
-          </div>
-          <div v-else-if="!planOpen" class="plan-empty compact-empty">当天没有计划</div>
-        </aside>
-
         <div class="cal-view">
           <div class="cal-head">
             <span>{{ calLabel }}</span>
             <em v-if="calLoading">加载中…</em>
             <span class="cal-span">{{ calSpan }} 天视图</span>
-            <span class="cal-create-mode" role="group" aria-label="拖拽新增类型">
-              <button :class="{ active: calendarDraftType === 'plan' }" @click="calendarDraftType = 'plan'">新增计划</button>
-              <button :class="{ active: calendarDraftType === 'fact' }" @click="calendarDraftType = 'fact'">补事实</button>
-            </span>
+            <label class="cal-control">显示 <select v-model="calendarLayers" aria-label="日历显示内容"><option value="both">计划与实际</option><option value="plan">仅计划</option><option value="actual">仅实际</option></select></label>
+            <span class="cal-drag-tip">点击打开，再点关闭；拖动调整，跨日时可在顶部改结束时间</span>
           </div>
 
         <div class="cal-scroll" ref="calScroll">
-        <div class="cal-grid" :style="{ '--cols': calDays.length }">
+        <div class="cal-grid" :class="{ 'has-lane-heads': calendarLayers === 'both' }" :style="{ '--cols': calDays.length }">
           <!-- 左侧统一的时间刻度 -->
           <div class="cal-ruler">
             <span
               v-for="h in 25"
               :key="'r' + h"
               class="cal-tick"
-              :style="{ top: ((h - 1) / 24 * 100) + '%' }"
+              :style="{ top: ((h - 1) * 96) + 'px' }"
             >{{ pad(h - 1) }}</span>
           </div>
 
           <div
-            v-for="d in calDays"
+            v-for="d in visibleCalDays"
             :key="d.date"
             class="cal-col"
             :class="{ 'is-current': d.date === selectedDate }"
@@ -350,10 +192,14 @@
               <b>{{ d.label }}</b>
               <span>{{ d.num }}</span>
               <em v-if="d.total">{{ d.total }}h</em>
+              <span v-if="d.plans.some(p => p.source === 'carryover-plan')" class="cal-day-link" title="上方 00:00 起有前一天计划的续段">↖ 前日</span>
+              <span v-if="d.plans.some(p => p.fullEndMin > 1440)" class="cal-day-link" title="下方计划延续到次日">次日 ↘</span>
             </button>
+            <div v-if="calendarLayers === 'both'" class="cal-lane-heads"><span>计划</span><span>实际</span></div>
 
             <div
               class="cal-track"
+              :class="{ 'has-both-lanes': calendarLayers === 'both' }"
               :data-date="d.date"
               @pointerdown.self="startDraft($event, d.date)"
               @contextmenu.self.prevent="openTrackCtx($event, d.date)"
@@ -364,13 +210,35 @@
                 v-for="p in d.plans"
                 :key="p.planKey || p.id"
                 class="cal-plan-block"
-                :class="{ 'is-local': p.source === 'local-plan', 'is-dim': dragState?.plan && dragState.plan.id === p.id }"
+                :class="{
+                  'is-local': p.source === 'local-plan' || p.source === 'carryover-plan',
+                  'is-continuation': p.source === 'carryover-plan',
+                  'flows-next': p.source === 'local-plan' && p.fullEndMin > 1440,
+                  'is-readonly': p.source !== 'local-plan' && p.source !== 'carryover-plan',
+                  'is-dim': dragState?.plan && dragState.plan.id === p.id
+                }"
                 :style="calPlanBlockStyle(p)"
-                :title="`${clock(p.startMin)}–${clock(p.endMin)} · ${p.label} · ${planSourceLabel(p)}`"
+                role="button"
+                tabindex="0"
+                :aria-label="`${clock(p.startMin)}到${clock(p.endMin)}，${p.label}，${planStatus(p, d).label}；查看计划与实际`"
                 @pointerdown.stop="startPlanBlockDrag($event, d.date, p)"
+                @keydown.enter.prevent.stop="openPlanComparison(d.date, p)"
+                @keydown.space.prevent.stop="openPlanComparison(d.date, p)"
                 @contextmenu.prevent.stop="openPlanCtx($event, d.date, p)"
               >
-                <span>{{ p.label }}</span><small>{{ clock(p.startMin) }}–{{ clock(p.endMin) }}</small>
+                <!-- 整块可点开对照或拖动；底边调整时长。 -->
+                <span
+                  class="cal-plan-handle"
+                  :title="`${clock(p.startMin)}–${clock(p.endMin)} · ${p.label} · ${planSourceLabel(p)}`"
+                />
+                <span class="cal-plan-type">{{ categoryLabel(p.category || '其他') }} · {{ p.source === 'carryover-plan' ? '前日计划续段' : '计划' }}</span>
+                <small>{{ clock(p.startMin) }}–{{ clock(p.endMin) }}</small>
+                <span v-if="p.source === 'local-plan' && p.fullEndMin > 1440" class="cal-plan-link">↘ 次日 {{ clock(p.fullEndMin - 1440) }}</span>
+                <span v-if="p.source === 'carryover-plan'" class="cal-plan-link">↖ {{ p.originDate }} {{ clock(p.originStartMin) }} → 今日 {{ clock(p.endMin) }}</span>
+                <span class="cal-plan-label">{{ p.label }}</span>
+                <span v-if="p.project" class="cal-plan-label">{{ p.project }}</span>
+                <span class="cal-plan-status">{{ planStatus(p, d).label }}</span>
+                <span class="cal-plan-resize" title="拖动调整计划时长" @pointerdown.stop="startPlanResize($event, d.date, p)" />
               </div>
               <div
                 v-for="(b, i) in d.blocks"
@@ -383,13 +251,13 @@
                   'is-thin': b.height < 1.2
                 }"
                 :style="calBlockStyle(b)"
-                :title="`${clock(b.startMin)}–${clock(b.endMin)} · ${entryLabel(b)}${b.manual ? ' · 标注' : ''}`"
+                :title="`${categoryLabel(b.category || '其他')} · ${clock(b.startMin)}–${clock(b.endMin)} · ${calendarBlockDetails(b)}`"
                 @pointerdown.stop="startBlockDrag($event, d.date, b)"
                 @contextmenu.prevent.stop="openCtx($event, d.date, b)"
               >
-                <span class="cal-block-title">{{ blockLabel(b) }}</span>
+                <span class="cal-block-title">{{ categoryLabel(b.category || '其他') }}</span>
                 <span class="cal-block-range">{{ clock(b.startMin) }}–{{ clock(b.endMin) }}</span>
-                <span v-if="blockSub(b) && b.height >= 6" class="cal-block-note">{{ blockSub(b) }}</span>
+                <span v-if="calendarBlockDetails(b)" class="cal-block-note">{{ calendarBlockDetails(b) }}</span>
                 <span class="cal-resize" @pointerdown.stop="startResize($event, d.date, b)" />
               </div>
 
@@ -397,13 +265,18 @@
               <div
                 v-if="ghost && ghost.date === d.date"
                 class="cal-ghost"
-                :class="{ 'is-new': ghost.isNew }"
-                :style="{ top: ghost.top + '%', height: ghost.height + '%' }"
+                :class="{ 'is-new': ghost.isNew, 'lane-plan': ghost.lane === 'plan', 'lane-fact': ghost.lane === 'fact' }"
+                :style="{ top: ghost.top + 'px', height: ghost.height + 'px' }"
               >
                 <span class="ghost-label">{{ ghost.label }}</span>
               </div>
+              <div v-if="ghost && ghost.nextDate === d.date" class="cal-ghost is-new"
+                :class="{ 'lane-plan': ghost.lane === 'plan', 'lane-fact': ghost.lane === 'fact' }"
+                :style="{ top: '0px', height: ghost.nextHeight + 'px' }">
+                <span class="ghost-label">跨日续段 · 00:00–{{ clock(ghost.totalEndMin - 1440) }}</span>
+              </div>
 
-              <div v-if="d.date === todayStr" class="cal-now" :style="{ top: nowPercent + '%' }" />
+              <div v-if="d.date === todayStr" class="cal-now" :style="{ top: (nowMin / 60 * 96) + 'px' }" />
             </div>
           </div>
         </div>
@@ -412,8 +285,32 @@
       </div>
     </template>
 
+    <div v-if="selectedPlan" class="plan-compare-mask" @click.self="selectedPlan = null">
+      <section ref="planCompare" class="plan-compare" role="dialog" aria-label="计划与实际对照" tabindex="-1">
+        <header class="pc-head"><div><small>{{ selectedPlan.date }} · {{ clock(selectedPlan.startMin) }}–{{ clock(selectedPlan.endMin) }}</small><h3>{{ selectedPlan.label }}</h3></div><button aria-label="关闭对照" @click="selectedPlan = null">×</button></header>
+        <p class="pc-status">{{ selectedPlanStatus.label }} · {{ selectedPlanStatus.detail }}</p>
+        <div class="pc-columns">
+          <div><strong>计划</strong><p>{{ categoryLabel(selectedPlan.category || '其他') }} · {{ fmtCN(selectedPlan.durationMin * 60000) }}</p></div>
+          <div><strong>这段时间的实际记录</strong>
+            <p v-if="!selectedPlanBlocks.length">没有足够的实际记录；空白不代表计划没有完成。</p>
+            <p v-for="b in selectedPlanBlocks" :key="b.key">{{ clock(Math.max(b.startMin, selectedPlan.startMin)) }}–{{ clock(Math.min(b.endMin, selectedPlan.endMin)) }} · {{ blockLabel(b) }}</p>
+          </div>
+        </div>
+        <p v-if="selectedPlan.actual" class="pc-note">已确认：{{ selectedPlan.actual.label || selectedPlan.label }}。计划确认状态与事实记录分别保存。</p>
+        <div class="pc-actions">
+          <button class="btn btn-ghost btn-sm" @click="editComparedPlan">编辑计划</button>
+          <button class="btn btn-ghost btn-sm" @click="recordComparedActual">实际有调整，手工记录</button>
+          <span class="pc-spacer" />
+          <template v-if="!selectedPlan.actual">
+            <button class="btn btn-secondary btn-sm" :disabled="selectedPlan.source === 'carryover-plan' || !selectedPlanScreenEvidence || !!convertingPlanKey" :title="selectedPlanScreenEvidence ? '' : '该时段没有可确认的屏幕活动'" @click="confirmComparedPlan('screen')">使用屏幕活动</button>
+            <button class="btn btn-primary btn-sm" :disabled="!!convertingPlanKey" @click="confirmComparedPlan('plan')">按计划记入</button>
+          </template>
+        </div>
+      </section>
+    </div>
+
     <!-- 悬浮补记按钮：记录层是只读事实层，不出现写操作入口 -->
-    <button v-if="mode !== 'record'" class="fab" title="手工补记" @click="toggleManual">
+    <button v-if="mode !== 'record'" class="fab" title="手工补记" @click="toggleManual($event)">
       <Icon name="plus" :size="20" />
     </button>
 
@@ -428,6 +325,11 @@
         <template v-if="ctxMenu.kind === 'plan'">
           <button @click="ctxDo('edit-plan')">编辑计划</button>
           <button @click="ctxDo('copy-plan')">复制计划</button>
+          <template v-if="!ctxMenu.block.actual">
+            <i class="ctx-sep" />
+            <button @click="ctxDo('convert-plan')">按计划记入事实</button>
+            <button v-if="ctxMenu.block.source !== 'carryover-plan'" @click="ctxDo('convert-screen')">从屏幕活动生成事实</button>
+          </template>
           <i class="ctx-sep" />
           <button v-if="ctxMenu.block.source === 'local-plan'" class="danger" @click="ctxDo('delete-plan')">删除本地计划</button>
           <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ ctxMenu.block.label }}</span>
@@ -441,7 +343,7 @@
           <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ entryLabel(ctxMenu.block) }}</span>
         </template>
         <template v-else>
-          <button @click="ctxDo(calendarDraftType === 'plan' ? 'new-plan' : 'new')">在这里新建{{ calendarDraftType === 'plan' ? '计划' : '事实' }} 15 分钟</button>
+          <button @click="ctxDo(ctxMenu.draftType === 'plan' ? 'new-plan' : 'new')">在这里新建{{ ctxMenu.draftType === 'plan' ? '计划' : '事实' }} 15 分钟</button>
           <button v-if="planClip" @click="ctxDo('paste-plan')">在这里粘贴计划</button>
           <button v-if="clipBlock" @click="ctxDo('paste')">粘贴已复制的段</button>
           <i class="ctx-sep" />
@@ -459,7 +361,9 @@
       :category-labels="categoryLabels"
       :deletable="editorDeletable"
       :saving="editSaving"
+      :max-duration="mode === 'calendar' ? 1440 : 300"
       :note-hints="noteHints"
+      :project-hints="projectHints"
       :show-apply-all="canApplyAllDay"
       :anchor-el="editorAnchorEl"
       @save="saveSegment"
@@ -468,6 +372,29 @@
       @add-category="createCategoryFromEditor"
       @note-input="onNoteInput"
     />
+
+    <!-- 计划编辑器：新建和编辑都走这个浮层，日历不再有独立侧栏 -->
+    <PlanEditor
+      :open="planOpen"
+      :initial="planDraft"
+      :categories="categories"
+      :category-labels="categoryLabels"
+      :project-hints="projectHints"
+      :saving="savingPlan"
+      :theme="theme"
+      @save="savePlan"
+      @delete="removeLocalPlan"
+      @close="closePlanEditor"
+    />
+    <div v-if="pendingPlanMove" class="plan-move-mask" @click.self="pendingPlanMove = null">
+      <div class="plan-move-prompt" role="dialog" aria-label="调整重复计划范围">
+        <strong>调整哪几次计划？</strong>
+        <span>{{ pendingPlanMove.label }} · {{ pendingPlanMove.date }}</span>
+        <div><button class="btn btn-ghost btn-sm" @click="pendingPlanMove = null">取消</button>
+          <button class="btn btn-secondary btn-sm" @click="applyPendingPlanMove('single')">仅本次</button>
+          <button class="btn btn-primary btn-sm" @click="applyPendingPlanMove('future')">本次及以后</button></div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -476,6 +403,7 @@ import Icon from '../components/Icon.vue';
 import DateNav from '../components/DateNav.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
 import SegmentEditor from '../components/SegmentEditor.vue';
+import PlanEditor from '../components/PlanEditor.vue';
 import { colorForCategory } from '../styles/palette.js';
 
 const { ipcRenderer } = require('electron');
@@ -507,7 +435,7 @@ const CAT_ICONS = {
 
 export default {
   name: 'TimelineView',
-  components: { Icon, DateNav, EmptyIllustration, SegmentEditor },
+  components: { Icon, DateNav, EmptyIllustration, SegmentEditor, PlanEditor },
   props: {
     report: { type: Object, required: true },
     activities: { type: Array, default: () => [] },
@@ -525,7 +453,7 @@ export default {
     return {
       // mode 同时表达「视图」和「层」：timeline/calendar 是展示层，record 是只读事实层。
       mode: 'timeline',
-      sortDesc: true,
+      sortDesc: false,
       viewOptions: [
         { id: 'timeline', label: '时间轴', icon: 'timeline', title: '按 15 分钟归并的卡片流' },
         { id: 'calendar', label: '日历', icon: 'calendar', title: '1/3/7 天自适应，可拖拽编辑' },
@@ -544,7 +472,9 @@ export default {
       clipBlock: null,
       planClip: null,
       planDragItem: null,
-      calendarDraftType: 'plan',
+      selectedPlan: null,
+      // 日历显示内容：'plan' 仅计划 / 'actual' 仅展示层 / 'both' 两者叠加
+      calendarLayers: 'both',
       // 拖动/新建过程中的预览块
       ghost: null,
       dragState: null,
@@ -574,12 +504,11 @@ export default {
       newManualCategoryColor: '#6f9fe8',
       savingManual: false,
       planOpen: false,
-      editingPlanId: '',
-      planDate: '',
-      planTime: '09:00',
-      planDuration: 30,
-      planTitle: '',
-      planCategory: '工作',
+      // 交给 PlanEditor 的初始值：localId 为空表示新建
+      planDraft: {},
+      pendingPlanMove: null,
+      // 上次保存用的重复规则，新建时默认沿用
+      lastPlanRepeat: 'none',
       savingPlan: false,
       convertingPlanKey: '',
       tick: 0,
@@ -595,6 +524,8 @@ export default {
       this.rawQuery = '';
       this.rawLimit = 300;
       this.closePlanEditor();
+      this.selectedPlan = null;
+      this.pendingPlanMove = null;
       if (this.mode === 'calendar') this.loadCalendar();
     },
     // 拉宽/收窄窗口时自动切换 日 / 三日 / 周
@@ -606,6 +537,14 @@ export default {
     categories() {
       return [...new Set(['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他', ...this.customCategories.map(c => c.key || c.name).filter(Boolean)])]
         .filter(key => !this.categoryMerges[key]);
+    },
+    projectHints() {
+      const names = [
+        ...((this.report?.slots || []).map(s => s.project)),
+        ...((this.report?.plan || []).map(p => p.project)),
+        ...this.calDays.flatMap(d => [...d.blocks, ...d.plans].map(x => x.project))
+      ];
+      return [...new Set(names.map(x => String(x || '').trim()).filter(Boolean))].sort();
     },
     categoryLabels() {
       return Object.fromEntries(this.categories.map(key => [key, this.categoryLabel(key)]));
@@ -648,6 +587,35 @@ export default {
       const a = this.calDays[0];
       const b = this.calDays[this.calDays.length - 1];
       return `${a.date.slice(5)} ~ ${b.date.slice(5)}`;
+    },
+    /** 日历显示内容：仅计划 / 仅实际 / 两者同时，只影响渲染，不改数据 */
+    visibleCalDays() {
+      const withPlans = this.calendarLayers !== 'actual';
+      const withBlocks = this.calendarLayers !== 'plan';
+      return this.calDays.map(d => ({
+        ...d,
+        plans: withPlans ? (d.plans || []) : [],
+        blocks: withBlocks ? (d.blocks || []) : []
+      }));
+    },
+    selectedPlanDay() {
+      return this.calDays.find(d => d.date === this.selectedPlan?.date);
+    },
+    selectedPlanBlocks() {
+      if (!this.selectedPlanDay) return [];
+      return this.selectedPlanDay.blocks.filter(b => this.overlapMinutes(this.selectedPlan, b) >= 5);
+    },
+    selectedPlanStatus() {
+      return this.selectedPlan ? this.planStatus(this.selectedPlan, this.selectedPlanDay) : { label: '', detail: '' };
+    },
+    selectedPlanScreenEvidence() {
+      return (this.selectedPlanDay?.threads || []).some(t => this.overlapMinutes(this.selectedPlan, {
+        startMin: Number(t.startMin) || 0,
+        endMin: (Number(t.startMin) || 0) + (Number(t.durationMs) || 0) / 60000
+      }) >= 5);
+    },
+    selectedPlanEnded() {
+      return this.selectedPlan ? this.isPlanEnded(this.selectedPlan, this.selectedPlan.date) : false;
     },
     /** 记录层原始采样：只含自动录制的部分，不含补记与导入的标注 */
     rawRows() {
@@ -859,6 +827,7 @@ export default {
     };
     document.addEventListener('pointerdown', this._onDocDown, true);
     this._onKey = (e) => {
+      if (e.key === 'Escape' && this.selectedPlan) { this.selectedPlan = null; return; }
       if (e.key === 'Escape' && this.ctxMenu) { this.ctxMenu = null; return; }
       if (!this.selectedBlock) return;
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -1002,9 +971,28 @@ export default {
       const plans = ((report && report.plan) || []).map(item => ({
         ...item,
         date,
-        top: +((item.startMin / 1440) * 100).toFixed(2),
         height: +Math.max(0.7, ((item.endMin - item.startMin) / 1440) * 100).toFixed(2)
       }));
+      // 同时段的独立计划和跨日续段分列显示，避免后渲染的块盖住前一个。
+      const orderedPlans = [...plans].sort((a, b) => a.startMin - b.startMin || b.endMin - a.endMin);
+      let cluster = [];
+      let clusterEnd = -1;
+      const finishCluster = () => {
+        const laneEnds = [];
+        for (const item of cluster) {
+          let lane = laneEnds.findIndex(end => end <= item.startMin);
+          if (lane < 0) lane = laneEnds.length;
+          laneEnds[lane] = item.endMin;
+          item.layoutLane = lane;
+        }
+        for (const item of cluster) item.layoutLanes = laneEnds.length;
+      };
+      for (const item of orderedPlans) {
+        if (cluster.length && item.startMin >= clusterEnd) { finishCluster(); cluster = []; clusterEnd = -1; }
+        cluster.push(item);
+        clusterEnd = Math.max(clusterEnd, item.endMin);
+      }
+      if (cluster.length) finishCluster();
       const merged = [];
       for (const slot of slots) {
         if (!slot.filledMin || !slot.category) continue;
@@ -1044,7 +1032,6 @@ export default {
         note: (m.notes || []).join(' · ').slice(0, 80),
         focusId: m.focusId || null,
         manual: m.manual,
-        top: +((m.startMin / 1440) * 100).toFixed(2),
         height: +Math.max(0.7, ((m.endMin - m.startMin) / 1440) * 100).toFixed(2)
       }));
       const total = merged.reduce((n, m) => n + m.minutes, 0) / 60;
@@ -1054,6 +1041,7 @@ export default {
         num: d.getDate(),
         blocks,
         plans,
+        threads: (report && report.activityThreads) || [],
         total: Math.round(total * 10) / 10
       };
     },
@@ -1081,6 +1069,9 @@ export default {
      */
     blockLabel(b) {
       return this.entryLabel(b);
+    },
+    calendarBlockDetails(b) {
+      return [...new Set([this.entryRemark(b), b.project, this.blockSub(b)].filter(Boolean))].join(' · ');
     },
     blockSub(b) {
       // 一天/三天视图里才显示来源，七天视图太窄
@@ -1122,8 +1113,8 @@ export default {
     /** 把鼠标位置换算成 15 分钟刻度 */
     minuteAt(trackEl, clientY) {
       const rect = trackEl.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-      return Math.max(0, Math.min(1440, Math.round((ratio * 1440) / 15) * 15));
+      const minute = Math.round(((clientY - rect.top) / 96 * 60) / 15) * 15;
+      return Math.max(0, Math.min(1440, minute));
     },
     /** 预览块的几何信息（top/height 用百分比，和真实块同一套坐标） */
     ghostOf(date, startMin, endMin, isNew) {
@@ -1133,8 +1124,8 @@ export default {
         date,
         startMin: a,
         endMin: b,
-        top: (a / 1440) * 100,
-        height: Math.max(0.5, ((b - a) / 1440) * 100),
+        top: a / 60 * 96,
+        height: Math.max(12, (b - a) / 60 * 96),
         label: `${this.clock(a)} – ${this.clock(b)} · ${b - a} 分钟`,
         isNew
       };
@@ -1181,7 +1172,7 @@ export default {
     dragPlanOver(e, date) {
       if (!this.planDragItem) return;
       const track = e.currentTarget;
-      const startMin = Math.min(1440 - this.planDragItem.durationMin, this.minuteAt(track, e.clientY));
+      const startMin = Math.min(1425, this.minuteAt(track, e.clientY));
       this.ghost = this.ghostOf(date, startMin, startMin + this.planDragItem.durationMin, true);
       if (e.dataTransfer) e.dataTransfer.dropEffect = this.planDragItem.source === 'local-plan' ? 'move' : 'copy';
     },
@@ -1189,10 +1180,11 @@ export default {
       const item = this.planDragItem;
       this.planDragItem = null;
       const track = e.currentTarget;
-      const startMin = Math.min(1440 - Number(item?.durationMin || 15), this.minuteAt(track, e.clientY));
+      const startMin = Math.min(1425, this.minuteAt(track, e.clientY));
       this.ghost = null;
       if (!item) return;
-      await this.savePlanAt(item, date, startMin, item.source === 'local-plan');
+      const original = this.editablePlan(item);
+      this.proposePlanMove({ ...original, date, startMin, occurrenceDate: original.date });
     },
     async savePlanAt(item, date, startMin, keepIdentity = false) {
       const res = await ipcRenderer.invoke('save-local-plan', {
@@ -1202,7 +1194,8 @@ export default {
         durationMin: item.durationMin || 30,
         label: item.label || item.title || '计划',
         category: item.category || '其他',
-        project: item.project || ''
+        // 滴答计划只有 projectName，复制成本地计划时别把项目标签丢了
+        project: item.project || item.projectName || ''
       });
       if (!res?.ok) {
         this.$emit('manual-error', res?.error || '移动计划失败');
@@ -1226,68 +1219,103 @@ export default {
         const track = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.cal-track');
         if (!track) return;
         targetDate = track.dataset.date || date;
-        targetStart = Math.min(1440 - item.durationMin, this.minuteAt(track, ev.clientY));
+        targetStart = Math.min(1425, this.minuteAt(track, ev.clientY));
         this.dragState = { plan: item, moved: true };
         this.ghost = this.ghostOf(targetDate, targetStart, targetStart + item.durationMin, false);
       };
       const onUp = async () => {
         this.endDrag();
         if (!moved) {
-          this.editPlanFromCalendar({ ...item, date });
+          this.openPlanComparison(date, item);
           return;
         }
-        await this.savePlanAt(item, targetDate, targetStart, item.source === 'local-plan');
+        const original = this.editablePlan(item);
+        if (item.source === 'carryover-plan') {
+          const shifted = new Date(`${original.date}T00:00:00`);
+          shifted.setMinutes(original.startMin + targetStart - item.startMin);
+          targetDate = `${shifted.getFullYear()}-${this.pad(shifted.getMonth() + 1)}-${this.pad(shifted.getDate())}`;
+          targetStart = shifted.getHours() * 60 + shifted.getMinutes();
+        }
+        this.proposePlanMove({ ...original, date: targetDate, startMin: targetStart,
+          occurrenceDate: original.date });
+      };
+      this.beginDrag(onMove, onUp);
+    },
+    startPlanResize(e, date, item) {
+      if (e.button !== 0) return;
+      const startY = e.clientY;
+      const base = this.editablePlan(item);
+      let duration = base.durationMin;
+      let moved = false;
+      const onMove = ev => {
+        if (Math.abs(ev.clientY - startY) < 4) return;
+        moved = true;
+        duration = Math.max(15, Math.min(1440, Math.round((base.durationMin + (ev.clientY - startY) / 96 * 60) / 15) * 15));
+        this.dragState = { plan: item, moved: true };
+        const visibleEnd = item.source === 'carryover-plan'
+          ? Math.max(15, base.startMin + duration - 1440)
+          : Math.min(1440, item.startMin + duration);
+        this.ghost = this.ghostOf(date, item.startMin, visibleEnd, false);
+      };
+      const onUp = () => {
+        this.endDrag();
+        if (!moved) { this.openPlanComparison(date, item); return; }
+        this.proposePlanMove({ ...base, durationMin: duration, occurrenceDate: base.date });
       };
       this.beginDrag(onMove, onUp);
     },
 
-    openPlanEditorRange(date, startMin, durationMin, item = null) {
-      this.planOpen = true;
-      this.manualOpen = false;
-      this.planDate = date;
-      this.editingPlanId = item?.source === 'local-plan' ? item.localId : '';
-      this.planTime = this.clock(startMin);
-      this.planDuration = Math.max(15, durationMin || item?.durationMin || 30);
-      this.planTitle = item?.label || '';
-      this.planCategory = item?.category || '工作';
-    },
-
     /**
-     * 空白处按住拖动 = 划一段时间，松开后打开编辑器让你填内容。
-     * 只单击不拖动不会创建任何东西——新建必须先经过编辑器确认。
+     * 空白处点击预填 15 分钟，拖动可划更长时段；都先进入编辑器确认。
      */
     startDraft(e, date) {
       if (e.button !== 0) return;
+      if (this.editorOpen || this.selectedPlan || this.ctxMenu) {
+        this.closeSegment();
+        this.selectedPlan = null;
+        this.closeCtx();
+        return;
+      }
       const track = e.currentTarget;
       const trackRect = track.getBoundingClientRect();
       const anchor = this.minuteAt(track, e.clientY);
+      const lane = this.calendarLayers === 'plan' ? 'plan' : this.calendarLayers === 'actual' ? 'fact'
+        : (e.clientX - trackRect.left < trackRect.width * 0.4 ? 'plan' : 'fact');
       let current = anchor;
       let moved = false;
       this.closeCtx();
       this.selectedBlock = null;
 
       const onMove = (ev) => {
-        current = this.minuteAt(track, ev.clientY);
+        const hovered = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.cal-track');
+        const nextDay = this.nextDate(date);
+        const onNextDay = hovered?.dataset.date === nextDay;
+        const raw = Math.round(((ev.clientY - trackRect.top) / 96 * 60) / 15) * 15;
+        current = onNextDay ? 1440 + this.minuteAt(hovered, ev.clientY) : Math.max(0, Math.min(anchor + 1440, raw));
         if (Math.abs(current - anchor) >= 15) moved = true;
         if (!moved) return;
         const a = Math.min(anchor, current);
-        const b = Math.max(anchor, current);
-        this.ghost = this.ghostOf(date, a, Math.max(b, a + 15), true);
+        const b = Math.min(a + 1440, Math.max(anchor, current, a + 15));
+        this.ghost = { ...this.ghostOf(date, a, Math.min(1440, b), true), lane,
+          totalEndMin: b, nextDate: b > 1440 ? nextDay : '',
+          nextHeight: Math.max(12, (b - 1440) / 60 * 96),
+          label: `${this.clock(a)} – ${b > 1440 ? '次日 ' + this.clock(b - 1440) : this.clock(b)} · ${b - a} 分钟` };
       };
       const onUp = () => {
-        const g = this.ghost;
+        const g = this.ghost || { ...this.ghostOf(date, Math.min(anchor, 1425), Math.min(anchor + 15, 1440), true), lane };
         this.endDrag();
-        if (!moved || !g) return;      // 只是点了一下：什么都不做
-        if (this.calendarDraftType === 'plan') {
-          this.openPlanEditorRange(date, g.startMin, g.endMin - g.startMin);
+        if (!g || g.endMin <= g.startMin) return;
+        const totalEnd = g.totalEndMin || g.endMin;
+        if (lane === 'plan') {
+          this.openPlanEditorRange(date, g.startMin, totalEnd - g.startMin);
           return;
         }
         // 用「刚划出来的那一段」作为锚点，浮层就会贴在那儿
         const anchorRect = {
-          top: trackRect.top + (g.startMin / 1440) * trackRect.height,
+          top: trackRect.top + (g.startMin / 60 * 96),
           left: trackRect.left,
           width: trackRect.width,
-          height: Math.max(16, ((g.endMin - g.startMin) / 1440) * trackRect.height)
+          height: Math.max(16, ((g.endMin - g.startMin) / 60 * 96))
         };
         anchorRect.bottom = anchorRect.top + anchorRect.height;
         this.openSegment({
@@ -1296,9 +1324,9 @@ export default {
           date,
           isNew: true,
           startMin: g.startMin,
-          endMin: g.endMin,
-          durationMin: g.endMin - g.startMin,
-          durationMs: (g.endMin - g.startMin) * 60000,
+          endMin: totalEnd,
+          durationMin: totalEnd - g.startMin,
+          durationMs: (totalEnd - g.startMin) * 60000,
           app: '',
           category: '其他',
           titles: [],
@@ -1391,11 +1419,67 @@ export default {
         empty: false
       };
     },
+    overlapMinutes(a, b) {
+      return Math.max(0, Math.min(Number(a.endMin) || 0, Number(b.endMin) || 0) - Math.max(Number(a.startMin) || 0, Number(b.startMin) || 0));
+    },
+    isPlanEnded(plan, date) {
+      const end = new Date(`${date}T00:00:00`);
+      end.setMinutes(Number(plan.fullEndMin || plan.endMin) || 0);
+      return end.getTime() <= Date.now();
+    },
+    planStatus(plan, day) {
+      if (plan.actual) return { label: '已确认', detail: plan.actual.source === 'screen' ? '已使用屏幕活动，不重复累计时长' : '已按计划写入人工事实' };
+      const start = new Date(`${plan.date}T00:00:00`);
+      start.setMinutes(plan.startMin);
+      if (start.getTime() > Date.now()) return { label: '待开始', detail: '计划尚未开始' };
+      if (!this.isPlanEnded(plan, plan.date)) return { label: '进行中', detail: '计划时段尚未结束，可在结束后核对实际情况' };
+      const matches = (day?.blocks || []).filter(b => this.overlapMinutes(plan, b) >= 5);
+      if (!matches.length) return { label: '待核对', detail: '这段时间尚无足够的实际记录' };
+      const covered = Math.min(plan.durationMin, matches.reduce((n, b) => n + this.overlapMinutes(plan, b), 0));
+      const matching = matches.reduce((n, b) => n + (b.category === plan.category ? this.overlapMinutes(plan, b) : 0), 0);
+      if (matching >= (plan.endMin - plan.startMin) / 2) return { label: '活动相近', detail: `同类活动覆盖约 ${Math.round(matching)} 分钟，仍需确认是否完成计划` };
+      return { label: '有调整', detail: `记录覆盖约 ${Math.round(covered)} 分钟，活动类别与计划不同或覆盖不足` };
+    },
+    async openPlanComparison(date, item) {
+      this.ctxMenu = null;
+      this.closeSegment();
+      if (this.selectedPlan?.id === item.id && this.selectedPlan?.date === date) {
+        this.selectedPlan = null;
+        return;
+      }
+      this.selectedPlan = { ...item, date };
+      await this.$nextTick();
+      this.$refs.planCompare?.focus();
+    },
+    editComparedPlan() {
+      const plan = this.selectedPlan;
+      this.selectedPlan = null;
+      this.editPlanFromCalendar(plan);
+    },
+    recordComparedActual() {
+      const plan = this.selectedPlan;
+      if (!plan) return;
+      this.selectedPlan = null;
+      this.openSegment({
+        type: 'activity', key: `new-${plan.date}-${plan.startMin}`, date: plan.date,
+        isNew: true, startMin: plan.startMin, endMin: plan.endMin,
+        durationMin: plan.endMin - plan.startMin, durationMs: (plan.endMin - plan.startMin) * 60000,
+        app: '', category: plan.category || '其他', titles: [], manual: true, focusId: null
+      }, { currentTarget: null, _rect: { top: window.innerHeight / 2, left: window.innerWidth / 2, width: 1, height: 1, bottom: window.innerHeight / 2 } });
+    },
+    async confirmComparedPlan(mode) {
+      const plan = this.selectedPlan;
+      if (!plan) return;
+      const original = this.editablePlan(plan);
+      if (await this.convertPlan(original, mode, original.date)) this.selectedPlan = null;
+    },
     /** 轨道空白处右键：这里没有块，给「新建 / 粘贴」而不是什么都不做 */
     openTrackCtx(e, date) {
       const track = e.currentTarget;
       const rect = track.getBoundingClientRect();
       const minute = this.minuteAt(track, e.clientY);
+      const draftType = this.calendarLayers === 'plan' ? 'plan' : this.calendarLayers === 'actual' ? 'fact'
+        : (e.clientX - rect.left < rect.width * 0.4 ? 'plan' : 'fact');
       this.editorOpen = false;
       this.ghost = null;
       this.ctxMenu = {
@@ -1403,6 +1487,7 @@ export default {
         y: Math.min(e.clientY, window.innerHeight - 120),
         date,
         minute,
+        draftType,
         empty: true,
         rect: { top: e.clientY - 10, left: rect.left, width: rect.width, height: 20, bottom: e.clientY + 10 }
       };
@@ -1418,19 +1503,28 @@ export default {
         if (action === 'edit-plan') this.editPlanFromCalendar(menu.block);
         else if (action === 'copy-plan') this.copyPlan(menu.block);
         else if (action === 'delete-plan') this.removeLocalPlan(menu.block);
+        else if (action === 'convert-plan') {
+          const plan = this.editablePlan(menu.block);
+          this.convertPlan(plan, 'plan', plan.date);
+        } else if (action === 'convert-screen') {
+          const plan = this.editablePlan(menu.block);
+          this.convertPlan(plan, 'screen', plan.date);
+        }
         return;
       }
       if (menu.empty) {
+        const draftDate = menu.minute >= 1440 ? this.nextDate(menu.date) : menu.date;
+        const draftStart = menu.minute >= 1440 ? Math.min(225, menu.minute - 1440) : Math.min(1425, menu.minute);
         if (action === 'new-plan') {
-          this.openPlanEditorRange(menu.date, Math.min(1425, menu.minute), 15);
+          this.openPlanEditorRange(draftDate, draftStart, 15);
         } else if (action === 'paste-plan') {
           if (this.planClip) this.savePlanAt(this.planClip, menu.date, Math.min(1440 - this.planClip.durationMin, menu.minute), false);
         } else if (action === 'new') {
-          const startMin = Math.min(1425, menu.minute);
+          const startMin = draftStart;
           this.openSegment({
             type: 'activity',
-            key: `new-${menu.date}-${startMin}`,
-            date: menu.date,
+            key: `new-${draftDate}-${startMin}`,
+            date: draftDate,
             isNew: true,
             startMin,
             endMin: startMin + 15,
@@ -1472,6 +1566,7 @@ export default {
         durationMs: Math.max(15, endMin - startMin) * 60000,
         app: b.app || b.category || '',
         category: b.category || '其他',
+        project: b.project || '',
         titles: b.titles ? [...b.titles] : (b.note ? [b.note] : []),
         manual: !!b.manual,
         focusId: b.focusId || null
@@ -1493,12 +1588,13 @@ export default {
       const t = this.editorTarget;
       if (!t || !b) return false;
       const sameKey = !!(t.key && b.key && t.key === b.key);
-      const sameRange = !sameKey && t.startMin === b.startMin && t.endMin === b.endMin;
+      const sameRange = !sameKey && t.date === b.date && t.startMin === b.startMin && t.endMin === b.endMin;
       return sameKey || sameRange;
     },
     /** 打开编辑器：浮层贴在触发块旁边，而不是整页居中弹窗 */
     openSegment(b, ev) {
       if (!b || b.type !== 'activity') return;
+      this.selectedPlan = null;
       // 优先用整张卡片/整个色块作为锚点：贴着「这一块」弹出，而不是贴着那个小按钮
       const el = ev && ev.currentTarget
         ? (ev.currentTarget.closest('.tl-card, .cal-block') || ev.currentTarget)
@@ -1525,8 +1621,7 @@ export default {
         note: b.isNew ? '' : this.entryRemark(b)
       };
       this.editorOpen = true;
-      // 打开即给出该应用/分类的常用备注，省得每次从零写
-      this.onNoteInput('');
+      this.noteHints = [];
     },
     closeSegment() {
       this.editorOpen = false;
@@ -1596,6 +1691,11 @@ export default {
           this.$emit('manual-error', (res && res.error) || '保存失败');
           return;
         }
+        const [hour, minute] = String(payload.startTime || '00:00').split(':').map(Number);
+        const crossesDay = (hour || 0) * 60 + (minute || 0) + Number(payload.durationMin || 0) > 1440;
+        this.$emit('manual-success', crossesDay
+          ? `已保存跨日记录：${date} 至 ${this.nextDate(date)}；凌晨部分在次日日历显示`
+          : '记录已保存');
         this.closeSegment();
         await this.refreshAfterWrite();
       } finally {
@@ -1678,6 +1778,7 @@ export default {
       // 打开编辑器时备注已预填了窗口标题，与传入的空关键词并不相等。
       this._hintSeq = (this._hintSeq || 0) + 1;
       const seq = this._hintSeq;
+      if (!kw) { this.noteHints = []; return; }
       try {
         const res = await ipcRenderer.invoke('find-note-hints', {
           keyword: kw,
@@ -1713,9 +1814,9 @@ export default {
       if (e.button !== 0) return;
       const el = e.currentTarget.parentElement;
       const track = el.parentElement;
+      const trackRect = track.getBoundingClientRect();
       const grabY = e.clientY;
       const baseDur = Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15);
-      const maxDur = 1440 - b.startMin;
       let newDur = baseDur;
       let moved = false;
       this.closeCtx();
@@ -1723,10 +1824,17 @@ export default {
       const onMove = (ev) => {
         if (!moved && Math.abs(ev.clientY - grabY) < 3) return;
         moved = true;
-        const minute = this.minuteAt(track, ev.clientY);
-        newDur = Math.max(15, Math.min(maxDur, Math.round((minute - b.startMin) / 15) * 15));
+        const hovered = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.cal-track');
+        const nextDay = this.nextDate(date);
+        const minute = hovered?.dataset.date === nextDay
+          ? 1440 + this.minuteAt(hovered, ev.clientY)
+          : Math.round(((ev.clientY - trackRect.top) / 96 * 60) / 15) * 15;
+        newDur = Math.max(15, Math.min(1440, Math.round((minute - b.startMin) / 15) * 15));
         this.dragState = { block: b, moved: true };
-        this.ghost = this.ghostOf(date, b.startMin, b.startMin + newDur, false);
+        const end = b.startMin + newDur;
+        this.ghost = { ...this.ghostOf(date, b.startMin, Math.min(1440, end), false),
+          totalEndMin: end, nextDate: end > 1440 ? nextDay : '',
+          nextHeight: Math.max(12, (end - 1440) / 60 * 96), lane: 'fact' };
       };
       const onUp = async () => {
         this.endDrag();
@@ -1786,8 +1894,13 @@ export default {
       return d.getHours() * 60 + d.getMinutes();
     },
     clock(min) {
-      const m = Math.max(0, Math.min(1440, Math.round(min)));
+      const m = Math.max(0, Math.min(2880, Math.round(min)));
       return `${this.pad(Math.floor(m / 60))}:${this.pad(m % 60)}`;
+    },
+    nextDate(date) {
+      const d = new Date(`${date}T00:00:00`);
+      d.setDate(d.getDate() + 1);
+      return `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`;
     },
     setMode(id) {
       if (!this.viewOptions.some(o => o.id === id)) return;
@@ -1796,7 +1909,9 @@ export default {
       // 都不该跟着飘到下一个视图上（拖拽监听也必须在这里解绑）
       this.endDrag();
       this.ctxMenu = null;
+      this.selectedPlan = null;
       this.editorOpen = false;
+      this.pendingPlanMove = null;
       this.manualOpen = false;
       this.closePlanEditor();
       if (id === 'record') {
@@ -1832,20 +1947,25 @@ export default {
     calBlockStyle(b) {
       const cat = b.category;
       // 15 分钟的块只有一格高，块间缝要收窄，否则文字被挤没
-      const gap = b.height < 1.2 ? 2 : 4;
+      const gap = b.endMin - b.startMin <= 15 ? 2 : 4;
       return {
-        top: b.top + '%',
-        height: `calc(${b.height}% - ${gap}px)`,
+        top: `${b.startMin / 60 * 96}px`,
+        height: `${Math.max(12, (b.endMin - b.startMin) / 60 * 96 - gap)}px`,
         '--cat': this.colorOf(cat),
         background: this.softColor(cat, this.theme === 'light' ? 0.11 : 0.16),
         color: 'var(--text-primary)'
       };
     },
     calPlanBlockStyle(item) {
-      const height = Number(item.height) || Math.max(0.7, ((item.endMin - item.startMin) / 1440) * 100);
+      const duration = item.endMin - item.startMin;
+      const lanes = Math.max(1, item.layoutLanes || 1);
+      const lane = item.layoutLane || 0;
+      const laneWidth = (this.calendarLayers === 'both' ? 40 : 100) / lanes;
       return {
-        top: `${item.top ?? (item.startMin / 1440 * 100)}%`,
-        height: `calc(${height}% - ${height < 1.2 ? 2 : 4}px)`,
+        top: `${item.startMin / 60 * 96}px`,
+        height: `${Math.max(12, duration / 60 * 96 - (duration <= 15 ? 2 : 4))}px`,
+        left: `calc(${lane * laneWidth}% + 2px)`,
+        right: `calc(${100 - (lane + 1) * laneWidth}% + 2px)`,
         '--plan-color': this.colorOf(item.category || '其他'),
         background: this.softColor(item.category || '其他', this.theme === 'light' ? 0.07 : 0.1)
       };
@@ -1892,86 +2012,110 @@ export default {
       const sc = this.$el.closest('.content') || document.querySelector('.content');
       if (sc) sc.scrollTop = 0;
     },
-    toggleManual() {
-      this.manualOpen = !this.manualOpen;
-      if (this.manualOpen) {
-        this.closePlanEditor();
-        this.manualTitle = '';
-        this.manualCategory = '其他';
-        const now = new Date();
-        const m = Math.floor(now.getMinutes() / 5) * 5;
-        this.manualTime = `${this.pad(now.getHours())}:${this.pad(m)}`;
-        this.onManualNoteInput('');
-        this.$nextTick(() => this.scrollTop());
-      }
+    toggleManual(ev) {
+      if (this.editorOpen && this.editorTarget?.isNew) { this.closeSegment(); return; }
+      this.closePlanEditor();
+      const now = new Date();
+      const startMin = this.selectedDate === this.todayStr
+        ? Math.min(1425, Math.floor((now.getHours() * 60 + now.getMinutes()) / 15) * 15)
+        : 540;
+      this.openSegment(this.newManualBlock(this.selectedDate, startMin, 30), ev);
     },
-    togglePlanEditor(item = null) {
-      if (this.planOpen && !item) { this.closePlanEditor(); return; }
+    newManualBlock(date, startMin, durationMin) {
+      return { type: 'activity', key: `new-${date}-${startMin}`, date, isNew: true,
+        startMin, endMin: startMin + durationMin, durationMin, durationMs: durationMin * 60000,
+        app: '手工标注', category: '其他', project: '', titles: [], manual: true, focusId: null };
+    },
+    /** 打开计划编辑器；不传 item 即新建，date/startMin 用作预填 */
+    openPlanEditor(item = null, date = null, startMin = null, durationMin = null) {
       this.manualOpen = false;
+      this.planDraft = item
+        ? { ...item }
+        : {
+            date: date || this.selectedDate,
+            startMin: startMin === null ? Math.floor(this.nowMin / 15) * 15 : startMin,
+            durationMin: durationMin || 30,
+            label: '',
+            category: '工作',
+            // 沿用上次用过的重复规则，连续排同类计划不用每次重选
+            repeat: this.lastPlanRepeat || 'none'
+          };
       this.planOpen = true;
-      this.editingPlanId = item?.localId || '';
-      this.planDate = item?.date || this.selectedDate;
-      this.planTime = item ? this.clock(item.startMin) : this.clock(Math.floor(this.nowMin / 15) * 15);
-      this.planDuration = item?.durationMin || 30;
-      this.planTitle = item?.label || '';
-      this.planCategory = item?.category || '工作';
-      this.$nextTick(() => this.scrollTop());
+    },
+    openPlanEditorRange(date, startMin, durationMin, item = null) {
+      this.openPlanEditor(item, date, startMin, durationMin);
     },
     closePlanEditor() {
       this.planOpen = false;
-      this.editingPlanId = '';
-      this.planTitle = '';
-    },
-    editLocalPlan(item) {
-      this.togglePlanEditor(item);
+      this.planDraft = {};
     },
     editPlanFromCalendar(item) {
-      // 滴答计划保持只读：点开时作为新本地计划预填，不会反向修改滴答。
-      this.openPlanEditorRange(item.date || this.selectedDate, item.startMin, item.durationMin, item);
+      const original = this.editablePlan(item);
+      this.openPlanEditorRange(original.date || this.selectedDate, original.startMin, original.durationMin, original);
     },
-    async submitPlan() {
-      if (this.savingPlan || !this.planTitle.trim()) return;
+    editablePlan(item) {
+      if (item.source !== 'carryover-plan') return { ...item };
+      return { ...item, source: 'local-plan', date: item.originDate,
+        startMin: item.originStartMin, durationMin: item.originDurationMin,
+        endMin: Math.min(1440, item.originStartMin + item.originDurationMin),
+        fullEndMin: item.originStartMin + item.originDurationMin };
+    },
+    proposePlanMove(draft) {
+      const payload = { localId: draft.localId, date: draft.date, startMin: draft.startMin,
+        durationMin: draft.durationMin, label: draft.label, category: draft.category,
+        project: draft.project || '', repeat: draft.repeat || 'none',
+        repeatEnd: draft.repeatEnd || '', occurrenceDate: draft.occurrenceDate || draft.date };
+      if (payload.repeat !== 'none') this.pendingPlanMove = payload;
+      else this.savePlan(payload);
+    },
+    async applyPendingPlanMove(scope) {
+      const payload = this.pendingPlanMove;
+      this.pendingPlanMove = null;
+      if (payload) await this.savePlan({ ...payload, scope });
+    },
+    async savePlan(payload) {
+      if (this.savingPlan) return;
       this.savingPlan = true;
       try {
-        const res = await ipcRenderer.invoke('save-local-plan', {
-          localId: this.editingPlanId,
-          date: this.planDate || this.selectedDate,
-          startTime: this.planTime,
-          durationMin: this.planDuration,
-          label: this.planTitle,
-          category: this.planCategory
-        });
+        const res = await ipcRenderer.invoke('save-local-plan', payload);
         if (!res?.ok) {
           this.$emit('manual-error', res?.error || '保存计划失败');
           return;
         }
-        this.$emit('manual-success', this.editingPlanId ? '计划已更新' : '计划已添加');
+        this.lastPlanRepeat = payload.repeat || 'none';
+        this.$emit('manual-success', Number(payload.startMin || 0) + Number(payload.durationMin || 0) > 1440
+          ? `跨日计划已保存；凌晨部分在 ${this.nextDate(payload.date)} 的日历显示`
+          : (payload.localId ? '计划已更新' : '计划已添加'));
         this.closePlanEditor();
         await this.refreshAfterWrite();
+      } catch (error) {
+        this.$emit('manual-error', '保存计划失败: ' + (error?.message || error));
       } finally {
         this.savingPlan = false;
       }
     },
     async removeLocalPlan(item) {
       if (!item?.localId) return;
-      if (!window.confirm(`删除计划“${item.label}”？已经生成的事实不会被删除。`)) return;
-      const res = await ipcRenderer.invoke('delete-local-plan', { localId: item.localId });
-      if (!res?.ok) {
-        this.$emit('manual-error', res?.error || '删除计划失败');
-        return;
+      const repeating = item.repeat && item.repeat !== 'none';
+      const text = repeating
+        ? `删除整个重复计划「${item.label}」？\n之后所有日期都不会再出现；已经生成的事实不受影响。`
+        : `删除计划「${item.label}」？已经生成的事实不会被删除。`;
+      if (!window.confirm(text)) return;
+      try {
+        const res = await ipcRenderer.invoke('delete-local-plan', { localId: item.localId });
+        if (!res?.ok) {
+          this.$emit('manual-error', res?.error || '删除计划失败');
+          return;
+        }
+        this.closePlanEditor();
+        await this.refreshAfterWrite();
+      } catch (error) {
+        this.$emit('manual-error', '删除计划失败: ' + (error?.message || error));
       }
-      await this.refreshAfterWrite();
-    },
-    async removeEditingPlan() {
-      if (!this.editingPlanId) return;
-      const item = (this.report.plan || []).find(plan => plan.localId === this.editingPlanId)
-        || this.calDays.flatMap(day => day.plans || []).find(plan => plan.localId === this.editingPlanId);
-      if (!item) return;
-      await this.removeLocalPlan(item);
-      this.closePlanEditor();
     },
     planSourceLabel(item) {
-      return item.source === 'local-plan' ? '本地计划' : '滴答《记录》';
+      if (item?.source === 'carryover-plan') return '前一天计划的续段';
+      return item?.source === 'local-plan' ? '本地计划' : '外部计划（只读）';
     },
     planEvidence(item) {
       const start = Number(item.startMin) || 0;
@@ -1982,17 +2126,25 @@ export default {
         return Math.max(0, Math.min(end, tEnd) - Math.max(start, tStart)) >= 5;
       });
     },
-    async convertPlan(item, mode) {
+    async convertPlan(item, mode, date) {
       if (!item || this.convertingPlanKey) return;
       this.convertingPlanKey = item.planKey || item.id;
       try {
-        const res = await ipcRenderer.invoke('convert-plan-to-fact', { date: this.selectedDate, plan: item, mode });
+        const res = await ipcRenderer.invoke('convert-plan-to-fact', {
+          // 日历可能显示多天，按计划自己所属的日期转换，而不是当前选中日
+          date: date || item.date || this.selectedDate,
+          plan: item,
+          mode
+        });
         if (!res?.ok) {
           this.$emit('manual-error', res?.error || '生成事实失败');
           return;
         }
         this.$emit('manual-success', mode === 'screen' ? '已用屏幕活动生成事实' : '计划已转为事实');
         await this.refreshAfterWrite();
+        return true;
+      } catch (error) {
+        this.$emit('manual-error', '生成事实失败: ' + (error?.message || error));
       } finally {
         this.convertingPlanKey = '';
       }
@@ -2017,15 +2169,11 @@ export default {
       this.addQuickCategory(item);
     },
     /** 点空闲块的 + ：把该空白段的起止时间直接带进补记表单 */
-    openManualFor(b) {
-      this.manualTitle = '';
-      this.manualCategory = '其他';
-      this.manualTime = this.clock(Math.min(1439, b.startMin));
-      // 空档按 15 分钟对齐：补记时长必须与格口径一致
-      this.manualDuration = Math.max(15, Math.round((b.durationMin || 15) / 15) * 15);
-      this.manualOpen = true;
-      this.onManualNoteInput('');
-      this.$nextTick(() => this.scrollTop());
+    openManualFor(b, ev) {
+      if (this.editorOpen) { this.closeSegment(); return; }
+      const duration = Math.min(this.mode === 'calendar' ? 1440 : 300,
+        Math.max(15, Math.round((b.durationMin || 15) / 15) * 15));
+      this.openSegment(this.newManualBlock(this.selectedDate, b.startMin, duration), ev);
     },
     async submitManual() {
       const payload = {
@@ -2171,6 +2319,8 @@ export default {
   box-shadow: var(--shadow-sm);
 }
 .record-toggle { flex: none; font-size: var(--fs-11); }
+.record-link { color: var(--text-tertiary); font-size: var(--fs-11); text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+.record-link:hover { color: var(--accent); }
 .view-date {
   flex: 1;
   text-align: center;
@@ -2327,11 +2477,11 @@ export default {
 .tl-card.is-gap {
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  background: var(--bg-inset);
-  border: 1px dashed var(--border-default);
-  border-left: 1px dashed var(--border-default);
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-left: 1px dashed var(--border-subtle);
 }
 .gap-mark {
   display: inline-flex;
@@ -2346,7 +2496,8 @@ export default {
   font-size: var(--fs-12);
   font-weight: var(--fw-semibold);
 }
-.gap-label { flex: 1; font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text-secondary); }
+.gap-label { flex: 1; font-size: var(--fs-11); font-weight: var(--fw-medium); color: var(--text-tertiary); }
+.tl-card.is-gap.is-short { border-color: transparent; padding-block: 2px; opacity: .72; }
 .gap-hint {
   font-size: var(--fs-11);
   color: var(--text-tertiary);
@@ -2362,10 +2513,8 @@ export default {
 
 /* ============ 日历 ============ */
 .cal-workspace {
-  display: grid;
-  grid-template-columns: minmax(148px, 0.42fr) minmax(300px, 1fr);
-  gap: var(--sp-3);
-  align-items: start;
+  /* 计划侧栏已移除，日历独占整行 */
+  display: block;
 }
 
 .cal-plan-sidebar {
@@ -2408,6 +2557,13 @@ export default {
 }
 .cal-plan-item:active { cursor: grabbing; }
 .cal-plan-item.done { opacity: .58; }
+/* 滴答计划只读：灰掉、光标改 copy，点击只生成本地副本 */
+.cal-plan-item.is-readonly {
+  opacity: .5;
+  cursor: copy;
+  background: color-mix(in srgb, var(--plan-color) 4%, var(--bg-inset));
+}
+.cal-plan-item.is-readonly .cal-plan-item-copy strong { color: var(--text-secondary); }
 .cal-plan-item-time { color: var(--plan-color); font: 9px var(--font-mono); }
 .cal-plan-item-copy { display: flex; min-width: 0; flex-direction: column; }
 .cal-plan-item-copy strong { overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-10); }
@@ -2423,6 +2579,7 @@ export default {
 
 .cal-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: var(--fs-11);
@@ -2431,6 +2588,9 @@ export default {
 
 .cal-head em { font-style: normal; opacity: 0.7; }
 .cal-span { margin-left: auto; }
+.cal-control { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cal-control select { width: auto; height: 27px; padding: 3px 24px 3px 8px; font-size: var(--fs-11); }
+.cal-drag-tip { font-size: var(--fs-10); }
 
 .cal-create-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-subtle); border-radius: var(--r-full); background: var(--bg-inset); }
 .cal-create-mode button { border: 0; padding: 3px 7px; border-radius: var(--r-full); background: transparent; color: var(--text-tertiary); font-size: 9px; }
@@ -2447,7 +2607,7 @@ export default {
 /* 日历本体：按「小时高度」排版并纵向滚动，15 分钟才有足够空间 */
 .cal-scroll {
   --hour-h: 96px;
-  max-height: calc(100vh - 286px);
+  max-height: max(240px, calc(100vh - 286px));
   overflow-y: auto;
   overflow-x: hidden;
   border-radius: var(--r-sm);
@@ -2460,7 +2620,6 @@ export default {
   gap: var(--sp-2);
   align-items: start;
 }
-
 /* 左侧时间刻度：只给参考，不抢注意力 */
 .cal-ruler {
   position: relative;
@@ -2468,6 +2627,7 @@ export default {
   margin-top: 26px;
   border-right: 1px solid var(--border-subtle);
 }
+.cal-grid.has-lane-heads .cal-ruler { margin-top: 48px; }
 
 .cal-tick {
   position: absolute;
@@ -2503,6 +2663,9 @@ export default {
   font-size: var(--fs-10);
   opacity: 0.75;
 }
+.cal-day-link { font-size: 9px; color: var(--accent); white-space: nowrap; }
+.cal-lane-heads { display: grid; grid-template-columns: 40% 60%; height: 18px; align-items: center; color: var(--text-tertiary); font-size: var(--fs-10); text-align: center; }
+.cal-lane-heads span:first-child { color: var(--accent); }
 
 .cal-col.is-current .cal-day { color: var(--accent); }
 
@@ -2516,11 +2679,14 @@ export default {
   background-image: repeating-linear-gradient(
     to bottom,
     var(--border-subtle) 0 1px,
-    transparent 1px calc(100% / 12)
+    transparent 1px var(--hour-h)
   );
   cursor: crosshair;
   overflow: hidden;
 }
+.cal-track.has-both-lanes::after { content: ''; position: absolute; top: 0; bottom: 0; left: 40%; border-left: 1px dashed var(--border-default); pointer-events: none; }
+.cal-track.has-both-lanes .cal-plan-block { right: 60%; }
+.cal-track.has-both-lanes .cal-block { left: calc(40% + 4px); }
 
 .cal-block {
   position: absolute;
@@ -2545,28 +2711,65 @@ export default {
   position: absolute;
   left: 2px;
   right: 2px;
-  z-index: 1;
+  /* 计划与实际分列，整块可点击或拖动。 */
+  z-index: 3;
+  cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 1px;
   min-height: 10px;
-  padding: 2px 5px;
+  padding: 2px 5px 2px 19px;
   overflow: hidden;
   border: 1px dashed var(--plan-color);
   border-radius: var(--r-xs);
   color: var(--plan-color);
-  cursor: grab;
   opacity: .82;
 }
+.cal-plan-block:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 左侧色条提示整块可以拖动 */
+.cal-plan-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 13px;
+  border-radius: 3px 0 0 3px;
+  background: color-mix(in srgb, var(--plan-color) 50%, transparent);
+  pointer-events: auto;
+  cursor: grab;
+}
+.cal-plan-handle:active { cursor: grabbing; }
+.cal-plan-block.is-local .cal-plan-handle { background: var(--plan-color); }
+.cal-plan-block.is-readonly .cal-plan-handle {
+  background: repeating-linear-gradient(180deg, var(--plan-color) 0 3px, transparent 3px 6px);
+  opacity: .6;
+}
 .cal-plan-block.is-local { border-style: solid; }
+.cal-plan-block.flows-next {
+  border-bottom: 3px solid var(--plan-color);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.cal-plan-block.is-continuation {
+  border-top: 3px solid var(--plan-color);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  background-image: linear-gradient(to bottom, color-mix(in srgb, var(--plan-color) 16%, transparent), transparent 30px);
+}
+.cal-plan-block.is-continuation .cal-plan-type { color: var(--text-primary); }
+.cal-plan-block.is-readonly { opacity: .7; }
 .cal-plan-block.is-dim { opacity: .3; }
-.cal-plan-block span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; font-weight: var(--fw-medium); }
+.cal-plan-type { font-size: 10px; font-weight: var(--fw-semibold); }
+.cal-plan-link { font-size: 9px; line-height: 1.25; color: var(--text-secondary); }
+.cal-plan-label { font-size: 9px; line-height: 1.25; overflow-wrap: anywhere; }
+.cal-plan-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; opacity: .8; }
 .cal-plan-block small { font: 8px var(--font-mono); opacity: .8; }
+.cal-plan-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; cursor: ns-resize; }
 
 .cal-block:hover {
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
-  z-index: 3;
+  /* 不再抬 z-index：抬上去会盖住计划块左侧把手，导致把手点不到 */
 }
 
 .cal-block:active { cursor: grabbing; }
@@ -2584,20 +2787,10 @@ export default {
 /* 15 分钟的块：参考滴答清单改成单行横条，标题和时间都看得见。
    之前这里直接 display:none 把标题藏了，正是「15 分钟任务看不见」的根因。 */
 .cal-block.is-thin {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px;
+  padding: 2px 6px;
+  gap: 1px;
   border-radius: var(--r-xs);
 }
-.cal-block.is-thin .cal-block-title {
-  flex: 1;
-  min-width: 0;
-  -webkit-line-clamp: 1;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.cal-block.is-thin .cal-block-note { display: none; }
 
 /* 块内时间范围：大块在标题下方一行，短块贴在右侧 */
 .cal-block-range {
@@ -2608,7 +2801,6 @@ export default {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.cal-block.is-thin .cal-block-range { margin-left: auto; }
 
 /* 人工标注过的段用虚线描边区分，比整块斜纹安静 */
 .cal-block.is-manual { border-style: dashed; border-left-style: solid; }
@@ -2618,11 +2810,7 @@ export default {
   font-weight: var(--fw-medium);
   line-height: 1.4;
   color: var(--text-primary);
-  /* 允许两行：一行往往只能看到三五个字，等于什么都没写 */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -2630,10 +2818,7 @@ export default {
   font-size: var(--fs-11);
   line-height: 1.45;
   color: var(--text-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 /* 底部 8px 是拉伸手柄，hover 才显形 */
@@ -2665,6 +2850,8 @@ export default {
 }
 
 .cal-ghost.is-new { background: var(--bg-elevated); }
+.cal-track.has-both-lanes .cal-ghost.lane-plan { right: 60%; }
+.cal-track.has-both-lanes .cal-ghost.lane-fact { left: 40%; }
 
 .ghost-label {
   font-size: var(--fs-10);
@@ -2693,6 +2880,25 @@ export default {
 }
 
 /* 右键菜单 */
+.plan-compare-mask { position: fixed; inset: 0; z-index: 2050; display: flex; align-items: flex-end; justify-content: flex-end; padding: 18px; pointer-events: none; }
+.plan-compare { width: min(430px, 100%); max-height: min(600px, 70vh); overflow: auto; padding: 16px; pointer-events: auto; border: 1px solid var(--border-default); border-radius: var(--r-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.plan-move-mask { position: fixed; inset: 0; z-index: 2250; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .3); }
+.plan-move-prompt { width: min(360px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--border-default); border-radius: var(--r-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.plan-move-prompt strong { color: var(--text-primary); font-size: var(--fs-14); }
+.plan-move-prompt span { color: var(--text-secondary); font-size: var(--fs-11); }
+.plan-move-prompt > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pc-head small { color: var(--text-tertiary); font-size: var(--fs-11); }
+.pc-head h3 { margin: 5px 0 0; font-size: var(--fs-16); }
+.pc-head button { padding: 0 5px; color: var(--text-tertiary); font-size: 24px; }
+.pc-status { margin: 15px 0; padding: 9px 11px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--text-primary); font-size: var(--fs-12); }
+.pc-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; }
+.pc-columns > div { min-width: 0; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--r-sm); background: var(--bg-surface); }
+.pc-columns strong { font-size: var(--fs-12); }
+.pc-columns p, .pc-note { margin: 8px 0 0; color: var(--text-secondary); font-size: var(--fs-12); line-height: 1.5; overflow-wrap: anywhere; }
+.pc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.pc-spacer { flex: 1; }
+@media (max-width: 620px) { .pc-columns { grid-template-columns: 1fr; } .pc-actions .btn { flex: 1; } }
 .ctx-menu {
   position: fixed;
   z-index: 2100;

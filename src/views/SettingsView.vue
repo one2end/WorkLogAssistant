@@ -298,12 +298,11 @@
         </button>
       </div>
       <div v-if="didaOn && !folded.dida" class="sec-body">
-        <p class="sec-desc">拉取与推送是两条独立通道，各有自己的开关和同步间隔。</p>
+        <p class="sec-desc">只把 LifeLog 的展示记录单向推送到滴答；不读取滴答记录或计划。</p>
 
         <div class="stat-grid">
-          <div class="stat-item"><b>{{ didaStat.pulledTotal || 0 }}</b><span>累计拉取 · 条</span></div>
           <div class="stat-item"><b>{{ didaStat.pushedTotal || 0 }}</b><span>累计推送 · 条</span></div>
-          <div class="stat-item"><b>{{ didaStat.todayFocusCount || 0 }}</b><span>今日专注 · {{ didaStat.todayFocusMinutes || 0 }} 分钟</span></div>
+          <div class="stat-item"><b>{{ didaStat.todayPushed || 0 }}</b><span>今日推送 · 条</span></div>
         </div>
 
         <div class="row">
@@ -313,72 +312,6 @@
           </div>
         </div>
 
-        <div class="hr"></div>
-        <div class="sub-head">
-          <span><strong>计划参考</strong><em>把《记录》的生效重复任务显示为计划层，不计入实际工时</em></span>
-          <label class="switch">
-            <input type="checkbox" :checked="dida.pullPlans !== false" @change="set('dida.pullPlans', $event.target.checked)">
-            <span class="switch-track"><span class="switch-thumb"></span></span>
-          </label>
-        </div>
-        <template v-if="dida.pullPlans !== false">
-          <div class="row">
-            <span class="row-label">来源清单<span class="row-desc">{{ planProjectHint }}</span></span>
-            <div class="row-control wide">
-              <select class="select" :value="dida.planProjectId || ''" :disabled="loadingProjects" @change="set('dida.planProjectId', $event.target.value)">
-                <option value="">自动查找名称为《记录》的清单</option>
-                <option v-for="p in didaProjects" :key="p.id" :value="p.id">{{ p.name }}</option>
-              </select>
-              <button class="btn btn-ghost btn-sm" :disabled="loadingProjects" @click="loadProjects(true)">{{ loadingProjects ? '读取中…' : '刷新' }}</button>
-            </div>
-          </div>
-          <div class="row">
-            <span class="row-label">状态<span class="row-desc">{{ lastPlanPullText }}</span></span>
-            <div class="row-control">
-              <button class="btn btn-primary btn-sm" :disabled="syncing.pull" @click="syncDida('pull')">{{ syncing.pull ? '同步中…' : '立即同步计划' }}</button>
-            </div>
-          </div>
-        </template>
-
-        <div class="hr"></div>
-        <div class="sub-head">
-          <span><strong>拉取专注</strong><em>把滴答的专注记录作为展示层第二层级</em></span>
-          <label class="switch">
-            <input type="checkbox" :checked="dida.pullFocus !== false" @change="set('dida.pullFocus', $event.target.checked)">
-            <span class="switch-track"><span class="switch-thumb"></span></span>
-          </label>
-        </div>
-        <template v-if="dida.pullFocus !== false">
-          <div class="row">
-            <span class="row-label">同步间隔</span>
-            <div class="row-control sm">
-              <input type="number" min="5" max="1440" step="5" :value="dida.pullIntervalMin || 30" @change="num('dida.pullIntervalMin', $event.target.value, 5, 1440)">
-              <span class="unit">分钟</span>
-            </div>
-          </div>
-          <div class="row">
-            <span class="row-label">同步范围<span class="row-desc">超过 30 天会按月自动分页</span></span>
-            <div class="row-control sm">
-              <input type="number" min="1" max="365" :value="dida.syncDays || 30" @change="num('dida.syncDays', $event.target.value, 1, 365)">
-              <span class="unit">天</span>
-            </div>
-          </div>
-          <div class="row">
-            <span class="row-label">启动时自动同步</span>
-            <div class="row-control">
-              <label class="switch">
-                <input type="checkbox" :checked="dida.autoSyncOnStart !== false" @change="set('dida.autoSyncOnStart', $event.target.checked)">
-                <span class="switch-track"><span class="switch-thumb"></span></span>
-              </label>
-            </div>
-          </div>
-          <div class="row">
-            <span class="row-label">状态<span class="row-desc">{{ lastPullText }}</span></span>
-            <div class="row-control">
-              <button class="btn btn-primary btn-sm" :disabled="syncing.pull" @click="syncDida('pull')">{{ syncing.pull ? '同步中…' : '立即拉取' }}</button>
-            </div>
-          </div>
-        </template>
         <div class="hr"></div>
         <div class="sub-head">
           <span><strong>推送展示层</strong><em>把标注写成滴答任务；默认关闭，不会写入任何内容</em></span>
@@ -424,7 +357,7 @@
             </div>
           </div>
         </div>
-        <p v-else class="hint">当前为「关闭」。两个方向相互独立，关掉推送不影响专注拉取。</p>
+        <p v-else class="hint">当前为「关闭」，不会向滴答创建任务。</p>
         <p v-if="didaStat.lastError" class="danger-note">{{ didaStat.lastError }}</p>
       </div>
       <div v-else-if="!didaOn" class="sec-collapsed">已关闭 · 开启后可配置拉取与推送通道</div>
@@ -803,17 +736,12 @@ export default {
     },
     syncing() {
       const busy = this.didaStat.busy || {};
-      return { pull: !!busy.pull || !!busy.plans, push: !!busy.push };
+      return { pull: !!busy.pull, push: !!busy.push };
     },
     lastPullText() {
       const s = this.didaStat;
       if (!s.lastPullAt) return '尚未同步';
       return `上次 ${this.fmtTime(s.lastPullAt)} · 新增 ${s.lastPullCount || 0} 条`;
-    },
-    lastPlanPullText() {
-      const s = this.didaStat;
-      if (!s.lastPlanPullAt) return '尚未同步计划';
-      return `上次 ${this.fmtTime(s.lastPlanPullAt)} · ${s.planTemplateCount || s.lastPlanPullCount || 0} 个模板`;
     },
     lastPushText() {
       const s = this.didaStat;
@@ -831,12 +759,6 @@ export default {
       if (!id) return '留空时推送不会执行';
       const hit = this.didaProjects.find(p => p.id === id);
       return hit ? `已选择：${hit.name}` : '已选择（清单名未读取，点刷新可显示）';
-    },
-    planProjectHint() {
-      const id = this.dida.planProjectId;
-      if (!id) return this.didaStat.planProjectName ? `已自动匹配：${this.didaStat.planProjectName}` : '留空将自动匹配《记录》';
-      const hit = this.didaProjects.find(p => p.id === id);
-      return hit ? `已选择：${hit.name}` : '已选择清单；刷新可显示名称';
     }
   },
   methods: {
@@ -990,9 +912,9 @@ export default {
       for (const item of this.sections) folded[item.id] = item.id !== id;
       this.folded = { ...this.folded, ...folded };
       this.$nextTick(() => this.scrollTo(id));
-      // 计划来源和推送目标共用清单列表，进入滴答分区时按需准备。
+      // 推送目标清单需要清单列表；计划已本地化，不再为计划来源加载。
       if (id === 'dida' && this.didaOn &&
-          (this.dida.pullPlans !== false || this.dida.pushEnabled === true) && !this.didaProjects.length) {
+          this.dida.pushEnabled === true && !this.didaProjects.length) {
         this.loadProjects(false);
       }
     },

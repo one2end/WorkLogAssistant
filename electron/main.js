@@ -13,6 +13,7 @@ function accentCss(ui = {}) {
 }
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const WindowMonitor = require('./windowMonitor');
 const ActivityRecorder = require('./activityRecorder');
 const Summarizer = require('./summarizer');
@@ -28,6 +29,7 @@ const { DidaSync } = require('./didaSync');
 const { PlanManager } = require('./planManager');
 const { writeFileAtomic } = require('./atomicFile');
 const { reviewWindow } = require('./aiReview');
+const { splitRecordAtMidnight } = require('./timeSplit');
 
 /**
  * 图标资源路径。打包后放在 resources 目录（见 package.json extraResources），
@@ -725,6 +727,12 @@ if (!gotTheLock) {
 
 app.whenReady().then(() => {
   logManager.addLog('应用程序启动中...', 'info');
+  try {
+    const merged = planManager.mergeLegacyOvernightPlans();
+    if (merged) logManager.addLog(`已合并 ${merged} 组旧版跨日计划，并备份原计划文件`, 'info');
+  } catch (error) {
+    logManager.addLog(`旧版跨日计划合并失败: ${error.message}`, 'error');
+  }
   createWindow();
   logManager.addLog('主窗口已创建', 'info');
   createTray();
@@ -799,19 +807,8 @@ ipcMain.handle('dida-projects', async (event, payload) => {
 });
 
 ipcMain.handle('dida-sync-now', async (event, payload) => {
-  const direction = (payload && payload.direction) || 'pull';
-  if (direction === 'push') return didaSync.push({ manual: true });
-  if (direction === 'both') {
-    const [pull, plans] = await Promise.all([
-      didaSync.pull({ manual: true }), didaSync.pullPlans({ manual: true })
-    ]);
-    const push = await didaSync.push({ manual: true });
-    return { pull, plans, push };
-  }
-  const [pull, plans] = await Promise.all([
-    didaSync.pull({ manual: true }), didaSync.pullPlans({ manual: true })
-  ]);
-  return { pull, plans };
+  if (payload?.direction && payload.direction !== 'push') return { ok: false, reason: '滴答仅支持单向推送' };
+  return didaSync.push({ manual: true });
 });
 
 ipcMain.handle('save-config', (event, config) => {
@@ -844,9 +841,8 @@ ipcMain.handle('save-config', (event, config) => {
   summarizer.updateConfig(config);
   if (storageChanged) logManager.addLog(`数据目录已切换为: ${nextPath || '默认路径'}`, 'info');
 
-  // 刚开启滴答同步时立即拉一次，不必等下一个定时窗口或手动点按钮
-  if (didaJustEnabled && config.dida?.pullFocus && config.dida?.token) {
-    setTimeout(() => { didaSync.pull({ manual: false }).catch(() => {}); }, 300);
+  if (didaJustEnabled && config.dida?.pushEnabled && config.dida?.pushProjectId && config.dida?.token) {
+    setTimeout(() => { didaSync.push({ manual: false }).catch(() => {}); }, 300);
   }
 
   // 重启监控定时器以使新配置生效
@@ -882,7 +878,11 @@ ipcMain.handle('save-config', (event, config) => {
 // ---------------------------------------------------------------------------
 function notifyDataChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('summary-generated');
+    // 渲染层的 data-changed 会做全量重载（report / activities / 有数据的日期 /
+    // 热力图 / 摘要）。之前这里误发 summary-generated，只重拉 report，
+    // 导致「计划转为事实」后记录层、日期集合与热力图都不刷新，
+    // 看起来像计划没有合并进展示层。
+    mainWindow.webContents.send('data-changed');
   }
 }
 
@@ -948,12 +948,8 @@ ipcMain.handle('get-day-analytics', (event, date) => {
     const dateStr = date || analytics.toDateStr(new Date());
     const report = analytics.buildDayReport(storageManager.getDataDir(), dateStr, configManager.getConfig().analysis);
     // 计划层只是意图参考，不进入 analytics 的实际工时和来源优先级计算。
-    const externalPlans = didaSync.getPlanForDate(dateStr);
-    const localPlans = planManager.listForDate(dateStr);
-    report.plan = [
-      ...planManager.decorate(externalPlans, dateStr),
-      ...localPlans
-    ].sort((a, b) => a.startMin - b.startMin);
+    // 计划已全部本地化：不再合并滴答《记录》的只读计划。
+    report.plan = planManager.listForDate(dateStr);
     return { ok: true, report, markdown: analytics.renderDayMarkdown(report, 'normal') };
   } catch (error) {
     return { ok: false, error: error.message };
@@ -1025,8 +1021,9 @@ ipcMain.handle('convert-plan-to-fact', (event, payload) => {
     if (parsed.error) return { ok: false, error: parsed.error };
     parsed.record.platform = 'plan';
     parsed.record.origin = 'plan';
+    parsed.record.groupId = crypto.randomUUID();
     parsed.record.planKey = planManager.keyOf(plan, date);
-    const ok = storageManager.appendActivityRecords([parsed.record]);
+    const ok = storageManager.appendActivityRecords(splitRecordAtMidnight(parsed.record));
     if (!ok) return { ok: false, error: '计划转为事实时写入失败' };
     const marked = planManager.markActual(plan, date, {
       source: 'plan', label: plan.label || plan.title, category: plan.category,
@@ -1180,7 +1177,8 @@ ipcMain.handle('add-manual-record', (event, payload) => {
   const parsed = manualRecordFromPayload(payload);
   if (parsed.error) return { ok: false, error: parsed.error };
   const { dateStr, durationMin, record } = parsed;
-  const ok = storageManager.appendActivityRecords([record]);
+  record.groupId = crypto.randomUUID();
+  const ok = storageManager.appendActivityRecords(splitRecordAtMidnight(record));
 
   if (ok) {
     logManager.addLog(`手工补记 ${dateStr} ${payload.startTime} · ${durationMin} 分钟`, 'info');
@@ -1196,6 +1194,7 @@ ipcMain.handle('replace-display-ranges', (event, payload) => {
   // 相邻区间不能重叠，否则前一次写的标注会被后一次删掉。
   if (!Array.isArray(ranges) || ranges.length > 200 ||
       payload?.record?.date !== parsed.dateStr) return { ok: false, error: '日期或区间无效' };
+  parsed.record.groupId = crypto.randomUUID();
   const result = storageManager.replaceDisplayRanges(parsed.dateStr, ranges, parsed.record);
   if (result.success) notifyDataChanged();
   return { ok: result.success, error: result.error };

@@ -59,6 +59,10 @@
                 <template v-if="!idleParts.h && !idleParts.m">0</template>
               </span>
             </span>
+            <span class="stat" :title="'连续有记录的 15 分钟格，不等于持续专注'">
+              <span class="stat-label">最长连续</span>
+              <span class="stat-value">{{ longestRecordedRun }}<i>m</i></span>
+            </span>
           </div>
         </div>
 
@@ -139,6 +143,7 @@
       :threads="report.activityThreads || []"
       :selected-date="selectedDate"
       :theme="theme"
+      @open="$emit('jump-to-time', { minutes: $event.startMin, date: selectedDate })"
     />
 
     <ActivityThreads
@@ -162,7 +167,7 @@
     </section>
 
     <!-- AI：能力开启后才出现在这里；关闭时只是一行提示 -->
-    <div class="ai-row">
+    <div v-if="aiEnabled" class="ai-row">
     <AiPanel
       :enabled="aiEnabled"
       :ready="aiReady"
@@ -265,7 +270,7 @@
     </section>
 
     <!-- 应用排行 -->
-    <section v-if="cards.apps" class="card">
+    <section v-if="cards.apps && topRankedApps.length" class="card">
       <div class="card-head">
         <span class="card-title">应用排行</span>
         <span class="head-note">仅后台录制 · 按应用汇总 · Top {{ topRankedApps.length }}</span>
@@ -425,6 +430,15 @@ export default {
         { label: '已记录其他', minutes: totals.other, color: 'var(--text-tertiary)' },
         { label: '未解释', minutes: Math.max(0, totals.unknown), color: 'var(--border-strong)' }
       ];
+    },
+    longestRecordedRun() {
+      let longest = 0;
+      let current = 0;
+      for (const slot of this.report?.slots || []) {
+        current = slot.filledMin > 0 ? current + 15 : 0;
+        longest = Math.max(longest, current);
+      }
+      return longest;
     },
     /**
      * 本地规则提示独立于 AI 开关，避免将统计结果误称为模型建议。
@@ -772,7 +786,7 @@ export default {
 <style scoped>
 .today {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   align-content: start;
   align-items: start;
   gap: var(--sp-5);
@@ -784,6 +798,8 @@ export default {
 .today > * {
   min-width: 0;
 }
+.today > .today-head,
+.today > .hero { grid-column: 1 / -1; }
 
 /* AI 面板横跨整行：它是一句结论，不该挤在某一列里 */
 .today > .ai-row {
@@ -866,30 +882,6 @@ export default {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
-}
-
-/* 宽窗口：只有顶部条与主视觉跨满，其余所有区域一起并排 */
-@media (min-width: 900px) {
-  .today {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .today > .today-head,
-  .today > .hero {
-    grid-column: 1 / -1;
-  }
-}
-
-/* 更宽时升到三列，热力图 / 时间构成 / 应用排行 / 会话 / 专注都能并排 */
-@media (min-width: 1320px) {
-  .today {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .today > .today-head,
-  .today > .hero {
-    grid-column: 1 / -1;
-  }
 }
 
 /* Hero：首屏主视觉。纯表面 + 一层柔影，靠数字本身建立层级；
@@ -1134,6 +1126,10 @@ export default {
    窗口窄成这样时，用户在找一个答案——「现在记的是什么」，
    累计时长反而是第二位的。DOM 顺序不动，只改视觉顺序。 */
 @media (max-width: 560px) {
+  .today { padding: var(--sp-3); gap: var(--sp-3); }
+  .hero { padding: var(--sp-4); }
+  .band-legend { display: none; }
+  .custom-launch span { display: none; }
   .hero-top {
     flex-direction: column;
     align-items: stretch;

@@ -151,9 +151,9 @@ class ConfigManager {
       dida: {
         enabled: false,
         token: '',
-        pullFocus: true,
+        pullFocus: false,
         // 《记录》里的生效重复任务只作为计划参考，不进入实际工时。
-        pullPlans: true,
+        pullPlans: false,
         // 留空时自动匹配去掉 emoji 后名称为“记录”的清单。
         planProjectId: '',
         pushEnabled: false,

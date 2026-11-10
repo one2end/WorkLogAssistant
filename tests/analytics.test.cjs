@@ -178,7 +178,7 @@ test('Dida focus overrides recorded time and is counted once', t => {
     id: 'focus-1', startMs: new Date(at('09:15')).getTime(),
     durationMs: 30 * 60000, pauseMs: 0, title: 'Writing'
   }]));
-  const report = analytics.buildDayReport(dir, '2026-11-08');
+  const report = analytics.buildDayReport(dir, '2026-11-08', { includeDidaFocus: true });
   assert.equal(report.stats.trackedMs, 60 * 60000);
   assert.equal(report.layers.autoMs, 30 * 60000);
   assert.ok(report.sessions.some(s => s.category === '专注'));
@@ -192,7 +192,7 @@ test('Dida focus note reaches the display slot alongside its title', t => {
     id: 'note-1', startMs: new Date(at('09:00')).getTime(), durationMs: 30 * 60000,
     pauseMs: 0, title: '阅读资料', note: '重点是第三章'
   }]));
-  const report = analytics.buildDayReport(dir, '2026-11-08');
+  const report = analytics.buildDayReport(dir, '2026-11-08', { includeDidaFocus: true });
   const slot = report.slots.find(s => s.startMin === 540);
   assert.equal(slot.app, '阅读资料');
   assert.equal(slot.note, '重点是第三章');
@@ -212,7 +212,7 @@ test('local edit of imported focus survives when source mirror stays unchanged',
   fs.writeFileSync(path.join(overrideDir, '2026-11-08.json'), JSON.stringify([{
     id: 'dida:focus-1', focusText: '修订后的专注', note: '补充备注'
   }]));
-  const report = analytics.buildDayReport(dir, '2026-11-08');
+  const report = analytics.buildDayReport(dir, '2026-11-08', { includeDidaFocus: true });
   assert.equal(report.focus.didaSessions[0].id, 'dida:focus-1');
   assert.equal(report.focus.didaSessions[0].focusText, '修订后的专注');
   assert.equal(report.focus.didaSessions[0].note, '补充备注');

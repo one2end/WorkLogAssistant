@@ -9,8 +9,8 @@
         @pointerdown.stop
       >
         <div class="seg-head">
-          <span class="seg-range">{{ form.range }}</span>
-          <span class="seg-dur">{{ durLabel }}</span>
+          <TimeRangePicker :start-time="form.startTime" :duration="Number(form.durationMin) || 15" :max-duration="maxDuration"
+            @update:start-time="form.startTime = $event" @update:duration="form.durationMin = $event" />
           <button class="seg-x" title="关闭" @click="$emit('close')">
             <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
               <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" />
@@ -40,17 +40,12 @@
           </div>
 
           <label class="seg-field">
-            <span>项目 <small>可留空，用于跨日期统计</small></span>
-            <input v-model="form.project" type="text" maxlength="60" placeholder="例如：商户迁移、记账通促活">
-          </label>
-
-          <label class="seg-field">
             <span>备注</span>
             <textarea ref="titleInput" v-model="form.note" rows="2" placeholder="这段时间做了什么，可留空" @input="onNoteInput" />
-            <div v-if="noteHints.length" class="seg-hints">
+            <div v-if="form.note.trim() && matchingNotes.length" class="seg-hints">
               <span class="seg-hints-label">用过：</span>
               <button
-                v-for="(h, i) in noteHints"
+                v-for="(h, i) in matchingNotes"
                 :key="i"
                 type="button"
                 class="seg-hint-chip"
@@ -59,6 +54,11 @@
               >{{ h.text }}</button>
             </div>
           </label>
+          <div class="seg-field">
+            <span>项目 <small>可选 · 用于跨日期关联</small></span>
+            <input v-model="form.project" type="text" maxlength="60" placeholder="输入项目名称">
+            <div v-if="matchingProjects.length" class="seg-hints"><button v-for="p in matchingProjects" :key="p" type="button" class="seg-hint-chip" @click="form.project = p">{{ p }}</button></div>
+          </div>
         </div>
 
         <div v-if="showApplyAll" class="seg-applyall">
@@ -82,12 +82,14 @@
 </template>
 
 <script>
+import TimeRangePicker from './TimeRangePicker.vue';
 const PANEL_WIDTH = 332;
 const MARGIN = 12;
 const GAP = 8;
 
 export default {
   name: 'SegmentEditor',
+  components: { TimeRangePicker },
   props: {
     open: { type: Boolean, default: false },
     /** 触发元素的位置（getBoundingClientRect 的拷贝），用来把浮层贴在它旁边 */
@@ -97,14 +99,16 @@ export default {
     categoryLabels: { type: Object, default: () => ({}) },
     deletable: { type: Boolean, default: false },
     saving: { type: Boolean, default: false },
+    maxDuration: { type: Number, default: 1440 },
     /** 历史备注候选：搜索应用名或关键词即可复用以前的说法 */
     noteHints: { type: Array, default: () => [] },
+    projectHints: { type: Array, default: () => [] },
     /** 是否提供「当天同应用全部同步」开关（自动录制的应用才有意义） */
     showApplyAll: { type: Boolean, default: false },
     /** 触发编辑的元素：点它不算「点外部」，用于「再点一次关闭」 */
     anchorEl: { type: Object, default: null }
   },
-  emits: ['save', 'delete', 'close', 'add-category'],
+  emits: ['save', 'delete', 'close', 'add-category', 'note-input'],
   data() {
     return {
       form: { range: '', durationMin: 15, app: '', category: '其他', project: '', note: '' },
@@ -117,13 +121,13 @@ export default {
     };
   },
   computed: {
-    /** 390 分钟这种数字不好读，超过一小时换成 6 小时 30 分 */
-    durLabel() {
-      const m = Number(this.form.durationMin) || 0;
-      if (m < 60) return `${m} 分钟`;
-      const h = Math.floor(m / 60);
-      const rest = m % 60;
-      return rest ? `${h} 小时 ${rest} 分` : `${h} 小时`;
+    matchingNotes() {
+      const query = String(this.form.note || '').trim().toLowerCase();
+      return query ? this.noteHints.filter(h => String(h.text || '').toLowerCase().includes(query) && h.text !== this.form.note) : [];
+    },
+    matchingProjects() {
+      const query = String(this.form.project || '').trim().toLowerCase();
+      return query ? this.projectHints.filter(p => String(p).toLowerCase().includes(query) && p !== this.form.project).slice(0, 6) : [];
     }
   },
   watch: {
@@ -156,6 +160,7 @@ export default {
   methods: {
     resetToInitial() {
       this.form = { ...this.form, ...this.initial };
+      this.form.durationMin = Math.min(this.maxDuration, Math.max(15, Number(this.form.durationMin) || 15));
       this.applyToAllDay = false;
       this.$nextTick(() => this.place());
     },
@@ -198,7 +203,7 @@ export default {
         project: (this.form.project || '').trim(),
         note: (this.form.note || '').trim(),
         startTime: this.form.startTime,
-        durationMin: this.form.durationMin,
+        durationMin: Math.min(this.maxDuration, Math.max(15, Number(this.form.durationMin) || 15)),
         applyToAllDay: this.applyToAllDay
       });
     },
@@ -214,6 +219,8 @@ export default {
       this.unbindGlobal();
       this._onDown = (ev) => {
         if (this.$refs.panel && this.$refs.panel.contains(ev.target)) return;
+        // 日历空白与时间轴空档由各自点击处理器关闭菜单；这里先关闭会导致同次点击再打开。
+        if (ev.target?.closest?.('.cal-track, .tl-card.is-gap')) return;
         // 触发编辑的那个元素（卡片/色块）不算「外部」：
         // 否则再点同一张卡时，pointerdown 先把面板关了，
         // 随后的 click 又把它打开，看起来像「点不掉」。
@@ -267,6 +274,7 @@ export default {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-inset);
 }
+.seg-head .time-range { flex: 1; min-width: 0; }
 
 .seg-range {
   font-size: var(--fs-13);
@@ -306,6 +314,8 @@ export default {
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
+  max-height: min(66vh, 560px);
+  overflow-y: auto;
 }
 
 .seg-field {

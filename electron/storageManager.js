@@ -3,6 +3,7 @@ const path = require('path');
 const { app } = require('electron');
 const { copyMissingData } = require('./fileMigration');
 const { writeFileAtomic } = require('./atomicFile');
+const { splitRecordAtMidnight } = require('./timeSplit');
 
 class StorageManager {
   constructor(customBasePath) {
@@ -324,7 +325,13 @@ class StorageManager {
             // src 用于区分标注来源：'appcat' = 「当天同应用全部同步」生成的覆盖标注，
             // 下次同步时会被替换掉，不会越叠越多。
             ...(r.src ? { src: r.src } : {}),
-            ...(r.cat ? { cat: r.cat } : {})
+            ...(r.cat ? { cat: r.cat } : {}),
+            // 计划转事实会带 planKey / origin / project，以前在这里被整段丢弃，
+            // 生成的事实既看不出来自哪条计划，也丢了计划上的项目标签。
+            ...(r.project ? { project: r.project } : {}),
+            ...(r.origin ? { origin: r.origin } : {}),
+            ...(r.planKey ? { planKey: r.planKey } : {}),
+            ...(r.groupId ? { groupId: r.groupId } : {})
           }))
           .join('\n') + '\n';
         fs.appendFileSync(filePath, payload, 'utf8');
@@ -474,27 +481,77 @@ class StorageManager {
 
   /** 一次提交「删旧标注 + 写新标注」，失败时原文件保持不变。 */
   replaceDisplayRanges(dateStr, ranges, record) {
-    const file = this._activityJsonlFile(dateStr);
     const cuts = (ranges || []).map(r => [new Date(r.start).getTime(), new Date(r.end).getTime()]);
     if (cuts.some(([a, b]) => !Number.isFinite(a) || !Number.isFinite(b) || b <= a)) {
       return { success: false, error: '时间区间无效' };
     }
     try {
-      const out = [];
-      const lines = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
-      for (const line of lines) {
+      const sourceFile = this._activityJsonlFile(dateStr);
+      const sourceLines = fs.existsSync(sourceFile) ? fs.readFileSync(sourceFile, 'utf8').split('\n') : [];
+      const oldGroups = new Set();
+      for (const line of sourceLines) {
         if (!line.trim()) continue;
         let rec;
-        try { rec = JSON.parse(line); } catch (_) { out.push(line); continue; }
+        try { rec = JSON.parse(line); } catch (_) { continue; }
         const start = new Date(rec.t).getTime();
-        const end = start + (rec.dur || 0);
-        if (StorageManager.layerOf(rec) === 'display' &&
-            cuts.some(([a, b]) => start < b && end > a)) continue;
-        out.push(line);
+        // 次日 00:00 的续段单独编辑时，保留前一天已经记录的部分。
+        const localStart = new Date(rec.t);
+        const isContinuation = localStart.getHours() === 0 && localStart.getMinutes() === 0;
+        if (StorageManager.layerOf(rec) === 'display' && rec.groupId && !isContinuation &&
+            cuts.some(([a, b]) => start < b && start + (rec.dur || 0) > a)) oldGroups.add(rec.groupId);
       }
-      out.push(JSON.stringify(record));
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      writeFileAtomic(file, out.join('\n') + '\n');
+      const newParts = splitRecordAtMidnight(record);
+      const next = new Date(`${dateStr}T00:00:00`); next.setDate(next.getDate() + 1);
+      const previous = new Date(`${dateStr}T00:00:00`); previous.setDate(previous.getDate() - 1);
+      const previousDate = this._toDateStr(previous);
+      const midnight = new Date(`${dateStr}T00:00:00`).getTime();
+      const legacySpill = new Set();
+      const previousFile = this._activityJsonlFile(previousDate);
+      if (fs.existsSync(previousFile)) {
+        for (const line of fs.readFileSync(previousFile, 'utf8').split('\n')) {
+          if (!line.trim()) continue;
+          let rec;
+          try { rec = JSON.parse(line); } catch (_) { continue; }
+          const start = new Date(rec.t).getTime();
+          const end = start + (rec.dur || 0);
+          if (StorageManager.layerOf(rec) === 'display' && !rec.groupId && start < midnight && end > midnight &&
+              cuts.some(([a, b]) => midnight < b && end > a)) legacySpill.add(line);
+        }
+      }
+      const dates = new Set([dateStr, ...newParts.map(part => this._toDateStr(part.t))]);
+      if (legacySpill.size) dates.add(previousDate);
+      if (oldGroups.size) {
+        dates.add(this._toDateStr(next));
+        dates.add(this._toDateStr(previous));
+      }
+      const pending = [];
+      for (const day of dates) {
+        const file = this._activityJsonlFile(day);
+        const lines = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : [];
+        const out = [];
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          if (day === previousDate && legacySpill.has(line)) {
+            const original = JSON.parse(line);
+            original.dur = midnight - new Date(original.t).getTime();
+            out.push(JSON.stringify(original));
+            continue;
+          }
+          let rec;
+          try { rec = JSON.parse(line); } catch (_) { out.push(line); continue; }
+          const start = new Date(rec.t).getTime();
+          const end = start + (rec.dur || 0);
+          if (StorageManager.layerOf(rec) === 'display' &&
+              (oldGroups.has(rec.groupId) || (day === dateStr && cuts.some(([a, b]) => start < b && end > a)))) continue;
+          out.push(line);
+        }
+        for (const part of newParts) if (this._toDateStr(part.t) === day) out.push(JSON.stringify(part));
+        pending.push({ file, out });
+      }
+      for (const { file, out } of pending) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        writeFileAtomic(file, out.join('\n') + '\n');
+      }
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
