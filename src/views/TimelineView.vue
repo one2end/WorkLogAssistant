@@ -98,6 +98,64 @@
       </div>
     </div>
 
+    <section v-if="mode === 'timeline'" class="plan-reference">
+      <div class="plan-reference-head">
+        <div>
+          <span>计划层</span>
+          <em>先安排，确认后才成为事实</em>
+        </div>
+        <button class="btn btn-secondary btn-sm" @click="togglePlanEditor()">
+          {{ planOpen ? '收起' : '＋ 添加计划' }}
+        </button>
+      </div>
+
+      <div v-if="planOpen" class="plan-editor">
+        <div class="manual-fields">
+          <label class="mf"><span>开始</span><input v-model="planTime" type="time" step="900"></label>
+          <label class="mf narrow"><span>时长(分)</span><input v-model.number="planDuration" type="number" min="15" step="15" max="1440"></label>
+          <label class="mf grow"><span>计划内容</span><input v-model="planTitle" type="text" maxlength="100" placeholder="例如：整理周报"></label>
+        </div>
+        <div class="mf full">
+          <span>分类</span>
+          <div class="manual-categories">
+            <button v-for="c in categories" :key="c" type="button" class="manual-category"
+              :class="{ selected: planCategory === c }" :style="{ '--category-color': colorOf(c) }"
+              @click="planCategory = c">{{ categoryLabel(c) }}</button>
+          </div>
+        </div>
+        <div class="manual-actions">
+          <span class="manual-hint">保存后仍是计划，不计入工时</span>
+          <button class="btn btn-ghost btn-sm" @click="closePlanEditor">取消</button>
+          <button class="btn btn-primary btn-sm" :disabled="savingPlan || !planTitle.trim()" @click="submitPlan">
+            {{ savingPlan ? '保存中' : (editingPlanId ? '更新计划' : '保存计划') }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="report.plan?.length" class="plan-reference-list">
+        <article v-for="item in report.plan" :key="item.id" class="plan-reference-item"
+          :style="{ '--plan-color': colorOf(item.category) }">
+          <span class="plan-range"><b>{{ clock(item.startMin) }}</b><small>{{ clock(item.endMin) }}</small></span>
+          <span class="plan-copy">
+            <strong>{{ item.label }}</strong>
+            <small>{{ categoryLabel(item.category) }} · {{ planSourceLabel(item) }}</small>
+          </span>
+          <span v-if="item.actual" class="plan-fact" :title="item.actual.label">
+            {{ item.actual.source === 'screen' ? '屏幕活动生成' : '已转为事实' }}
+          </span>
+          <span v-else class="plan-actions">
+            <button class="btn btn-primary btn-sm" :disabled="convertingPlanKey === item.planKey" @click="convertPlan(item, 'plan')">按计划记入</button>
+            <button class="btn btn-secondary btn-sm" :disabled="convertingPlanKey === item.planKey || !planEvidence(item)" @click="convertPlan(item, 'screen')">从屏幕活动生成</button>
+          </span>
+          <span v-if="item.source === 'local-plan'" class="plan-local-actions">
+            <button title="编辑本地计划" @click="editLocalPlan(item)">编辑</button>
+            <button title="删除本地计划" @click="removeLocalPlan(item)">删除</button>
+          </span>
+        </article>
+      </div>
+      <div v-else-if="!planOpen" class="plan-empty">当天还没有计划；也可以继续从滴答《记录》同步。</div>
+    </section>
+
     <!-- 记录层：原始采样，只读；按小时分组 + 可筛选，避免一天几百行平铺 -->
     <div v-if="mode === 'record'" class="record-layer">
       <div class="rl-head">
@@ -184,6 +242,7 @@
                 <span class="cat-chip" :style="{ color: colorOf(b.category), background: softColor(b.category) }">
                   {{ categoryLabel(b.category || '其他') }}
                 </span>
+                <span v-if="b.project" class="mini-tag project">{{ b.project }}</span>
                 <span v-if="b.tag" class="mini-tag focus">{{ b.tag }}</span>
                 <span v-else-if="b.manual" class="mini-tag">标注</span>
                 <span v-if="b.uncertain" class="mini-tag warn" title="该段存在数据空档，时长可能不准">
@@ -210,13 +269,64 @@
       </div>
 
       <!-- 日历：列数随窗口宽度自适应（窄=1 天 / 中=3 天 / 宽=7 天） -->
-      <div v-else class="cal-view">
-        <div class="cal-head">
-          <span>{{ calLabel }}</span>
-          <em v-if="calLoading">加载中…</em>
-          <span class="cal-span">{{ calSpan }} 天视图</span>
-          <span class="cal-tip">空白处按住拖 = 划一段时间；点色块 = 编辑；右键 = 更多</span>
-        </div>
+      <div v-else class="cal-workspace">
+        <aside class="cal-plan-sidebar">
+          <div class="cal-plan-head">
+            <div><strong>计划层</strong><small>{{ selectedDate.slice(5) }}</small></div>
+            <button class="btn btn-secondary btn-sm" @click="togglePlanEditor()">＋</button>
+          </div>
+          <p class="cal-plan-tip">拖到右侧日历；滴答计划拖入后会生成本地副本。</p>
+
+          <div v-if="planOpen" class="plan-editor compact">
+            <label class="mf"><span>日期</span><input v-model="planDate" type="date"></label>
+            <div class="manual-fields">
+              <label class="mf"><span>开始</span><input v-model="planTime" type="time" step="900"></label>
+              <label class="mf narrow"><span>分钟</span><input v-model.number="planDuration" type="number" min="15" step="15" max="1440"></label>
+            </div>
+            <label class="mf"><span>计划内容</span><input v-model="planTitle" type="text" maxlength="100" placeholder="准备做什么"></label>
+            <div class="manual-categories compact-categories">
+              <button v-for="c in categories" :key="c" type="button" class="manual-category"
+                :class="{ selected: planCategory === c }" :style="{ '--category-color': colorOf(c) }"
+                @click="planCategory = c">{{ categoryLabel(c) }}</button>
+            </div>
+            <div class="compact-plan-actions">
+              <button v-if="editingPlanId" class="btn btn-ghost btn-sm danger-text" @click="removeEditingPlan">删除</button>
+              <button class="btn btn-ghost btn-sm" @click="closePlanEditor">取消</button>
+              <button class="btn btn-primary btn-sm" :disabled="savingPlan || !planTitle.trim()" @click="submitPlan">保存</button>
+            </div>
+          </div>
+
+          <div v-if="report.plan?.length" class="cal-plan-pool">
+            <article
+              v-for="item in report.plan"
+              :key="item.id"
+              class="cal-plan-item"
+              :class="{ done: !!item.actual }"
+              :style="{ '--plan-color': colorOf(item.category) }"
+              draggable="true"
+              @dragstart="startPlanNativeDrag($event, item)"
+              @dragend="endPlanNativeDrag"
+              @click="editPlanFromCalendar(item)"
+              @contextmenu.prevent.stop="openPlanCtx($event, selectedDate, item)"
+            >
+              <span class="cal-plan-item-time">{{ clock(item.startMin) }}</span>
+              <span class="cal-plan-item-copy"><strong>{{ item.label }}</strong><small>{{ planSourceLabel(item) }}</small></span>
+              <span class="cal-plan-grip" title="拖到日历">⋮⋮</span>
+            </article>
+          </div>
+          <div v-else-if="!planOpen" class="plan-empty compact-empty">当天没有计划</div>
+        </aside>
+
+        <div class="cal-view">
+          <div class="cal-head">
+            <span>{{ calLabel }}</span>
+            <em v-if="calLoading">加载中…</em>
+            <span class="cal-span">{{ calSpan }} 天视图</span>
+            <span class="cal-create-mode" role="group" aria-label="拖拽新增类型">
+              <button :class="{ active: calendarDraftType === 'plan' }" @click="calendarDraftType = 'plan'">新增计划</button>
+              <button :class="{ active: calendarDraftType === 'fact' }" @click="calendarDraftType = 'fact'">补事实</button>
+            </span>
+          </div>
 
         <div class="cal-scroll" ref="calScroll">
         <div class="cal-grid" :style="{ '--cols': calDays.length }">
@@ -247,7 +357,21 @@
               :data-date="d.date"
               @pointerdown.self="startDraft($event, d.date)"
               @contextmenu.self.prevent="openTrackCtx($event, d.date)"
+              @dragover.prevent="dragPlanOver($event, d.date)"
+              @drop.prevent="dropPlan($event, d.date)"
             >
+              <div
+                v-for="p in d.plans"
+                :key="p.planKey || p.id"
+                class="cal-plan-block"
+                :class="{ 'is-local': p.source === 'local-plan', 'is-dim': dragState?.plan && dragState.plan.id === p.id }"
+                :style="calPlanBlockStyle(p)"
+                :title="`${clock(p.startMin)}–${clock(p.endMin)} · ${p.label} · ${planSourceLabel(p)}`"
+                @pointerdown.stop="startPlanBlockDrag($event, d.date, p)"
+                @contextmenu.prevent.stop="openPlanCtx($event, d.date, p)"
+              >
+                <span>{{ p.label }}</span><small>{{ clock(p.startMin) }}–{{ clock(p.endMin) }}</small>
+              </div>
               <div
                 v-for="(b, i) in d.blocks"
                 :key="i"
@@ -284,6 +408,7 @@
           </div>
         </div>
         </div>
+        </div>
       </div>
     </template>
 
@@ -300,7 +425,14 @@
         :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
         @pointerdown.stop
       >
-        <template v-if="!ctxMenu.empty">
+        <template v-if="ctxMenu.kind === 'plan'">
+          <button @click="ctxDo('edit-plan')">编辑计划</button>
+          <button @click="ctxDo('copy-plan')">复制计划</button>
+          <i class="ctx-sep" />
+          <button v-if="ctxMenu.block.source === 'local-plan'" class="danger" @click="ctxDo('delete-plan')">删除本地计划</button>
+          <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ ctxMenu.block.label }}</span>
+        </template>
+        <template v-else-if="!ctxMenu.empty">
           <button @click="ctxDo('edit')">编辑这一段</button>
           <button @click="ctxDo('copy')">复制这一段时间</button>
           <i class="ctx-sep" />
@@ -309,7 +441,8 @@
           <span class="ctx-hint">{{ clock(ctxMenu.block.startMin) }}–{{ clock(ctxMenu.block.endMin) }} · {{ entryLabel(ctxMenu.block) }}</span>
         </template>
         <template v-else>
-          <button @click="ctxDo('new')">在这里新建 15 分钟</button>
+          <button @click="ctxDo(calendarDraftType === 'plan' ? 'new-plan' : 'new')">在这里新建{{ calendarDraftType === 'plan' ? '计划' : '事实' }} 15 分钟</button>
+          <button v-if="planClip" @click="ctxDo('paste-plan')">在这里粘贴计划</button>
           <button v-if="clipBlock" @click="ctxDo('paste')">粘贴已复制的段</button>
           <i class="ctx-sep" />
           <span class="ctx-hint">{{ clock(ctxMenu.minute) }} · {{ ctxMenu.date }}</span>
@@ -409,6 +542,9 @@ export default {
       calLoading: false,
       selectedBlock: null,
       clipBlock: null,
+      planClip: null,
+      planDragItem: null,
+      calendarDraftType: 'plan',
       // 拖动/新建过程中的预览块
       ghost: null,
       dragState: null,
@@ -420,7 +556,7 @@ export default {
       editorAnchorEl: null,
       editorDeletable: false,
       editorTarget: null,
-      editorForm: { key: '', range: '', startTime: '00:00', durationMin: 15, app: '', category: '其他', note: '' },
+      editorForm: { key: '', range: '', startTime: '00:00', durationMin: 15, app: '', category: '其他', project: '', note: '' },
       editSaving: false,
       // 备注候选：历史用过的说法，可直接复用
       noteHints: [],
@@ -437,6 +573,15 @@ export default {
       newManualCategory: '',
       newManualCategoryColor: '#6f9fe8',
       savingManual: false,
+      planOpen: false,
+      editingPlanId: '',
+      planDate: '',
+      planTime: '09:00',
+      planDuration: 30,
+      planTitle: '',
+      planCategory: '工作',
+      savingPlan: false,
+      convertingPlanKey: '',
       tick: 0,
       timer: null
     };
@@ -449,6 +594,7 @@ export default {
       // 换天时清掉记录层的筛选与分页，否则新的一天会沿用旧状态
       this.rawQuery = '';
       this.rawLimit = 300;
+      this.closePlanEditor();
       if (this.mode === 'calendar') this.loadCalendar();
     },
     // 拉宽/收窄窗口时自动切换 日 / 三日 / 周
@@ -612,6 +758,7 @@ export default {
         const endMin = Math.min(1440, startMin + 15);
         const last = acts[acts.length - 1];
         if (last && last.category === slot.category && last.endMin === startMin &&
+            last.project === (slot.project || '') &&
             last.focusId === (slot.layer === 'focus' ? (slot.focusId || null) : null)) {
           if ((slot.filledMin || 0) > (last.appMin || 0)) {
             last.app = slot.app || last.app;
@@ -635,6 +782,7 @@ export default {
           durationMs: (endMin - startMin) * 60000,
           app: slot.app || slot.category,
           category: slot.category,
+          project: slot.project || '',
           titles: slot.note ? [slot.note] : [],
           manual: slot.layer === 'manual' || slot.layer === 'imported',
           uncertain: slot.purity > 0 && slot.purity < 0.6,
@@ -851,11 +999,18 @@ export default {
     },
     buildCalDay(date, d, report) {
       const slots = (report && report.slots) || [];
+      const plans = ((report && report.plan) || []).map(item => ({
+        ...item,
+        date,
+        top: +((item.startMin / 1440) * 100).toFixed(2),
+        height: +Math.max(0.7, ((item.endMin - item.startMin) / 1440) * 100).toFixed(2)
+      }));
       const merged = [];
       for (const slot of slots) {
         if (!slot.filledMin || !slot.category) continue;
         const last = merged[merged.length - 1];
         if (last && last.category === slot.category && last.endMin === slot.startMin &&
+            last.project === (slot.project || '') &&
             last.focusId === (slot.layer === 'focus' ? (slot.focusId || null) : null)) {
           last.endMin = slot.startMin + 15;
           last.minutes += slot.filledMin;
@@ -864,6 +1019,7 @@ export default {
         } else {
           merged.push({
             category: slot.category,
+            project: slot.project || '',
             app: slot.app,
             startMin: slot.startMin,
             endMin: slot.startMin + 15,
@@ -884,6 +1040,7 @@ export default {
         endMin: m.endMin,
         app: m.app,
         category: m.category,
+        project: m.project || '',
         note: (m.notes || []).join(' · ').slice(0, 80),
         focusId: m.focusId || null,
         manual: m.manual,
@@ -896,6 +1053,7 @@ export default {
         label: `周${wd[d.getDay()]}`,
         num: d.getDate(),
         blocks,
+        plans,
         total: Math.round(total * 10) / 10
       };
     },
@@ -1009,6 +1167,91 @@ export default {
       this.dragState = null;
     },
 
+    startPlanNativeDrag(e, item) {
+      this.planDragItem = { ...item };
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = item.source === 'local-plan' ? 'move' : 'copy';
+        e.dataTransfer.setData('text/plain', item.label || '计划');
+      }
+    },
+    endPlanNativeDrag() {
+      this.planDragItem = null;
+      this.ghost = null;
+    },
+    dragPlanOver(e, date) {
+      if (!this.planDragItem) return;
+      const track = e.currentTarget;
+      const startMin = Math.min(1440 - this.planDragItem.durationMin, this.minuteAt(track, e.clientY));
+      this.ghost = this.ghostOf(date, startMin, startMin + this.planDragItem.durationMin, true);
+      if (e.dataTransfer) e.dataTransfer.dropEffect = this.planDragItem.source === 'local-plan' ? 'move' : 'copy';
+    },
+    async dropPlan(e, date) {
+      const item = this.planDragItem;
+      this.planDragItem = null;
+      const track = e.currentTarget;
+      const startMin = Math.min(1440 - Number(item?.durationMin || 15), this.minuteAt(track, e.clientY));
+      this.ghost = null;
+      if (!item) return;
+      await this.savePlanAt(item, date, startMin, item.source === 'local-plan');
+    },
+    async savePlanAt(item, date, startMin, keepIdentity = false) {
+      const res = await ipcRenderer.invoke('save-local-plan', {
+        localId: keepIdentity ? item.localId : '',
+        date,
+        startMin,
+        durationMin: item.durationMin || 30,
+        label: item.label || item.title || '计划',
+        category: item.category || '其他',
+        project: item.project || ''
+      });
+      if (!res?.ok) {
+        this.$emit('manual-error', res?.error || '移动计划失败');
+        return;
+      }
+      this.$emit('manual-success', keepIdentity ? '计划已移动' : '已复制为本地计划');
+      await this.refreshAfterWrite();
+    },
+    startPlanBlockDrag(e, date, item) {
+      if (e.button !== 0) return;
+      const originX = e.clientX;
+      const originY = e.clientY;
+      let moved = false;
+      let targetDate = date;
+      let targetStart = item.startMin;
+      this.closeCtx();
+
+      const onMove = (ev) => {
+        if (!moved && Math.hypot(ev.clientX - originX, ev.clientY - originY) < 4) return;
+        moved = true;
+        const track = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.cal-track');
+        if (!track) return;
+        targetDate = track.dataset.date || date;
+        targetStart = Math.min(1440 - item.durationMin, this.minuteAt(track, ev.clientY));
+        this.dragState = { plan: item, moved: true };
+        this.ghost = this.ghostOf(targetDate, targetStart, targetStart + item.durationMin, false);
+      };
+      const onUp = async () => {
+        this.endDrag();
+        if (!moved) {
+          this.editPlanFromCalendar({ ...item, date });
+          return;
+        }
+        await this.savePlanAt(item, targetDate, targetStart, item.source === 'local-plan');
+      };
+      this.beginDrag(onMove, onUp);
+    },
+
+    openPlanEditorRange(date, startMin, durationMin, item = null) {
+      this.planOpen = true;
+      this.manualOpen = false;
+      this.planDate = date;
+      this.editingPlanId = item?.source === 'local-plan' ? item.localId : '';
+      this.planTime = this.clock(startMin);
+      this.planDuration = Math.max(15, durationMin || item?.durationMin || 30);
+      this.planTitle = item?.label || '';
+      this.planCategory = item?.category || '工作';
+    },
+
     /**
      * 空白处按住拖动 = 划一段时间，松开后打开编辑器让你填内容。
      * 只单击不拖动不会创建任何东西——新建必须先经过编辑器确认。
@@ -1035,6 +1278,10 @@ export default {
         const g = this.ghost;
         this.endDrag();
         if (!moved || !g) return;      // 只是点了一下：什么都不做
+        if (this.calendarDraftType === 'plan') {
+          this.openPlanEditorRange(date, g.startMin, g.endMin - g.startMin);
+          return;
+        }
         // 用「刚划出来的那一段」作为锚点，浮层就会贴在那儿
         const anchorRect = {
           top: trackRect.top + (g.startMin / 1440) * trackRect.height,
@@ -1133,6 +1380,17 @@ export default {
         rect: r ? { top: r.top, left: r.left, width: r.width, height: r.height, bottom: r.bottom } : null
       };
     },
+    openPlanCtx(e, date, item) {
+      this.editorOpen = false;
+      this.ctxMenu = {
+        kind: 'plan',
+        x: Math.min(e.clientX, window.innerWidth - 190),
+        y: Math.min(e.clientY, window.innerHeight - 150),
+        date,
+        block: { ...item, date },
+        empty: false
+      };
+    },
     /** 轨道空白处右键：这里没有块，给「新建 / 粘贴」而不是什么都不做 */
     openTrackCtx(e, date) {
       const track = e.currentTarget;
@@ -1156,8 +1414,18 @@ export default {
       const menu = this.ctxMenu;
       this.closeCtx();
       if (!menu) return;
+      if (menu.kind === 'plan') {
+        if (action === 'edit-plan') this.editPlanFromCalendar(menu.block);
+        else if (action === 'copy-plan') this.copyPlan(menu.block);
+        else if (action === 'delete-plan') this.removeLocalPlan(menu.block);
+        return;
+      }
       if (menu.empty) {
-        if (action === 'new') {
+        if (action === 'new-plan') {
+          this.openPlanEditorRange(menu.date, Math.min(1425, menu.minute), 15);
+        } else if (action === 'paste-plan') {
+          if (this.planClip) this.savePlanAt(this.planClip, menu.date, Math.min(1440 - this.planClip.durationMin, menu.minute), false);
+        } else if (action === 'new') {
           const startMin = Math.min(1425, menu.minute);
           this.openSegment({
             type: 'activity',
@@ -1183,6 +1451,10 @@ export default {
       } else if (action === 'delete') {
         this.removeBlock(block);
       }
+    },
+    copyPlan(item) {
+      this.planClip = { ...item, localId: '' };
+      this.$emit('manual-error', '已复制计划；在目标时间右键选择“在这里粘贴计划”');
     },
 
     /** 把日历块 / 时间轴块统一转成编辑器用的对象（两者字段不同） */
@@ -1249,6 +1521,7 @@ export default {
         // 保留原应用名：写死「手工标注」会让这段时间在应用统计里凭空多出一个应用
         app: b.app || '手工标注',
         category: b.category || '其他',
+        project: b.project || '',
         note: b.isNew ? '' : this.entryRemark(b)
       };
       this.editorOpen = true;
@@ -1287,7 +1560,8 @@ export default {
           durationMin: payload.durationMin,
           app: payload.app,
           title: payload.note,
-          category: payload.category
+          category: payload.category,
+          project: payload.project || ''
         };
 
         // 当天同应用全部同步：逐段写覆盖标注，不去改记录层的原始采样
@@ -1427,6 +1701,7 @@ export default {
         app: b.app,
         note: this.entryRemark(b),
         category: b.category,
+        project: b.project || '',
         startMin: b.startMin,
         durationMin: Math.max(1, Math.round(b.durationMs / 60000)),
         range: `${this.clock(b.startMin)}-${this.clock(b.endMin)}`
@@ -1476,7 +1751,8 @@ export default {
         durationMin,
         app: '手工标注',
         title: this.entryRemark(b),
-        category: b.category
+        category: b.category,
+        project: b.project || ''
       } });
       if (!res?.ok) {
         this.$emit('manual-error', res?.error || '保存失败，原记录未更改');
@@ -1499,7 +1775,8 @@ export default {
         durationMin: c.durationMin,
         app: '手工标注',
         title: c.note || '',
-        category: c.category
+        category: c.category,
+        project: c.project || ''
       });
       await this.refreshAfterWrite();
     },
@@ -1521,6 +1798,7 @@ export default {
       this.ctxMenu = null;
       this.editorOpen = false;
       this.manualOpen = false;
+      this.closePlanEditor();
       if (id === 'record') {
         this.rawQuery = '';
         this.rawLimit = 300;
@@ -1561,6 +1839,15 @@ export default {
         '--cat': this.colorOf(cat),
         background: this.softColor(cat, this.theme === 'light' ? 0.11 : 0.16),
         color: 'var(--text-primary)'
+      };
+    },
+    calPlanBlockStyle(item) {
+      const height = Number(item.height) || Math.max(0.7, ((item.endMin - item.startMin) / 1440) * 100);
+      return {
+        top: `${item.top ?? (item.startMin / 1440 * 100)}%`,
+        height: `calc(${height}% - ${height < 1.2 ? 2 : 4}px)`,
+        '--plan-color': this.colorOf(item.category || '其他'),
+        background: this.softColor(item.category || '其他', this.theme === 'light' ? 0.07 : 0.1)
       };
     },
     cardBg(cat) {
@@ -1608,6 +1895,7 @@ export default {
     toggleManual() {
       this.manualOpen = !this.manualOpen;
       if (this.manualOpen) {
+        this.closePlanEditor();
         this.manualTitle = '';
         this.manualCategory = '其他';
         const now = new Date();
@@ -1615,6 +1903,98 @@ export default {
         this.manualTime = `${this.pad(now.getHours())}:${this.pad(m)}`;
         this.onManualNoteInput('');
         this.$nextTick(() => this.scrollTop());
+      }
+    },
+    togglePlanEditor(item = null) {
+      if (this.planOpen && !item) { this.closePlanEditor(); return; }
+      this.manualOpen = false;
+      this.planOpen = true;
+      this.editingPlanId = item?.localId || '';
+      this.planDate = item?.date || this.selectedDate;
+      this.planTime = item ? this.clock(item.startMin) : this.clock(Math.floor(this.nowMin / 15) * 15);
+      this.planDuration = item?.durationMin || 30;
+      this.planTitle = item?.label || '';
+      this.planCategory = item?.category || '工作';
+      this.$nextTick(() => this.scrollTop());
+    },
+    closePlanEditor() {
+      this.planOpen = false;
+      this.editingPlanId = '';
+      this.planTitle = '';
+    },
+    editLocalPlan(item) {
+      this.togglePlanEditor(item);
+    },
+    editPlanFromCalendar(item) {
+      // 滴答计划保持只读：点开时作为新本地计划预填，不会反向修改滴答。
+      this.openPlanEditorRange(item.date || this.selectedDate, item.startMin, item.durationMin, item);
+    },
+    async submitPlan() {
+      if (this.savingPlan || !this.planTitle.trim()) return;
+      this.savingPlan = true;
+      try {
+        const res = await ipcRenderer.invoke('save-local-plan', {
+          localId: this.editingPlanId,
+          date: this.planDate || this.selectedDate,
+          startTime: this.planTime,
+          durationMin: this.planDuration,
+          label: this.planTitle,
+          category: this.planCategory
+        });
+        if (!res?.ok) {
+          this.$emit('manual-error', res?.error || '保存计划失败');
+          return;
+        }
+        this.$emit('manual-success', this.editingPlanId ? '计划已更新' : '计划已添加');
+        this.closePlanEditor();
+        await this.refreshAfterWrite();
+      } finally {
+        this.savingPlan = false;
+      }
+    },
+    async removeLocalPlan(item) {
+      if (!item?.localId) return;
+      if (!window.confirm(`删除计划“${item.label}”？已经生成的事实不会被删除。`)) return;
+      const res = await ipcRenderer.invoke('delete-local-plan', { localId: item.localId });
+      if (!res?.ok) {
+        this.$emit('manual-error', res?.error || '删除计划失败');
+        return;
+      }
+      await this.refreshAfterWrite();
+    },
+    async removeEditingPlan() {
+      if (!this.editingPlanId) return;
+      const item = (this.report.plan || []).find(plan => plan.localId === this.editingPlanId)
+        || this.calDays.flatMap(day => day.plans || []).find(plan => plan.localId === this.editingPlanId);
+      if (!item) return;
+      await this.removeLocalPlan(item);
+      this.closePlanEditor();
+    },
+    planSourceLabel(item) {
+      return item.source === 'local-plan' ? '本地计划' : '滴答《记录》';
+    },
+    planEvidence(item) {
+      const start = Number(item.startMin) || 0;
+      const end = Number(item.endMin) || start + Number(item.durationMin || 0);
+      return (this.report.activityThreads || []).some(thread => {
+        const tStart = Number(thread.startMin) || 0;
+        const tEnd = tStart + (Number(thread.durationMs) || 0) / 60000;
+        return Math.max(0, Math.min(end, tEnd) - Math.max(start, tStart)) >= 5;
+      });
+    },
+    async convertPlan(item, mode) {
+      if (!item || this.convertingPlanKey) return;
+      this.convertingPlanKey = item.planKey || item.id;
+      try {
+        const res = await ipcRenderer.invoke('convert-plan-to-fact', { date: this.selectedDate, plan: item, mode });
+        if (!res?.ok) {
+          this.$emit('manual-error', res?.error || '生成事实失败');
+          return;
+        }
+        this.$emit('manual-success', mode === 'screen' ? '已用屏幕活动生成事实' : '计划已转为事实');
+        await this.refreshAfterWrite();
+      } finally {
+        this.convertingPlanKey = '';
       }
     },
     addQuickCategory(item) {
@@ -1981,6 +2361,60 @@ export default {
 .tl-card.is-gap:hover .gap-hint { color: var(--accent); }
 
 /* ============ 日历 ============ */
+.cal-workspace {
+  display: grid;
+  grid-template-columns: minmax(148px, 0.42fr) minmax(300px, 1fr);
+  gap: var(--sp-3);
+  align-items: start;
+}
+
+.cal-plan-sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: calc(100vh - 250px);
+  padding: var(--sp-3);
+  overflow: auto;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+
+.cal-plan-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.cal-plan-head > div { display: flex; flex-direction: column; }
+.cal-plan-head strong { color: var(--text-primary); font-size: var(--fs-12); }
+.cal-plan-head small, .cal-plan-tip { color: var(--text-tertiary); font-size: var(--fs-10); }
+.cal-plan-tip { margin: 0; line-height: 1.45; }
+.plan-editor.compact { margin-top: 0; padding: var(--sp-2); }
+.plan-editor.compact .manual-fields { display: grid; grid-template-columns: 1fr 64px; }
+.compact-categories { max-height: 92px; overflow: auto; }
+.compact-categories .manual-category { padding: 3px 7px; font-size: 10px; }
+.compact-plan-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.danger-text { margin-right: auto; color: var(--danger) !important; }
+.cal-plan-pool { display: grid; gap: 5px; }
+.cal-plan-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 6px;
+  border-left: 3px solid var(--plan-color);
+  border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--plan-color) 8%, var(--bg-surface));
+  cursor: grab;
+}
+.cal-plan-item:active { cursor: grabbing; }
+.cal-plan-item.done { opacity: .58; }
+.cal-plan-item-time { color: var(--plan-color); font: 9px var(--font-mono); }
+.cal-plan-item-copy { display: flex; min-width: 0; flex-direction: column; }
+.cal-plan-item-copy strong { overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-10); }
+.cal-plan-item-copy small { color: var(--text-tertiary); font-size: 9px; }
+.cal-plan-grip { color: var(--text-tertiary); letter-spacing: -3px; }
+.compact-empty { padding: var(--sp-2); }
+
 .cal-view {
   display: flex;
   flex-direction: column;
@@ -1997,6 +2431,10 @@ export default {
 
 .cal-head em { font-style: normal; opacity: 0.7; }
 .cal-span { margin-left: auto; }
+
+.cal-create-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-subtle); border-radius: var(--r-full); background: var(--bg-inset); }
+.cal-create-mode button { border: 0; padding: 3px 7px; border-radius: var(--r-full); background: transparent; color: var(--text-tertiary); font-size: 9px; }
+.cal-create-mode button.active { background: var(--bg-surface); color: var(--accent); box-shadow: var(--shadow-sm); }
 
 .cal-tip {
   padding: 2px 8px;
@@ -2100,7 +2538,30 @@ export default {
   cursor: grab;
   transition: box-shadow var(--dur-1) var(--ease), transform var(--dur-1) var(--ease),
     opacity var(--dur-1) var(--ease);
+  z-index: 2;
 }
+
+.cal-plan-block {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 10px;
+  padding: 2px 5px;
+  overflow: hidden;
+  border: 1px dashed var(--plan-color);
+  border-radius: var(--r-xs);
+  color: var(--plan-color);
+  cursor: grab;
+  opacity: .82;
+}
+.cal-plan-block.is-local { border-style: solid; }
+.cal-plan-block.is-dim { opacity: .3; }
+.cal-plan-block span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; font-weight: var(--fw-medium); }
+.cal-plan-block small { font: 8px var(--font-mono); opacity: .8; }
 
 .cal-block:hover {
   box-shadow: var(--shadow-md);
@@ -2226,6 +2687,11 @@ export default {
   z-index: 5;
 }
 
+@media (max-width: 620px) {
+  .cal-workspace { grid-template-columns: 142px minmax(280px, 1fr); }
+  .cal-plan-tip { display: none; }
+}
+
 /* 右键菜单 */
 .ctx-menu {
   position: fixed;
@@ -2295,6 +2761,29 @@ export default {
 .mini-tag.focus {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.plan-reference { margin: var(--sp-3) 0; padding: var(--sp-3); border: 1px dashed var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); }
+.plan-reference-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); color: var(--text-secondary); font-size: var(--fs-11); font-weight: var(--fw-semibold); }
+.plan-reference-head > div { display: flex; align-items: baseline; gap: var(--sp-2); }
+.plan-reference-head em { color: var(--text-tertiary); font-size: var(--fs-10); font-style: normal; font-weight: var(--fw-normal); }
+.plan-editor { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); padding: var(--sp-3); border: 1px solid var(--accent-border); border-radius: var(--r-sm); background: var(--bg-surface); }
+.plan-reference-list { display: grid; gap: 6px; margin-top: var(--sp-2); }
+.plan-reference-item { display: grid; grid-template-columns: 52px minmax(120px, 1fr) auto auto; align-items: center; gap: var(--sp-2); min-width: 0; padding: 8px 9px; border-left: 3px solid var(--plan-color); border-radius: var(--r-sm); color: var(--text-secondary); background: color-mix(in srgb, var(--plan-color) 8%, var(--bg-surface)); font-size: var(--fs-10); }
+.plan-range { display: flex; flex-direction: column; font: 9px var(--font-mono); }
+.plan-range b { color: var(--plan-color); }
+.plan-range small { color: var(--text-tertiary); }
+.plan-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.plan-copy strong { overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-11); }
+.plan-copy small { color: var(--text-tertiary); }
+.plan-actions, .plan-local-actions { display: inline-flex; align-items: center; gap: 5px; }
+.plan-local-actions button { border: 0; padding: 2px 3px; background: transparent; color: var(--text-tertiary); font-size: 10px; cursor: pointer; }
+.plan-local-actions button:hover { color: var(--text-primary); }
+.plan-fact { padding: 3px 7px; border-radius: 999px; background: var(--success-soft); color: var(--success); white-space: nowrap; }
+.plan-empty { margin-top: var(--sp-2); padding: var(--sp-3); color: var(--text-tertiary); text-align: center; font-size: var(--fs-11); }
+@media (max-width: 760px) {
+  .plan-reference-item { grid-template-columns: 44px minmax(0, 1fr); }
+  .plan-actions, .plan-local-actions, .plan-fact { grid-column: 2; justify-self: start; }
 }
 
 /* 记录层：只读原始采样 */

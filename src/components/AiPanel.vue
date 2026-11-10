@@ -4,8 +4,8 @@
     <section v-if="!enabled" class="ai-off">
       <span class="ai-off-icon"><Icon name="zap" :size="13" /></span>
       <div class="ai-off-text">
-        <strong>AI 未启用</strong>
-        <span>现在只做本地记录与统计。开启后会把每天整理成回顾，指出时间去向和异常。</span>
+        <strong>AI 活动助理未启用</strong>
+        <span>开启后会核对活动识别、提取未完成事项，并把需要确认的分类集中列出。</span>
       </div>
       <button class="btn btn-ghost btn-sm" @click="$emit('open-settings')">了解并开启</button>
     </section>
@@ -25,18 +25,18 @@
       <header class="ai-head">
         <span class="ai-title">
           <Icon name="zap" :size="13" />
-          AI 回顾与建议
+          AI 活动助理
           <span class="ai-chip">{{ providerLabel }}</span>
         </span>
         <span v-if="autoReview" class="ai-meta">{{ scheduledReview ? '定时段自动回顾' : `自动回顾 · 每 ${reviewInterval} 分钟` }}</span>
         <button v-else
           class="btn btn-ghost btn-sm"
           :disabled="generating || !hasData"
-          :title="hasData ? '把这一天整理成结构化回顾' : '这一天还没有可总结的记录'"
+          :title="hasData ? '核对识别结果并整理下一步' : '这一天还没有可分析的记录'"
           @click="$emit('generate')"
         >
           <Icon :name="generating ? 'refresh' : 'zap'" :size="12" :class="{ spin: generating }" />
-          {{ generating ? '生成中' : (latest ? '重新生成' : '生成回顾') }}
+          {{ generating ? '分析中' : (latest ? '重新分析' : '分析今日活动') }}
         </button>
       </header>
 

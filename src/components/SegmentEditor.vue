@@ -40,6 +40,11 @@
           </div>
 
           <label class="seg-field">
+            <span>项目 <small>可留空，用于跨日期统计</small></span>
+            <input v-model="form.project" type="text" maxlength="60" placeholder="例如：商户迁移、记账通促活">
+          </label>
+
+          <label class="seg-field">
             <span>备注</span>
             <textarea ref="titleInput" v-model="form.note" rows="2" placeholder="这段时间做了什么，可留空" @input="onNoteInput" />
             <div v-if="noteHints.length" class="seg-hints">
@@ -102,7 +107,7 @@ export default {
   emits: ['save', 'delete', 'close', 'add-category'],
   data() {
     return {
-      form: { range: '', durationMin: 15, app: '', category: '其他', note: '' },
+      form: { range: '', durationMin: 15, app: '', category: '其他', project: '', note: '' },
       pos: { top: '0px', left: '0px' },
       origin: 'top left',
       addingCategory: false,
@@ -190,6 +195,7 @@ export default {
         // 保留原应用名：写死「手工标注」会让这段时间在应用统计里凭空多出一个应用
         app: (this.form.app || '').trim() || '手工标注',
         category: this.form.category,
+        project: (this.form.project || '').trim(),
         note: (this.form.note || '').trim(),
         startTime: this.form.startTime,
         durationMin: this.form.durationMin,

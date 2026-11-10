@@ -159,6 +159,78 @@ function pushKey(date, startMs) {
   return `${date}:${Math.round(startMs / 60000)}`;
 }
 
+function normalizeProjectName(value) {
+  return String(value || '')
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]/gu, '')
+    .replace(/[\uFE0E\uFE0F\u200D]/g, '')
+    .trim();
+}
+
+function planCategory(title) {
+  const raw = String(title || '').trim();
+  const prefix = raw.split(/[-—－:：]/)[0].trim();
+  if (/睡/.test(prefix)) return '睡眠';
+  if (/工作/.test(prefix)) return '工作';
+  if (/学习/.test(prefix)) return '学习';
+  if (/专注/.test(prefix)) return '专注';
+  if (/娱乐|游戏/.test(prefix)) return '娱乐';
+  if (/家庭|生活|日常|健康|个人|吃饭|洗漱|锻炼|运动/.test(prefix)) return '生活';
+  return '其他';
+}
+
+function planLabel(title) {
+  const raw = String(title || '').trim();
+  const parts = raw.split(/[-—－:：]/);
+  const detail = parts.slice(1).join('-').trim();
+  // 旧的重复模板里有不少“工作-”这类占位标题。分隔符后没有事项时，
+  // 退回干净的分类名，不把尾部符号带到首页。
+  const fallback = raw.replace(/[-—－:：\s]+$/g, '').trim();
+  return detail || fallback || '未命名计划';
+}
+
+function parseRule(flag) {
+  const out = {};
+  const raw = String(flag || '').replace(/^RRULE:/i, '');
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).toUpperCase()] = part.slice(i + 1);
+  }
+  return out;
+}
+
+function dayNumber(dateStr) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  return Math.floor(Date.UTC(y, (m || 1) - 1, d || 1) / 86400000);
+}
+
+function matchesPlanDate(item, dateStr) {
+  const baseDate = localDateStr(item.startMs);
+  const diffDays = dayNumber(dateStr) - dayNumber(baseDate);
+  if (diffDays < 0) return false;
+  if (!item.repeatFlag) return dateStr === baseDate;
+
+  const rule = parseRule(item.repeatFlag);
+  const target = new Date(`${dateStr}T12:00:00`);
+  const weekday = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][target.getDay()];
+  const interval = Math.max(1, parseInt(rule.INTERVAL, 10) || 1);
+  const skipped = String(rule.TT_SKIP || '').toUpperCase().split(',');
+  if (skipped.includes('WEEKEND') && ['SA', 'SU'].includes(weekday)) return false;
+
+  if (rule.FREQ === 'DAILY') return diffDays % interval === 0;
+  if (rule.FREQ === 'WEEKLY') {
+    const days = String(rule.BYDAY || '').split(',').filter(Boolean);
+    return (days.length ? days.includes(weekday) : weekday === ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][new Date(item.startMs).getDay()])
+      && Math.floor(diffDays / 7) % interval === 0;
+  }
+  if (rule.FREQ === 'MONTHLY') {
+    const days = String(rule.BYMONTHDAY || new Date(item.startMs).getDate()).split(',').map(Number);
+    const base = new Date(item.startMs);
+    const monthDiff = (target.getFullYear() - base.getFullYear()) * 12 + target.getMonth() - base.getMonth();
+    return monthDiff >= 0 && monthDiff % interval === 0 && days.includes(target.getDate());
+  }
+  return dateStr === baseDate;
+}
+
 class DidaSync {
   /**
    * @param {object} deps
@@ -172,7 +244,7 @@ class DidaSync {
     this.getDataDir = getDataDir;
     this.broadcast = broadcast || (() => {});
     this.buildDayReport = buildDayReport || null;
-    this.busy = { pull: false, push: false };
+    this.busy = { pull: false, plans: false, push: false };
     this.timer = null;
   }
 
@@ -185,6 +257,7 @@ class DidaSync {
     return {
       root,
       focus: path.join(root, 'focus'),
+      plans: path.join(root, 'plans'),
       status: path.join(root, 'sync-status.json'),
       pushed: path.join(root, 'pushed.json')
     };
@@ -195,6 +268,7 @@ class DidaSync {
     const s = readJson(d.status, {});
     return {
       lastPullAt: s.lastPullAt || '',
+      lastPlanPullAt: s.lastPlanPullAt || '',
       lastPushAt: s.lastPushAt || '',
       pulledTotal: Number(s.pulledTotal) || 0,
       pushedTotal: Number(s.pushedTotal) || 0,
@@ -202,6 +276,9 @@ class DidaSync {
       todayPulled: Number(s.todayPulled) || 0,
       todayPushed: Number(s.todayPushed) || 0,
       lastPullCount: Number(s.lastPullCount) || 0,
+      lastPlanPullCount: Number(s.lastPlanPullCount) || 0,
+      planProjectId: s.planProjectId || '',
+      planProjectName: s.planProjectName || '',
       lastPushCount: Number(s.lastPushCount) || 0,
       // 上一次推送顺带清理掉多少条被合并/改动的旧任务
       lastRemovedCount: Number(s.lastRemovedCount) || 0,
@@ -239,9 +316,11 @@ class DidaSync {
     const todayFocusMinutes = Math.round(
       list.reduce((sum, r) => sum + (Number(r.durationMs) || 0), 0) / 60000
     );
+    const planCache = readJson(path.join(d.plans, 'templates.json'), { items: [] });
     return {
       ...s, today, mirrorRecords, mirrorDays,
       todayFocusCount, todayFocusMinutes,
+      planTemplateCount: Array.isArray(planCache.items) ? planCache.items.length : 0,
       busy: { ...this.busy }
     };
   }
@@ -312,6 +391,103 @@ class DidaSync {
       }
       return { ok: false, error: `读取清单失败：${e.response?.status || ''} ${e.message || e}`.trim() };
     }
+  }
+
+  /**
+   * 拉取《记录》里的生效任务作为只读计划模板。
+   *
+   * 计划与事实必须分层：这里只写 Data/dida/plans/templates.json，绝不写
+   * activities/，也不进入 trackedMs。没有显式选择清单时，自动匹配名称为
+   * “记录”的清单，兼容前面带 emoji 的命名。
+   */
+  async pullPlans({ manual = false } = {}) {
+    if (this.busy.plans) return { ok: false, skipped: true, reason: '计划正在同步中' };
+    const cfg = this.cfg();
+    if (!cfg.enabled || cfg.pullPlans === false) {
+      return { ok: false, skipped: true, reason: '滴答同步或计划参考未开启' };
+    }
+    if (!cfg.token) return { ok: false, error: '请先填写滴答 API 口令' };
+
+    this.busy.plans = true;
+    this.broadcast('dida-status', this.status());
+    try {
+      const projects = await this.listProjects({ force: manual });
+      if (!projects.ok) return projects;
+      const chosen = cfg.planProjectId
+        ? projects.items.find(p => p.id === cfg.planProjectId)
+        : projects.items.find(p => normalizeProjectName(p.name) === '记录');
+      if (!chosen) {
+        const s = this.status();
+        s.lastError = '没有找到计划来源清单；请在设置中选择《记录》清单';
+        this.writeStatus(s);
+        return { ok: false, error: s.lastError };
+      }
+
+      const res = await axios.get(`${API_BASE}/project/${encodeURIComponent(chosen.id)}/data`, {
+        headers: { Authorization: `Bearer ${cfg.token}` }, timeout: 15000, proxy: false
+      });
+      const rows = Array.isArray(res.data?.tasks) ? res.data.tasks : [];
+      const items = rows.filter(row => {
+        const tags = (Array.isArray(row.tags) ? row.tags : []).map(tag => String(tag).toLowerCase());
+        return row && row.id && Number(row.status || 0) === 0 && !tags.includes('lifelog');
+      }).map(row => {
+        const startMs = parseDidaTime(row.startDate);
+        const dueMs = parseDidaTime(row.dueDate);
+        if (!Number.isFinite(startMs)) return null;
+        const durationMs = Number.isFinite(dueMs) && dueMs > startMs ? dueMs - startMs : 30 * 60000;
+        return {
+          id: String(row.id), etag: String(row.etag || ''), title: String(row.title || '').trim(),
+          label: planLabel(row.title), category: planCategory(row.title), startMs, durationMs,
+          repeatFlag: String(row.repeatFlag || ''), repeatFrom: String(row.repeatFrom || ''),
+          timeZone: row.timeZone || 'Asia/Shanghai', isAllDay: row.isAllDay === true
+        };
+      }).filter(Boolean).sort((a, b) => a.startMs - b.startMs);
+
+      const d = this.dirs();
+      fs.mkdirSync(d.plans, { recursive: true });
+      writeJson(path.join(d.plans, 'templates.json'), {
+        at: Date.now(), projectId: chosen.id, projectName: chosen.name, items
+      });
+      const s = this.status();
+      s.lastPlanPullAt = new Date().toISOString();
+      s.lastPlanPullCount = items.length;
+      s.planProjectId = chosen.id;
+      s.planProjectName = chosen.name;
+      s.lastError = '';
+      this.writeStatus(s);
+      this.broadcast('data-changed', { reason: 'dida-plan-pull' });
+      return { ok: true, count: items.length, projectId: chosen.id, projectName: chosen.name, manual };
+    } catch (e) {
+      const s = this.status();
+      s.lastError = `计划拉取失败：${e.response?.status || ''} ${e.message || e}`.trim();
+      this.writeStatus(s);
+      return { ok: false, error: s.lastError };
+    } finally {
+      this.busy.plans = false;
+      this.broadcast('dida-status', this.status());
+    }
+  }
+
+  /** 按需展开某一天的计划实例；只读投影，不落成活动记录。 */
+  getPlanForDate(dateStr) {
+    const cfg = this.cfg();
+    if (!cfg.enabled || cfg.pullPlans === false || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr || '')) return [];
+    const cache = readJson(path.join(this.dirs().plans, 'templates.json'), { items: [] });
+    const rows = Array.isArray(cache.items) ? cache.items : [];
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return rows.filter(item => matchesPlanDate(item, dateStr)).map(item => {
+      const base = new Date(item.startMs);
+      const start = new Date(y, m - 1, d, base.getHours(), base.getMinutes(), 0, 0);
+      const startMin = start.getHours() * 60 + start.getMinutes();
+      const durationMin = Math.max(15, Math.round((Number(item.durationMs) || 1800000) / 60000));
+      return {
+        id: `${item.id}:${dateStr}`, templateId: item.id, source: 'dida-plan',
+        title: item.title, label: item.label, category: item.category,
+        start: start.toISOString(), end: new Date(start.getTime() + durationMin * 60000).toISOString(),
+        startMin, endMin: Math.min(1440, startMin + durationMin), durationMin,
+        repeat: !!item.repeatFlag, projectId: cache.projectId || '', projectName: cache.projectName || ''
+      };
+    }).sort((a, b) => a.startMin - b.startMin);
   }
 
   /** 把一条滴答专注拆成本地日镜像记录（跨午夜按天切开） */
@@ -604,8 +780,13 @@ class DidaSync {
     if (this.timer) return;
     this.timer = setInterval(() => { this.tick().catch(() => {}); }, 60000);
     const cfg = this.cfg();
-    if (cfg.enabled && cfg.autoSyncOnStart && cfg.pullFocus && cfg.token) {
-      setTimeout(() => { this.pull({ manual: false }).catch(() => {}); }, 8000);
+    if (cfg.enabled && cfg.autoSyncOnStart && cfg.token) {
+      setTimeout(() => {
+        const jobs = [];
+        if (cfg.pullFocus) jobs.push(this.pull({ manual: false }));
+        if (cfg.pullPlans !== false) jobs.push(this.pullPlans({ manual: false }));
+        Promise.all(jobs).catch(() => {});
+      }, 8000);
     }
   }
 
@@ -624,9 +805,13 @@ class DidaSync {
     };
     const jobs = [];
     if (cfg.pullFocus && due(s.lastPullAt, cfg.pullIntervalMin)) jobs.push(this.pull());
+    if (cfg.pullPlans !== false && due(s.lastPlanPullAt, cfg.pullIntervalMin)) jobs.push(this.pullPlans());
     if (cfg.pushEnabled && cfg.pushProjectId && due(s.lastPushAt, cfg.pushIntervalMin)) jobs.push(this.push());
     await Promise.all(jobs);
   }
 }
 
-module.exports = { DidaSync, localDateStr, parseDidaTime, formatRecordTask, hasSameRange, readPushRecords, liveHasRecord, pushKey };
+module.exports = {
+  DidaSync, localDateStr, parseDidaTime, formatRecordTask, hasSameRange,
+  readPushRecords, liveHasRecord, pushKey, planCategory, planLabel, matchesPlanDate
+};

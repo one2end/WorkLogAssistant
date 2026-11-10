@@ -50,9 +50,56 @@
     </section>
 
     <section id="sec-categories" class="sec">
-      <div class="sec-head"><Icon name="palette" :size="13" /><span>分类与应用映射</span></div>
-      <div class="sec-body">
-        <p class="sec-desc">修改现有分类的显示名称与颜色，不改动历史原始记录；新增分类也可用于手工标注和应用映射。</p>
+      <div class="sec-head"><Icon name="palette" :size="13" /><span>活动识别与生产力</span><button class="chev" :class="{ open: !folded.categories }" title="展开 / 收起" @click="toggleFold('categories')"><Icon name="chevronDown" :size="13" /></button></div>
+      <div v-if="!folded.categories" class="sec-body">
+        <p class="sec-desc">日常只需维护三档活动价值。细分类继续用于识别窗口，但不再占据主要统计视图。</p>
+        <div class="productivity-settings">
+          <div v-for="key in baseCategories" :key="key" class="productivity-setting">
+            <span>{{ categoryLabel(key) }}</span>
+            <select :value="productivityLevel(key)" :aria-label="`${categoryLabel(key)}的活动价值`" @change="updateProductivityLevel(key, $event.target.value)">
+              <option value="productive">积极</option>
+              <option value="neutral">平稳</option>
+              <option value="distracting">消耗</option>
+            </select>
+          </div>
+        </div>
+        <div class="row recognition-row">
+          <span class="row-label">连续活动识别<span class="row-desc">短暂切到聊天、文件或工具后又返回时，仍视为同一件事</span></span>
+          <select :value="config.analysis?.bridgeFragmentMs || 120000" @change="set('analysis.bridgeFragmentMs', Number($event.target.value))">
+            <option :value="60000">1 分钟</option>
+            <option :value="120000">2 分钟</option>
+            <option :value="180000">3 分钟</option>
+            <option :value="300000">5 分钟</option>
+          </select>
+        </div>
+        <button class="advanced-toggle" type="button" @click="categoryAdvanced = !categoryAdvanced">
+          <span>详细分类与识别规则</span><small>{{ categoryAdvanced ? '收起' : '按应用和窗口校准' }}</small>
+        </button>
+        <div v-if="categoryAdvanced" class="category-advanced">
+        <p class="sec-desc">修改细分类不会改动原始记录；应用映射和窗口关键词用于校准浏览器、WPS 等多用途应用。</p>
+        <div v-if="detailedActivityChoices.length" class="row-block">
+          <span class="row-label">细类价值例外<span class="row-desc">通常继承七个大类；只有确实不同的活动才需要单独调整。</span></span>
+          <div class="productivity-settings compact">
+            <div v-for="choice in detailedActivityChoices" :key="choice.key" class="productivity-setting">
+              <span>{{ choice.name }}</span>
+              <select :value="productivityLevel(choice.key)" :aria-label="`${choice.name}的活动价值`" @change="updateProductivityLevel(choice.key, $event.target.value)">
+                <option value="productive">积极</option><option value="neutral">平稳</option><option value="distracting">消耗</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="row-block project-rules-block">
+          <span class="row-label">项目识别规则<span class="row-desc">窗口或应用包含任一关键词时，自动归入项目；只影响投影，可随时重算。</span></span>
+          <div v-for="(rule, index) in projectRules" :key="`${rule.name}-${index}`" class="app-map-row">
+            <span class="app-map-name">{{ rule.name }}<small>{{ (rule.keywords || []).join('、') }}</small></span>
+            <button type="button" class="btn btn-ghost btn-sm" @click="removeProjectRule(index)">删除</button>
+          </div>
+          <div class="category-editor project-rule-editor">
+            <input v-model="newProjectName" type="text" maxlength="60" placeholder="项目名称" aria-label="项目名称">
+            <input v-model="newProjectKeywords" type="text" maxlength="160" placeholder="关键词，用逗号分隔" aria-label="项目关键词">
+            <button type="button" class="btn btn-secondary btn-sm" @click="addProjectRule">添加</button>
+          </div>
+        </div>
         <div v-for="key in baseCategories" :key="key" class="category-editor">
           <input type="color" :value="categoryMeta[key]?.color || colorForCategory(theme, key)" :aria-label="`${key}的颜色`" @change="updateBaseCategory(key, 'color', $event.target.value)">
           <input type="text" :value="categoryMeta[key]?.name || key" maxlength="16" :aria-label="`${key}的显示名称`" @change="updateBaseCategory(key, 'name', $event.target.value)">
@@ -93,7 +140,10 @@
             <button type="button" class="btn btn-secondary btn-sm" @click="mergeCategory">合并</button>
           </div>
         </div>
-        <div class="hr"></div>
+        <button class="advanced-toggle nested" type="button" @click="appMappingsOpen = !appMappingsOpen">
+          <span>应用与窗口识别</span><small>{{ appMappingsOpen ? '收起' : `${knownApps.length} 个历史应用，按需校准` }}</small>
+        </button>
+        <div v-if="appMappingsOpen" class="mapping-advanced">
         <span class="row-label">历史应用与活动分类<span class="row-desc">固定映射会用于过去和未来的自动记录；手工标注仍优先。浏览器等用途多变的应用可保持按窗口判断。</span></span>
         <input v-model="appQuery" class="app-map-search" type="search" placeholder="搜索历史应用">
         <div class="app-map-list">
@@ -106,6 +156,7 @@
           </div>
         </div>
         <p v-if="!knownApps.length" class="hint">记录层暂无可映射的应用。</p>
+        <p v-else-if="!appQuery && knownApps.length > 20" class="hint">默认只展示最常用的 20 个应用；搜索可定位其余应用。</p>
         <div v-if="mappingSuggestions.length" class="row-block">
           <span class="row-label">AI 映射建议<span class="row-desc">根据窗口证据提出，采用后重算历史记录；不自动改动原始采样。</span></span>
           <div v-for="(item, index) in mappingSuggestions" :key="index" class="app-map-row">
@@ -126,7 +177,10 @@
             <button type="button" class="btn btn-secondary btn-sm" @click="addWindowRule">添加</button>
           </div>
         </div>
+        </div>
+        </div>
       </div>
+      <div v-else class="sec-collapsed">已折叠</div>
     </section>
 
     <!-- ---------------- 首页与图表 ---------------- -->
@@ -258,6 +312,33 @@
             <input type="password" :value="dida.token" placeholder="未填写" autocomplete="off" @change="set('dida.token', $event.target.value)">
           </div>
         </div>
+
+        <div class="hr"></div>
+        <div class="sub-head">
+          <span><strong>计划参考</strong><em>把《记录》的生效重复任务显示为计划层，不计入实际工时</em></span>
+          <label class="switch">
+            <input type="checkbox" :checked="dida.pullPlans !== false" @change="set('dida.pullPlans', $event.target.checked)">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
+        <template v-if="dida.pullPlans !== false">
+          <div class="row">
+            <span class="row-label">来源清单<span class="row-desc">{{ planProjectHint }}</span></span>
+            <div class="row-control wide">
+              <select class="select" :value="dida.planProjectId || ''" :disabled="loadingProjects" @change="set('dida.planProjectId', $event.target.value)">
+                <option value="">自动查找名称为《记录》的清单</option>
+                <option v-for="p in didaProjects" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" :disabled="loadingProjects" @click="loadProjects(true)">{{ loadingProjects ? '读取中…' : '刷新' }}</button>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-label">状态<span class="row-desc">{{ lastPlanPullText }}</span></span>
+            <div class="row-control">
+              <button class="btn btn-primary btn-sm" :disabled="syncing.pull" @click="syncDida('pull')">{{ syncing.pull ? '同步中…' : '立即同步计划' }}</button>
+            </div>
+          </div>
+        </template>
 
         <div class="hr"></div>
         <div class="sub-head">
@@ -613,7 +694,7 @@ export default {
     storagePath: { type: String, default: '' }
   },
   emits: [
-    'save', 'category-change', 'category-meta-change', 'category-merge-change', 'app-map-change', 'window-rule-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
+    'save', 'category-change', 'category-meta-change', 'category-merge-change', 'app-map-change', 'window-rule-change', 'project-rule-change', 'productivity-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
     'select-storage', 'reset-storage',
     'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
@@ -639,11 +720,13 @@ export default {
         { id: 'advanced', label: '运行与高级' },
         { id: 'about', label: '诊断与关于' }
       ],
-      // 插件相关默认展开，次要分区默认折叠
+      // 设置页使用统一手风琴：导航到哪个分区，就只展开哪个分区。
       folded: {
         pomodoro: true, ai: true, bridge: true, dida: true,
-        dashboard: true, appearance: false, data: true, privacy: true, advanced: true, about: true
+        categories: true, dashboard: true, appearance: false, data: true, privacy: true, advanced: true, about: true
       },
+      categoryAdvanced: false,
+      appMappingsOpen: false,
       newCategoryName: '',
       newCategoryColor: '#6f9fe8',
       newCategoryGroup: '其他',
@@ -651,6 +734,7 @@ export default {
       mergeSource: '', mergeTarget: '',
       appQuery: '',
       newRuleApp: '', newRuleTitle: '', newRuleCategory: '工作',
+      newProjectName: '', newProjectKeywords: '',
       // 滴答清单列表：打开推送设置时按需拉取，不阻塞设置页首屏
       didaProjects: [],
       loadingProjects: false,
@@ -676,15 +760,25 @@ export default {
     categoryMeta() { return this.config.analysis?.categoryMeta || {}; },
     categoryMerges() { return this.config.analysis?.categoryMerges || {}; },
     windowRules() { return this.config.analysis?.windowCategoryRules || []; },
+    projectRules() { return this.config.analysis?.projectRules || []; },
     baseCategories() { return ['工作', '学习', '生活', '娱乐', '睡眠', '专注', '其他']; },
     categoryChoices() {
       return [...this.baseCategories.map(key => ({ key, name: this.categoryMeta[key]?.name || key })),
         ...this.customCategories.map(c => ({ key: c.key || c.name, name: c.name }))];
     },
+    detailedActivityChoices() {
+      const seen = new Map(this.customCategories.map(c => [c.key || c.name, { key: c.key || c.name, name: c.name }]));
+      for (const app of this.knownApps) {
+        const key = app.mappedCategory || app.inferredCategory;
+        if (key && !this.baseCategories.includes(key) && !seen.has(key)) seen.set(key, { key, name: this.categoryLabel(key) });
+      }
+      return [...seen.values()];
+    },
     activeCategoryChoices() { return this.categoryChoices.filter(c => !this.categoryMerges[c.key]); },
     visibleKnownApps() {
       const query = this.appQuery.trim().toLowerCase();
-      return query ? this.knownApps.filter(a => a.name.toLowerCase().includes(query)) : this.knownApps;
+      const matches = query ? this.knownApps.filter(a => a.name.toLowerCase().includes(query)) : this.knownApps;
+      return matches.slice(0, query ? 100 : 20);
     },
     dashboardCards() { return DASHBOARD_CARDS; },
     modelPresets() { return AI_MODELS; },
@@ -709,12 +803,17 @@ export default {
     },
     syncing() {
       const busy = this.didaStat.busy || {};
-      return { pull: !!busy.pull, push: !!busy.push };
+      return { pull: !!busy.pull || !!busy.plans, push: !!busy.push };
     },
     lastPullText() {
       const s = this.didaStat;
       if (!s.lastPullAt) return '尚未同步';
       return `上次 ${this.fmtTime(s.lastPullAt)} · 新增 ${s.lastPullCount || 0} 条`;
+    },
+    lastPlanPullText() {
+      const s = this.didaStat;
+      if (!s.lastPlanPullAt) return '尚未同步计划';
+      return `上次 ${this.fmtTime(s.lastPlanPullAt)} · ${s.planTemplateCount || s.lastPlanPullCount || 0} 个模板`;
     },
     lastPushText() {
       const s = this.didaStat;
@@ -732,6 +831,12 @@ export default {
       if (!id) return '留空时推送不会执行';
       const hit = this.didaProjects.find(p => p.id === id);
       return hit ? `已选择：${hit.name}` : '已选择（清单名未读取，点刷新可显示）';
+    },
+    planProjectHint() {
+      const id = this.dida.planProjectId;
+      if (!id) return this.didaStat.planProjectName ? `已自动匹配：${this.didaStat.planProjectName}` : '留空将自动匹配《记录》';
+      const hit = this.didaProjects.find(p => p.id === id);
+      return hit ? `已选择：${hit.name}` : '已选择清单；刷新可显示名称';
     }
   },
   methods: {
@@ -825,6 +930,22 @@ export default {
       else delete next[app];
       this.$emit('app-map-change', next);
     },
+    productivityLevel(key) {
+      const saved = this.config.analysis?.productivityLevels?.[key];
+      if (['productive', 'neutral', 'distracting'].includes(saved)) return saved;
+      const groups = { '沟通协作': '工作', 'AI 助手': '工作', '开发编码': '工作', '文档写作': '工作', '任务与效率': '工作', '浏览检索': '工作', '文件系统': '工作', '系统工具': '工作', '阅读': '学习', '生活事务': '生活', '影音娱乐': '娱乐', '游戏': '娱乐', '空档': '其他' };
+      const group = groups[key] || this.customCategories.find(c => (c.key || c.name) === key)?.group || key;
+      const inherited = this.config.analysis?.productivityLevels?.[group];
+      if (['productive', 'neutral', 'distracting'].includes(inherited)) return inherited;
+      if (['工作', '学习', '专注'].includes(group)) return 'productive';
+      if (group === '娱乐') return 'distracting';
+      return 'neutral';
+    },
+    updateProductivityLevel(key, level) {
+      if (!['productive', 'neutral', 'distracting'].includes(level)) return;
+      const next = { ...(this.config.analysis?.productivityLevels || {}), [key]: level };
+      this.$emit('productivity-change', next);
+    },
     categoryLabel(key) {
       return this.categoryChoices.find(c => c.key === key)?.name || key;
     },
@@ -847,6 +968,17 @@ export default {
     removeWindowRule(index) {
       this.$emit('window-rule-change', this.windowRules.filter((_, i) => i !== index));
     },
+    addProjectRule() {
+      const name = this.newProjectName.trim();
+      const keywords = this.newProjectKeywords.split(/[,，]/).map(x => x.trim()).filter(x => x.length >= 2);
+      if (!name || !keywords.length) { this.categoryError = '项目名称和至少一个两字关键词必填'; return; }
+      const next = [...this.projectRules.filter(rule => rule.name !== name), { name, keywords: [...new Set(keywords)] }];
+      this.$emit('project-rule-change', next);
+      this.newProjectName = ''; this.newProjectKeywords = ''; this.categoryError = '';
+    },
+    removeProjectRule(index) {
+      this.$emit('project-rule-change', this.projectRules.filter((_, i) => i !== index));
+    },
     cardOn(key) {
       const cards = (this.config.dashboard && this.config.dashboard.cards) || {};
       return cards[key] === undefined ? true : !!cards[key];
@@ -854,9 +986,13 @@ export default {
     toggleFold(id) { this.folded = { ...this.folded, [id]: !this.folded[id] }; },
     goSection(id) {
       this.section = id;
+      const folded = {};
+      for (const item of this.sections) folded[item.id] = item.id !== id;
+      this.folded = { ...this.folded, ...folded };
       this.$nextTick(() => this.scrollTo(id));
-      // 进到滴答分区且已开推送时，顺手把清单列表准备好
-      if (id === 'dida' && this.didaOn && this.dida.pushEnabled === true && !this.didaProjects.length) {
+      // 计划来源和推送目标共用清单列表，进入滴答分区时按需准备。
+      if (id === 'dida' && this.didaOn &&
+          (this.dida.pullPlans !== false || this.dida.pushEnabled === true) && !this.didaProjects.length) {
         this.loadProjects(false);
       }
     },
@@ -942,6 +1078,18 @@ export default {
 }
 
 .category-ai { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0; }
+.productivity-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--sp-2); padding: var(--sp-2) 0 var(--sp-3); }
+.productivity-setting { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: 7px 9px; border: 1px solid var(--border-subtle); border-radius: var(--r-sm); font-size: var(--fs-11); }
+.productivity-setting select { width: 76px; }
+.productivity-settings.compact { padding-bottom: 0; }
+.recognition-row select { width: 96px; flex: none; }
+.project-rule-editor input { max-width: none !important; }
+.project-rule-editor input:nth-child(2) { flex: 1.5; }
+.advanced-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; margin: var(--sp-1) 0; padding: var(--sp-3); border: 1px solid var(--border-subtle); border-radius: var(--r-sm); background: var(--bg-inset); color: var(--text-secondary); cursor: pointer; }
+.advanced-toggle small { color: var(--text-tertiary); }.category-advanced { padding-top: var(--sp-2); }
+.advanced-toggle.nested { margin-top: var(--sp-4); background: var(--bg-elevated); }
+.mapping-advanced { padding: var(--sp-3) 0 0; }
+.project-rules-block { margin-top: var(--sp-3); }
 .category-editor { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0; }
 .category-editor input[type="color"] { width: 36px; height: 30px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: var(--r-sm); background: var(--bg-elevated); cursor: pointer; }
 .category-editor input[type="text"] { flex: 1; min-width: 100px; max-width: 240px; }

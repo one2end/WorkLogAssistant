@@ -50,6 +50,9 @@ export const DASHBOARD_CARDS = [
   { key: 'aiInsights', label: '记录提示' },
   { key: 'heatmap', label: '活跃度热力图' },
   { key: 'session', label: '当前会话' },
+  { key: 'plan', label: '今日计划' },
+  { key: 'threads', label: '活动线程' },
+  { key: 'weeklyReview', label: '周回顾草稿' },
   { key: 'composition', label: '时间构成' },
   { key: 'apps', label: '应用排行' },
   { key: 'focusNotes', label: '专注与随手记' }

@@ -25,6 +25,7 @@ const { ApiServer, generateToken } = require('./apiServer');
 const analytics = require('./analytics');
 const { categorySuggestions } = require('./annotationAdvisor');
 const { DidaSync } = require('./didaSync');
+const { PlanManager } = require('./planManager');
 const { writeFileAtomic } = require('./atomicFile');
 const { reviewWindow } = require('./aiReview');
 
@@ -78,6 +79,7 @@ const windowMonitor = new WindowMonitor();
 const summarizer = new Summarizer();
 const logManager = new LogManager(customPath);
 const arhatManager = new ArhatManager(customPath);
+const planManager = new PlanManager(() => storageManager.getDataDir());
 
 /** 推给渲染层的统一出口；窗口可能还没创建或正在销毁 */
 function broadcast(channel, payload) {
@@ -800,11 +802,16 @@ ipcMain.handle('dida-sync-now', async (event, payload) => {
   const direction = (payload && payload.direction) || 'pull';
   if (direction === 'push') return didaSync.push({ manual: true });
   if (direction === 'both') {
-    const pull = await didaSync.pull({ manual: true });
+    const [pull, plans] = await Promise.all([
+      didaSync.pull({ manual: true }), didaSync.pullPlans({ manual: true })
+    ]);
     const push = await didaSync.push({ manual: true });
-    return { pull, push };
+    return { pull, plans, push };
   }
-  return didaSync.pull({ manual: true });
+  const [pull, plans] = await Promise.all([
+    didaSync.pull({ manual: true }), didaSync.pullPlans({ manual: true })
+  ]);
+  return { pull, plans };
 });
 
 ipcMain.handle('save-config', (event, config) => {
@@ -940,9 +947,95 @@ ipcMain.handle('get-day-analytics', (event, date) => {
   try {
     const dateStr = date || analytics.toDateStr(new Date());
     const report = analytics.buildDayReport(storageManager.getDataDir(), dateStr, configManager.getConfig().analysis);
+    // 计划层只是意图参考，不进入 analytics 的实际工时和来源优先级计算。
+    const externalPlans = didaSync.getPlanForDate(dateStr);
+    const localPlans = planManager.listForDate(dateStr);
+    report.plan = [
+      ...planManager.decorate(externalPlans, dateStr),
+      ...localPlans
+    ].sort((a, b) => a.startMin - b.startMin);
     return { ok: true, report, markdown: analytics.renderDayMarkdown(report, 'normal') };
   } catch (error) {
     return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-local-plan', (event, payload) => {
+  try {
+    const result = planManager.upsert(payload || {});
+    if (result.ok) notifyDataChanged();
+    return result;
+  } catch (error) {
+    return { ok: false, error: error.message || '保存计划失败' };
+  }
+});
+
+ipcMain.handle('delete-local-plan', (event, payload) => {
+  try {
+    const result = planManager.remove(String(payload?.localId || ''));
+    if (result.ok) notifyDataChanged();
+    return result;
+  } catch (error) {
+    return { ok: false, error: error.message || '删除计划失败' };
+  }
+});
+
+/**
+ * 计划变为事实有两条路径：
+ * 1. plan   —— 用户确认“就按计划记”，写一条人工事实；
+ * 2. screen —— 复用已经存在的屏幕活动，只给计划挂上识别结果，不复制工时。
+ */
+ipcMain.handle('convert-plan-to-fact', (event, payload) => {
+  try {
+    const plan = payload?.plan || {};
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.date || '')) ? payload.date : '';
+    const mode = payload?.mode === 'screen' ? 'screen' : 'plan';
+    if (!date || !Number.isFinite(Number(plan.startMin)) || !Number.isFinite(Number(plan.durationMin))) {
+      return { ok: false, error: '计划时间无效' };
+    }
+
+    if (mode === 'screen') {
+      const report = analytics.buildDayReport(storageManager.getDataDir(), date, configManager.getConfig().analysis);
+      const endMin = Number(plan.endMin) || Number(plan.startMin) + Number(plan.durationMin);
+      const matches = (report.activityThreads || []).map(thread => {
+        const start = Number(thread.startMin) || 0;
+        const end = start + (Number(thread.durationMs) || 0) / 60000;
+        return { thread, overlap: Math.max(0, Math.min(endMin, end) - Math.max(Number(plan.startMin), start)) };
+      }).filter(item => item.overlap >= 5).sort((a, b) => b.overlap - a.overlap);
+      if (!matches.length) return { ok: false, error: '该计划时段还没有足够的屏幕活动可生成事实' };
+      const top = matches[0].thread;
+      const covered = matches.reduce((sum, item) => sum + item.overlap, 0);
+      const marked = planManager.markActual(plan, date, {
+        source: 'screen', label: top.label, category: top.group || top.category,
+        startMin: Number(plan.startMin), durationMin: Math.min(Number(plan.durationMin), covered)
+      });
+      notifyDataChanged();
+      return { ok: true, actual: marked.actual };
+    }
+
+    const parsed = manualRecordFromPayload({
+      date,
+      startTime: `${String(Math.floor(Number(plan.startMin) / 60)).padStart(2, '0')}:${String(Number(plan.startMin) % 60).padStart(2, '0')}`,
+      durationMin: plan.durationMin,
+      app: plan.label || plan.title || '计划',
+      note: plan.label || plan.title || '',
+      category: plan.category || '其他',
+      project: plan.project || ''
+    });
+    if (parsed.error) return { ok: false, error: parsed.error };
+    parsed.record.platform = 'plan';
+    parsed.record.origin = 'plan';
+    parsed.record.planKey = planManager.keyOf(plan, date);
+    const ok = storageManager.appendActivityRecords([parsed.record]);
+    if (!ok) return { ok: false, error: '计划转为事实时写入失败' };
+    const marked = planManager.markActual(plan, date, {
+      source: 'plan', label: plan.label || plan.title, category: plan.category,
+      startMin: Number(plan.startMin), durationMin: Number(plan.durationMin)
+    });
+    notifyDataChanged();
+    return { ok: true, actual: marked.actual };
+  } catch (error) {
+    return { ok: false, error: error.message || '计划转为事实失败' };
   }
 });
 
@@ -1077,7 +1170,8 @@ function manualRecordFromPayload(payload) {
     title: remark,
     platform: 'manual',
     source: 'manual',
-    cat: p.category || ''
+    cat: p.category || '',
+    project: String(p.project || '').trim().slice(0, 60)
   } };
 }
 

@@ -48,10 +48,10 @@ const DEFAULT_OPTIONS = {
    * 每段 3–30 秒，加起来不到一分钟，却把整场游戏切断成 8 分钟 + 5 分钟。
    * 于是「我明明打了两小时游戏」在时间线上是一堆几分钟的碎片。
    *
-   * 90 秒是分界：几秒钟的客户端闪动、切出去瞄一眼，属于这件事里的间隙；
-   * 而真正离开去看别的东西，往往在两分钟以上，仍然独立成段。
+   * 默认 2 分钟：几秒钟的客户端闪动、查文件或回复一句消息，仍属于原活动；
+   * 更长的切换保持独立。用户可以在设置里按自己的工作节奏调整。
    */
-  bridgeFragmentMs: 90 * 1000,
+  bridgeFragmentMs: 120 * 1000,
   // 时间线中默认隐藏的短会话阈值
   minSessionMs: 60 * 1000,
   // 每个应用最多展示多少个窗口标题
@@ -335,7 +335,9 @@ function readDayRaw(dataDir, dateStr) {
             source: rec.source === 'manual' ? 'manual'
               : (rec.source === 'dida' || rec.source === 'uptimer') ? 'imported'
               : 'auto',
-            category: rec.cat || undefined
+            category: rec.cat || undefined,
+            project: Object.prototype.hasOwnProperty.call(rec, 'project')
+              ? String(rec.project || '') : undefined
           });
         } catch (e) { /* 单行损坏跳过 */ }
       }
@@ -508,7 +510,7 @@ function resolveCategoryMerge(category, merges = {}) {
   return current;
 }
 
-function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), windowCategoryRules = [], categoryMerges = {}) {
+function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), windowCategoryRules = [], categoryMerges = {}, projectRules = []) {
   const atoms = [];
   const ignored = ignoreSet || new Set(DEFAULT_IGNORED_APPS);
 
@@ -533,11 +535,21 @@ function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), win
       title.toLowerCase().includes(String(rule.titleContains).toLowerCase()));
     const category = source === 'auto' && (hasWindowRule || mappedApps.has(normalizedApp))
       ? classify(app, title) : (item.category || classify(app, title));
+    const haystack = `${app} ${title}`.toLowerCase();
+    const projectRule = (projectRules || []).find(rule => {
+      const keywords = Array.isArray(rule.keywords) ? rule.keywords : String(rule.keywords || '').split(/[,，]/);
+      return rule.name && keywords.some(keyword => {
+        const word = String(keyword || '').trim().toLowerCase();
+        return word.length >= 2 && haystack.includes(word);
+      });
+    });
     atoms.push({
       ms,
       app,
       title,
       category: resolveCategoryMerge(category, categoryMerges),
+      // 手工标注明确写入空项目时，视为用户主动清空，不能再被规则补回。
+      project: String(item.project !== undefined ? item.project : (projectRule?.name || '')).trim(),
       kind: item.kind === 'idle' ? 'idle' : 'active',
       // 三层来源要原样保留：优先级消解靠它区分
       // manual（本人补记）> imported（导入的标注）> focus（专注）> auto（录制）
@@ -678,7 +690,7 @@ function buildSlots(atoms, dateStr, options = {}) {
   for (let i = 0; i < Math.ceil(1440 / slotMin); i += 1) {
     slots.push({
       index: i, startMin: i * slotMin, ms: 0,
-      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, noteMs: {}, focusMs: {},
+      catMs: {}, appMs: {}, layerMs: {}, titleMs: {}, noteMs: {}, focusMs: {}, projectMs: {},
       // 有效占用（毫秒）：决定这一格算不算「已记录」
       substantiveMs: 0,
       // 自动录制在该格里的占用：只有占满整格才算数
@@ -744,6 +756,7 @@ function buildSlots(atoms, dateStr, options = {}) {
       const note = (a.note || '').trim();
       if (note) slot.noteMs[note] = (slot.noteMs[note] || 0) + mins;
       if (a.focusId) slot.focusMs[a.focusId] = (slot.focusMs[a.focusId] || 0) + mins;
+      if (a.project) slot.projectMs[a.project] = (slot.projectMs[a.project] || 0) + mins;
       cur = segEnd;
     }
   }
@@ -759,6 +772,7 @@ function buildSlots(atoms, dateStr, options = {}) {
     const title = Object.entries(slot.titleMs).sort((x, y) => y[1] - x[1])[0];
     const note = Object.entries(slot.noteMs).sort((x, y) => y[1] - x[1])[0];
     const focus = Object.entries(slot.focusMs).sort((x, y) => y[1] - x[1])[0];
+    const project = Object.entries(slot.projectMs).sort((x, y) => y[1] - x[1])[0];
     return {
       index: slot.index,
       startMin: slot.startMin,
@@ -778,6 +792,7 @@ function buildSlots(atoms, dateStr, options = {}) {
       note: note ? note[0] : (title ? title[0] : ''),
       // 专注会话 id：界面上要能单独删掉一条专注
       focusId: focus ? focus[0] : null,
+      project: project ? project[0] : '',
       // 主要事件占该格的比例：低于 0.6 说明这段本身是混合的
       purity: top && slot.ms ? Number((top[1] / (slot.ms / 60000)).toFixed(2)) : 0
     };
@@ -794,6 +809,7 @@ function buildSlots(atoms, dateStr, options = {}) {
  * 兜底分类（「其他」）不参与：那里什么杂项都有，按分类粘合会糊成一团。
  */
 function isSameThread(a, b) {
+  if (a.project && b.project && a.project !== b.project) return false;
   if (a.app === b.app) return true;
   if (!a.category || a.category !== b.category) return false;
   return a.category !== FALLBACK_CATEGORY;
@@ -801,7 +817,7 @@ function isSameThread(a, b) {
 
 function foldSessions(atoms, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
-  const bridgeMs = Number.isFinite(opts.bridgeFragmentMs) ? opts.bridgeFragmentMs : 90000;
+  const bridgeMs = Number.isFinite(opts.bridgeFragmentMs) ? opts.bridgeFragmentMs : 120000;
   const sessions = [];
 
   const absorb = (target, atom) => {
@@ -817,13 +833,19 @@ function foldSessions(atoms, options) {
       target.titles.push(atom.title);
     }
     if (atom.durationExact === false) target.hasUncertainty = true;
+    if (atom.project) {
+      if (!target.project) target.project = atom.project;
+      target.projectMs[atom.project] = (target.projectMs[atom.project] || 0) + Math.max(atom.durationMs, 0);
+    }
   };
 
   for (const atom of atoms) {
     if (atom.durationMs <= 0) continue;
     const last = sessions[sessions.length - 1];
 
+    const projectCompatible = last && (!last.project || !atom.project || last.project === atom.project);
     const mergeable = last
+      && projectCompatible
       && last.app === atom.app
       && (atom.ms - last.endMs) <= Math.max(opts.sampleGapMs * 2, 120000);
 
@@ -835,6 +857,7 @@ function foldSessions(atoms, options) {
      * 间隔限制在 1 分钟内，真离开去干别的不会被粘回来。
      */
     const sameCategoryAdjacent = last
+      && projectCompatible
       && last.category === atom.category
       && last.category !== FALLBACK_CATEGORY
       && (atom.ms - last.endMs) <= Math.max(opts.sampleGapMs, 60000);
@@ -873,7 +896,9 @@ function foldSessions(atoms, options) {
       manualCount: atom.source === 'manual' ? 1 : 0,
       titles: atom.title ? [atom.title] : [],
       hasUncertainty: atom.durationExact === false,
-      appMs: { [atom.app]: Math.max(atom.durationMs, 0) }
+      appMs: { [atom.app]: Math.max(atom.durationMs, 0) },
+      project: atom.project || '',
+      projectMs: atom.project ? { [atom.project]: Math.max(atom.durationMs, 0) } : {}
     });
   }
 
@@ -887,10 +912,128 @@ function foldSessions(atoms, options) {
       const top = Object.entries(s.appMs).sort((a, b) => b[1] - a[1])[0];
       if (top) s.app = top[0];
     }
+    const topProject = Object.entries(s.projectMs || {}).sort((a, b) => b[1] - a[1])[0];
+    s.project = topProject ? topProject[0] : '';
     delete s.appMs;
+    delete s.projectMs;
   }
 
   return sessions.filter(s => s.durationMs > 0);
+}
+
+/**
+ * 把应用会话进一步归并成用户能理解的「活动线程」。
+ *
+ * 会话回答的是前台窗口发生了什么；线程回答的是这段时间大致在推进什么。
+ * 这里只使用本地证据：相邻关系、展示分组、窗口标题和用户标注，不调用模型，
+ * 也不把低置信度结果写回标注层。
+ */
+function buildActivityThreads(sessions, options = {}) {
+  const gapLimit = Number(options.activityThreadGapMs) || 5 * 60 * 1000;
+  const stop = new Set(['google', 'chrome', 'microsoft', 'edge', 'mozilla', 'firefox', 'wps',
+    'office', 'desktop', '微信', '邮e联', '首页', '主页', '新标签页', '未命名窗口']);
+  const cleanTitle = (value, app) => String(value || '')
+    .replace(/\s+[-—|·]\s+(Google Chrome|Microsoft Edge|WPS Office|微信|邮e联)$/i, '')
+    .replace(/\.(docx?|xlsx?|pptx?|pdf|md|txt)$/i, '')
+    .trim()
+    .slice(0, 100) || String(app || '').trim();
+  const titleTokens = (titles, app) => {
+    const out = new Set();
+    for (const raw of titles || []) {
+      const title = cleanTitle(raw, app).toLowerCase();
+      for (const token of title.split(/[\s/\\|·—_():：,，。\[\]【】]+/)) {
+        const word = token.trim();
+        if (!word || stop.has(word) || word === String(app || '').toLowerCase()) continue;
+        if (/^[a-z0-9.-]+$/i.test(word) ? word.length >= 4 : word.length >= 2) out.add(word);
+      }
+    }
+    return out;
+  };
+  const sharesToken = (left, right) => {
+    for (const token of left) if (right.has(token)) return true;
+    return false;
+  };
+  const sorted = [...(sessions || [])].filter(s => s && s.durationMs > 0).sort((a, b) => a.startMs - b.startMs);
+  const groups = [];
+
+  for (const session of sorted) {
+    const tokens = titleTokens(session.titles, session.app);
+    const last = groups[groups.length - 1];
+    const gap = last ? Math.max(0, session.startMs - last.endMs) : Infinity;
+    const sameGroup = last && simpleCategory(last.lastCategory) === simpleCategory(session.category)
+      && simpleCategory(session.category) !== '其他';
+    const shortSupport = last && (session.durationMs <= 5 * 60 * 1000 || last.lastItem.durationMs <= 5 * 60 * 1000);
+    const projectConflict = last && session.project && last.projects.size > 0 && !last.projects.has(session.project);
+    const related = last && !projectConflict && gap <= gapLimit &&
+      (sharesToken(last.tokens, tokens) || (sameGroup && shortSupport && gap <= Math.min(gapLimit, 2 * 60 * 1000)));
+
+    if (!related) {
+      groups.push({ startMs: session.startMs, endMs: session.endMs, items: [session],
+        tokens: new Set(tokens), projects: new Set(session.project ? [session.project] : []), lastCategory: session.category, lastItem: session });
+      continue;
+    }
+    last.endMs = Math.max(last.endMs, session.endMs);
+    last.items.push(session);
+    for (const token of tokens) last.tokens.add(token);
+    if (session.project) last.projects.add(session.project);
+    last.lastCategory = session.category;
+    last.lastItem = session;
+  }
+
+  return groups.map((group, index) => {
+    const categories = new Map();
+    const apps = new Map();
+    const titles = [];
+    const projects = new Map();
+    let manualMs = 0;
+    let totalMs = 0;
+    for (const item of group.items) {
+      const ms = Number(item.durationMs) || 0;
+      totalMs += ms;
+      categories.set(item.category || '其他', (categories.get(item.category || '其他') || 0) + ms);
+      apps.set(item.app || '未知应用', (apps.get(item.app || '未知应用') || 0) + ms);
+      if (item.manualCount > 0) manualMs += ms;
+      if (item.project) projects.set(item.project, (projects.get(item.project) || 0) + ms);
+      for (const title of item.titles || []) {
+        const cleaned = cleanTitle(title, item.app);
+        if (cleaned && cleaned.toLowerCase() !== String(item.app || '').toLowerCase() && !titles.includes(cleaned)) titles.push(cleaned);
+      }
+    }
+    const [category, categoryMs] = [...categories].sort((a, b) => b[1] - a[1])[0] || ['其他', 0];
+    const rankedApps = [...apps].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+    const label = titles.sort((a, b) => b.length - a.length)[0] || rankedApps[0] || category;
+    const project = [...projects].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    const durationMs = Math.max(totalMs, group.endMs - group.startMs);
+    const dominance = totalMs ? categoryMs / totalMs : 0;
+    const switches = Math.max(0, group.items.length - 1);
+    const switchesPerHour = switches / Math.max(durationMs / 3600000, 0.25);
+    let confidence = 0.2;
+    if (titles.length) confidence += 0.25;
+    if (durationMs >= 30 * 60000) confidence += 0.2;
+    else if (durationMs >= 15 * 60000) confidence += 0.1;
+    confidence += Math.min(0.25, dominance * 0.25);
+    if (switchesPerHour <= 8) confidence += 0.1;
+    if (manualMs > 0) confidence += 0.1;
+    confidence = Number(Math.min(0.98, confidence).toFixed(2));
+    const at = new Date(group.startMs);
+    return {
+      id: `${at.getTime()}-${index}`,
+      start: at.toISOString(),
+      end: new Date(group.endMs).toISOString(),
+      startMin: at.getHours() * 60 + at.getMinutes(),
+      durationMs,
+      label: label.slice(0, 80),
+      project,
+      category,
+      group: simpleCategory(category),
+      apps: rankedApps.slice(0, 3),
+      evidence: titles.slice(0, 3),
+      switchCount: switches,
+      confidence,
+      source: manualMs > 0 ? 'confirmed' : 'inferred',
+      needsConfirmation: confidence < 0.65 || simpleCategory(category) === '其他'
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -998,7 +1141,7 @@ function buildDayReport(dataDir, dateStr, options) {
 
   const raw = readDayRaw(dataDir, dateStr);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
-    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {});
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {}, opts.projectRules || []);
 
   // 录制器会把空闲段单独写成 kind=idle 的片段，直接累计
   const idleAtoms = atoms.filter(a => a.kind === 'idle');
@@ -1092,6 +1235,7 @@ function buildDayReport(dataDir, dateStr, options) {
   }
 
   const agg = aggregate(sessions);
+  const activityThreads = buildActivityThreads(sessions, opts);
   const { apps, categories, categoriesGrouped } = agg;
   // 生活事务保留在 sessions（时间线要完整），但不计入有效工时
   // 睡眠单独统计，不能再算进「生活事务」，否则两栏相加会超过 24 小时
@@ -1215,6 +1359,7 @@ function buildDayReport(dataDir, dateStr, options) {
     apps,
     recordedApps,
     recordedWindows,
+    activityThreads,
     // 展示层：15 分钟一格的主要事件，UI 与 AI 回顾都读这一层
     slots,
     dayBalance: buildDayBalance(slots, Object.fromEntries((opts.customCategories || []).map(c => [c.key || c.name, c.group || '其他']))),
@@ -1230,6 +1375,7 @@ function buildDayReport(dataDir, dateStr, options) {
       category: s.category,
       durationMs: s.durationMs,
       titles: s.titles.slice(0, 4),
+      project: s.project || '',
       uncertain: s.hasUncertainty,
       manual: s.manualCount > 0 && s.manualCount === s.recordCount
     })),
@@ -1287,6 +1433,8 @@ function buildRangeReport(dataDir, from, to, options) {
   // 汇总各应用
   const appTotals = new Map();
   const catTotals = new Map();
+  const threadTotals = new Map();
+  const projectTotals = new Map();
   let grandTotal = 0;
 
   for (const report of reports) {
@@ -1302,6 +1450,25 @@ function buildRangeReport(dataDir, from, to, options) {
       const cur = catTotals.get(c.name) || { name: c.name, durationMs: 0 };
       cur.durationMs += c.durationMs;
       catTotals.set(c.name, cur);
+    }
+    for (const thread of report.activityThreads || []) {
+      const key = `${String(thread.project || '').trim().toLowerCase()}\u0000${String(thread.label || thread.category || '未命名活动').trim().toLowerCase()}`;
+      const cur = threadTotals.get(key) || {
+        label: thread.label || thread.category || '未命名活动', category: thread.category,
+        group: thread.group, project: thread.project || '', durationMs: 0, days: new Set(), confidenceTotal: 0, count: 0
+      };
+      cur.durationMs += Number(thread.durationMs) || 0;
+      cur.days.add(report.date);
+      cur.confidenceTotal += Number(thread.confidence) || 0;
+      cur.count += 1;
+      threadTotals.set(key, cur);
+      if (thread.project) {
+        const project = projectTotals.get(thread.project) || { name: thread.project, durationMs: 0, days: new Set(), threadCount: 0 };
+        project.durationMs += Number(thread.durationMs) || 0;
+        project.days.add(report.date);
+        project.threadCount += 1;
+        projectTotals.set(thread.project, project);
+      }
     }
   }
 
@@ -1335,6 +1502,21 @@ function buildRangeReport(dataDir, from, to, options) {
         durationMs: c.durationMs,
         percent: grandTotal > 0 ? c.durationMs / grandTotal : 0
       }))
+      .sort((a, b) => b.durationMs - a.durationMs),
+    threads: Array.from(threadTotals.values())
+      .map(t => ({
+        label: t.label,
+        category: t.category,
+        group: t.group,
+        project: t.project,
+        durationMs: t.durationMs,
+        dayCount: t.days.size,
+        confidence: t.count ? Number((t.confidenceTotal / t.count).toFixed(2)) : 0
+      }))
+      .sort((a, b) => b.durationMs - a.durationMs),
+    projects: Array.from(projectTotals.values())
+      .map(p => ({ name: p.name, durationMs: p.durationMs, dayCount: p.days.size, threadCount: p.threadCount,
+        percent: grandTotal > 0 ? p.durationMs / grandTotal : 0 }))
       .sort((a, b) => b.durationMs - a.durationMs)
   };
 }
@@ -1389,7 +1571,7 @@ function searchActivities(dataDir, keyword, from, to, options) {
 
   const raw = readRangeRaw(dataDir, from, to);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
-    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {});
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {}, opts.projectRules || []);
   inferDurations(atoms, opts);
 
   const hits = atoms.filter(a =>
@@ -1432,7 +1614,7 @@ function findNoteHints(dataDir, keyword, from, to, options = {}) {
   const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
     new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))),
-    opts.windowCategoryRules || [], opts.categoryMerges || {});
+    opts.windowCategoryRules || [], opts.categoryMerges || {}, opts.projectRules || []);
 
   const tally = new Map();
   for (const a of atoms) {
@@ -1637,7 +1819,7 @@ function renderPromptContext(rawItems, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
   const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
   const atoms = normalizeRaw(rawItems, classify, buildIgnoreSet(opts.ignoredApps),
-    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {});
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {}, opts.projectRules || []);
 
   if (!atoms.length) return { text: '', totalMs: 0, sessionCount: 0, idleMs: 0 };
 
@@ -1659,6 +1841,7 @@ function renderPromptContext(rawItems, options) {
   }
 
   const totalMs = sessions.reduce((s, x) => s + x.durationMs, 0);
+  const activityThreads = buildActivityThreads(sessions, opts);
 
   const lines = [];
   const MAX_LINES = opts.maxPromptLines || 70;
@@ -1701,7 +1884,8 @@ function renderPromptContext(rawItems, options) {
     text: `${header}\n\n${lines.join('\n')}`,
     totalMs,
     sessionCount: sessions.length,
-    idleMs
+    idleMs,
+    activityThreads
   };
 }
 
@@ -1719,6 +1903,7 @@ module.exports = {
   buildClassifier,
   resolveCategoryMerge,
   foldSessions,
+  buildActivityThreads,
   buildIgnoreSet,
   listRecordedApps,
   listRecordedAppsAsync,

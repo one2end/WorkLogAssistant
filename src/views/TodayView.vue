@@ -133,6 +133,21 @@
       </div>
     </section>
 
+    <PlanOverview
+      v-if="cards.plan"
+      :plan="report.plan || []"
+      :threads="report.activityThreads || []"
+      :selected-date="selectedDate"
+      :theme="theme"
+    />
+
+    <ActivityThreads
+      v-if="cards.threads"
+      :threads="report.activityThreads || []"
+      @review="reviewThread"
+      @confirm="$emit('confirm-thread', $event)"
+    />
+
     <section v-if="suggestions.length" class="card suggestion-card">
       <div class="card-head">
         <span class="card-title">可一键确认的分类</span>
@@ -181,6 +196,15 @@
       </div>
       <p class="insight-note">依据当前记录计算，仅供检查；不会自动修改原始数据。</p>
     </section>
+
+    <ProductivityOverview
+      v-if="cards.composition"
+      :selected-date="selectedDate"
+      :config="config"
+      @open-settings="$emit('open-plugin-settings', 'categories')"
+    />
+
+    <WeeklyReview v-if="cards.weeklyReview" :selected-date="selectedDate" />
 
     <!-- 活跃度：跨度由设置页的热力图周数决定 -->
     <section v-if="cards.heatmap" class="card heat-card">
@@ -328,6 +352,10 @@ import ActivityHeatmap from '../components/ActivityHeatmap.vue';
 import EmptyIllustration from '../components/EmptyIllustration.vue';
 import AiPanel from '../components/AiPanel.vue';
 import PluginDock from '../components/PluginDock.vue';
+import ProductivityOverview from '../components/ProductivityOverview.vue';
+import ActivityThreads from '../components/ActivityThreads.vue';
+import WeeklyReview from '../components/WeeklyReview.vue';
+import PlanOverview from '../components/PlanOverview.vue';
 import { colorForCategory } from '../styles/palette.js';
 import { readPath } from '../plugins/registry.js';
 
@@ -347,7 +375,7 @@ function balanceFromSlots(report) {
 
 export default {
   name: 'TodayView',
-  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock },
+  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock, ProductivityOverview, ActivityThreads, WeeklyReview, PlanOverview },
   props: {
     config: { type: Object, default: () => ({}) },
     report: { type: Object, required: true },
@@ -372,7 +400,7 @@ export default {
   },
   emits: ['jump-to-time', 'select-date', 'shift-date', 'go-today',
     'shift-range', 'pick-month', 'heat-today', 'start-focus',
-    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings', 'accept-suggestion', 'dismiss-suggestion', 'update-focus'],
+    'generate-summary', 'open-ai-settings', 'toggle-plugin', 'open-plugin-settings', 'accept-suggestion', 'dismiss-suggestion', 'confirm-thread', 'update-focus'],
   data() {
     return { tick: 0, timer: null, editingFocus: null, focusDraft: '', focusNoteDraft: '' };
   },
@@ -380,7 +408,7 @@ export default {
     /** 首页卡片显隐：配置缺字段时默认全开，旧配置不用迁移 */
     cards() {
       const all = {};
-      ['heatmap', 'session', 'composition', 'apps', 'dataNotes', 'focusNotes', 'aiInsights']
+      ['heatmap', 'session', 'plan', 'threads', 'weeklyReview', 'composition', 'apps', 'dataNotes', 'focusNotes', 'aiInsights']
         .forEach(k => { all[k] = true; });
       return { ...all, ...((this.config && this.config.dashboard && this.config.dashboard.cards) || {}) };
     },
@@ -669,6 +697,9 @@ export default {
   },
   methods: {
     pad(n) { return String(n).padStart(2, '0'); },
+    reviewThread(thread) {
+      this.$emit('jump-to-time', { minutes: thread.startMin, date: this.selectedDate });
+    },
     startFocusEdit(kind, item) {
       this.editingFocus = { kind, id: item.id };
       this.focusDraft = kind === 'note' ? item.text : item.focusText;

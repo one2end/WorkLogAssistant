@@ -89,6 +89,7 @@
           @generate-summary="generateSummary"
           @accept-suggestion="acceptSuggestion"
           @dismiss-suggestion="dismissSuggestion"
+          @confirm-thread="confirmThread"
           @open-ai-settings="openAiSettings"
           @jump-to-time="onJumpToTime"
           @select-date="selectHeatDate"
@@ -156,6 +157,8 @@
           @category-merge-change="onCategoryMergeChange"
           @app-map-change="onAppMapChange"
           @window-rule-change="onWindowRuleChange"
+          @project-rule-change="onProjectRuleChange"
+          @productivity-change="onProductivityChange"
           @suggest-categories="suggestCategories"
           @provider-change="onProviderChange"
           @toggle-auto-launch="toggleAutoLaunch"
@@ -242,6 +245,8 @@ function emptyReport(date) {
     apps: [],
     recordedApps: [],
     sessions: [],
+    activityThreads: [],
+    plan: [],
     focus: { arhatSessions: [], notes: [] },
     dataNotes: []
   };
@@ -419,12 +424,15 @@ export default {
       try {
         const res = await ipcRenderer.invoke('dida-sync-now', { direction: direction || 'pull' });
         const r = direction === 'push' ? res : (res && res.pull) || res;
+        const plans = direction === 'push' ? null : res?.plans;
         if (r && r.error) this.showToast(r.error, 'error');
-        else if (r && r.skipped) this.showToast(r.reason || '该通道未开启', 'error');
+        else if (r && r.skipped && (!plans || plans.error || plans.skipped)) {
+          this.showToast(plans?.error || plans?.reason || r.reason || '该通道未开启', 'error');
+        }
         else if (direction === 'push') this.showToast(`已推送 ${(r && r.count) || 0} 条`, 'success');
-        else this.showToast(`拉取完成 · 新增 ${(r && r.added) || 0} 条专注`, 'success');
+        else this.showToast(`拉取完成 · 新增 ${(r && r.added) || 0} 条专注 · 计划 ${plans?.count || 0} 项`, 'success');
         await this.loadDidaStatus();
-        this.reloadDate(true);
+        await this.reloadDate(true);
       } catch (e) {
         this.showToast('同步失败: ' + e.message, 'error');
       }
@@ -526,6 +534,34 @@ export default {
       }
       this.showToast('已记住这次分类', 'success');
       await this.reloadDate(true);
+    },
+
+    async confirmThread(thread) {
+      if (!thread?.start || !thread?.end || !thread?.label) return;
+      const start = new Date(thread.start);
+      const end = new Date(thread.end);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return;
+      const pad = n => String(n).padStart(2, '0');
+      const durationMin = Math.max(15, Math.round((end - start) / 60000 / 15) * 15);
+      try {
+        const result = await ipcRenderer.invoke('replace-display-ranges', {
+          ranges: [{ start: thread.start, end: thread.end }],
+          record: {
+            date: this.selectedDate,
+            startTime: `${pad(start.getHours())}:${pad(start.getMinutes())}`,
+            durationMin,
+            app: thread.label,
+            note: thread.label,
+            category: thread.category || thread.group || '其他',
+            project: thread.project || ''
+          }
+        });
+        if (!result?.ok) throw new Error(result?.error || '确认失败');
+        this.showToast('活动线程已确认', 'success');
+        await this.reloadDate();
+      } catch (error) {
+        this.showToast(error.message || '确认失败', 'error');
+      }
     },
 
     async dismissSuggestion(suggestion) {
@@ -664,6 +700,15 @@ export default {
       this.config.analysis = { ...(this.config.analysis || {}), windowCategoryRules: rules };
       await this.saveConfig();
       this.onDataChanged();
+    },
+    async onProjectRuleChange(rules) {
+      this.config.analysis = { ...(this.config.analysis || {}), projectRules: rules };
+      await this.saveConfig();
+      this.onDataChanged();
+    },
+    async onProductivityChange(levels) {
+      this.config.analysis = { ...(this.config.analysis || {}), productivityLevels: levels };
+      await this.saveConfig();
     },
     async suggestCategories() {
       this.categorySuggesting = true;
