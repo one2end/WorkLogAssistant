@@ -377,7 +377,9 @@ if (Array.isArray(data.activities)) {
 >
 > 更根本的问题：记录本身**没有稳定唯一标识**。`storageManager.js:120` 的 `id` 是 `${rec.t}#${index}`，`index` 是**读取时的数组下标**，删掉一行后面全部漂移，不能作持久标识。
 >
-> 正确方案（详见第二轮报告 P0-03）：先引入 `rid`（新记录生成 UUID，落盘保留），旧记录用「文件名+行号」推导稳定指纹；去重**只用于「已知是同一份数据」的场景**（同导入批次、同一主文件的冲突副本），绝不跨批次做内容去重。
+> 正确方案（详见第二轮报告 P0-03 与实施计划 §4）：先引入 `rid`（新记录生成 UUID，落盘保留）；旧记录**不做批量改写**，「文件名+行号」**仅用于单次读取内的兼容定位，不是持久身份**；去重**只在双方都有相同 `rid` 时**进行，无 `rid` 一律保留。
+>
+> ~~旧记录用「文件名+行号」推导稳定指纹~~ —— **已作废**。行号在 `replaceDisplayRanges` 等整文件重写后会变，不能跨读取使用。
 
 ### 4.4 D4 iCloud 冲突副本与主文件不去重
 
@@ -668,9 +670,10 @@ crossMidnight = endRaw >= 1440     // 唯一判据
 | `src/views/SettingsView.vue:277-279` | 二次确认 + 修正「仅对单文件生效」的误导文案 | 低 | P0-01 |
 | `electron/storageManager.js:220-271` | 迁移加 `.migration-state.json` + `.pre-migrate.bak`，实现幂等 | 中 | P0-02 |
 | `electron/activityRecorder.js` + `storageManager.js:316` | 新增 `rid` 字段（只对新记录生效） | 低 | P0-03 |
-| `electron/storageManager.js:120` | 旧记录改「文件名+行号」稳定指纹，替代数组下标 id | 中 | P0-03 |
-| `electron/main.js:1510-1524` | 导入引入 `importBatchId`，仅同批次去重 | 低 | P1-01 |
-| `electron/storageManager.js:167-182` | 冲突副本按 `rid` 去重 | 低 | P1-01 |
+| `electron/storageManager.js:421-449` | 编辑旧记录时**只给被编辑那条**补 rid，其他记录逐字节不变 | 中 | P0-03 |
+| ~~`storageManager.js:120` 旧记录改「文件名+行号」稳定指纹~~ | **【已作废】** 行号在文件重写后会变，不能作持久身份。改为「仅单次读取内兼容定位」 | — | — |
+| ~~`electron/main.js:1510-1524` 导入引入 `importBatchId`~~ | **【已作废】** 每次重新导入都会生成新 ID，无法阻止重复导入。改为**导入来源指纹**（`sha256` 全字段） | — | P1-01 |
+| `electron/storageManager.js:167-182` | 冲突副本按 `rid` 去重（**无 `rid` 一律保留**） | 低 | P1-01 |
 
 ### P1 — 可靠性与体验
 
@@ -682,7 +685,7 @@ crossMidnight = endRaw >= 1440     // 唯一判据
 | 新增 `electron/slotRule.js` | 15 分钟规则唯一实现 | 低 | P1-03 |
 | `main.js:1132-1173` | `manualRecordFromPayload` 迁出，改为引用 `slotRule`；修正错误提示文字 | 中 | P1-03 |
 | `storageManager.js:610-611`、`planManager.js:165/183/265`、`analytics.js:1212-1214`、`App.vue:541`、`TimelineView.vue:1116` | 改为调用 `slotRule` | 中 | P1-03 |
-| `TimelineView.vue:1116` vs `main.js:1154` | 前后端吸附策略统一（**待决策 D-02**） | 中 | P1-03 |
+| `main.js:1133`（接口） | **后端改收原始 `startTime` + `rawDurationMin`**，自行调 `slotRule` 验算（不能只收吸附后的值） | 中 | P1-03 |
 
 ### P1 — 安全基线（渐进，不一次到位）
 
@@ -794,8 +797,8 @@ S1 新增 preload（不启用）→ S2 前端改用 `worklog` API（保留 requi
 
 | 功能 | 位置 | 保留理由 |
 |---|---|---|
-| 合并导入 | `SettingsView.vue:276` → `main.js:1511` | 换机恢复的正当路径。但需加去重（按 `importBatchId`） |
-| **覆盖导入** | `SettingsView.vue:277` → `main.js:1514` | **【第二轮修订】本条从「保留」改为「待决策」。** 它当前会用 `clearActivities()` 删除全部原始记录且无备份。若保留必须先修 P0-01；若「切换数据目录」已能覆盖使用场景，建议直接取消（决策 D-01） |
+| 合并导入 | `SettingsView.vue:276` → `main.js:1511` | 换机恢复的正当路径。重复导入由**来源指纹**识别（~~按 `importBatchId`~~ 已作废） |
+| **覆盖导入** | `SettingsView.vue:277` → `main.js:1514` | **【决策已定：取消】** D-01 决定暂时取消该入口。它当前会用 `clearActivities()` 删除全部原始记录且无备份。恢复备份需求单独立项 |
 | 旧版 JSON 读取（`activities/YYYY-MM-DD.json`） | `storageManager._readActivityFile:148` | 历史数据兼容。删了会让早期数据「凭空消失」 |
 | iCloud 冲突副本合并 | `storageManager._activityFilesOfDay:167` | 用户数据目录可能在任何同步盘下。虽然当前不去重（D4），但删除会让数据丢失 |
 | `enableRemoteModule` | `main.js:302` | 已在 ES 中废弃，但**不能单独删**——必须与 preload 改造一起处理，否则前端 `require('electron')` 会断裂 |
