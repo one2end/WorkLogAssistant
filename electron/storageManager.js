@@ -4,6 +4,7 @@ const { app } = require('electron');
 const { copyMissingData } = require('./fileMigration');
 const { writeFileAtomic } = require('./atomicFile');
 const { splitRecordAtMidnight } = require('./timeSplit');
+const writeGate = require('./writeGate');
 
 class StorageManager {
   constructor(customBasePath) {
@@ -45,6 +46,8 @@ class StorageManager {
    * 本实例引用的地方会自动指向新目录。
    */
   setDataDir(newPath) {
+    // 切换数据根目录时，迁移正在进行就会写进「另一个目录」，必须拒绝
+    writeGate.assertWritable('切换数据目录');
     const target = newPath && newPath.trim() ? newPath.trim() : this._defaultDataDir;
 
     if (target !== this._defaultDataDir) {
@@ -279,6 +282,8 @@ class StorageManager {
   // --- Activities ---
 
   saveActivity(activity) {
+    // 迁移期间必须拦住：这里整文件重写 activities/<date>.json
+    writeGate.assertWritable('保存活动记录');
     try {
       const dateStr = this._toDateStr(activity.timestamp);
       const filePath = this._activityFile(dateStr);
@@ -297,6 +302,8 @@ class StorageManager {
    * 不会随当天记录变多而变慢。
    */
   appendActivityRecords(records) {
+    // 录制器 flush 走这条路径，不经 IPC，所以锁必须在这里
+    writeGate.assertWritable('写入活动记录');
     if (!Array.isArray(records) || records.length === 0) return false;
 
     const byDate = new Map();
@@ -386,6 +393,7 @@ class StorageManager {
   }
 
   deleteActivity(activityId) {
+    writeGate.assertWritable('删除活动记录');
     try {
       // 旧版 JSON 文件里可能存有该 id
       for (const file of this._listJsonFiles(this.activitiesDir)) {
@@ -419,6 +427,7 @@ class StorageManager {
 
   /** 修改一条展示层记录（标题 / 分类 / 应用名）。记录层一律拒绝。 */
   updateDisplayRecord(dateStr, matchT, patch = {}) {
+    writeGate.assertWritable('修改活动记录');
     const file = this._activityJsonlFile(dateStr);
     if (!fs.existsSync(file)) return { success: false, error: '没有这一天的数据' };
 
@@ -454,6 +463,7 @@ class StorageManager {
    * 记录层的采样一律保留——删除标注只是把这段还给原始数据。
    */
   deleteDisplayRange(dateStr, startIso, endIso) {
+    writeGate.assertWritable('删除活动时段');
     const file = this._activityJsonlFile(dateStr);
     if (!fs.existsSync(file)) return { success: false, error: '没有这一天的数据', removed: 0 };
     const from = new Date(startIso).getTime();
@@ -481,6 +491,7 @@ class StorageManager {
 
   /** 一次提交「删旧标注 + 写新标注」，失败时原文件保持不变。 */
   replaceDisplayRanges(dateStr, ranges, record) {
+    writeGate.assertWritable('替换活动时段');
     const cuts = (ranges || []).map(r => [new Date(r.start).getTime(), new Date(r.end).getTime()]);
     if (cuts.some(([a, b]) => !Number.isFinite(a) || !Number.isFinite(b) || b <= a)) {
       return { success: false, error: '时间区间无效' };
@@ -574,6 +585,7 @@ class StorageManager {
    * @param {string} note     备注（写进覆盖标注）
    */
   recategorizeAppForDay(dateStr, app, category, spans, note) {
+    writeGate.assertWritable('修改应用分类');
     const file = this._activityJsonlFile(dateStr);
     const target = String(app || '').trim().toLowerCase();
     if (!target) return { success: false, error: '缺少应用名' };
@@ -636,6 +648,7 @@ class StorageManager {
 
   /** 删除一条展示层记录。记录层一律拒绝（要删只能删整天，那是另一套语义）。 */
   deleteDisplayRecord(dateStr, matchT) {
+    writeGate.assertWritable('删除活动记录');
     const file = this._activityJsonlFile(dateStr);
     if (!fs.existsSync(file)) return { success: false, error: '没有这一天的数据' };
 
@@ -661,6 +674,7 @@ class StorageManager {
   }
 
   clearActivities() {
+    writeGate.assertWritable('清空活动记录');
     try {
       const removed = new Set();
       for (const dir of [this.activitiesDir]) {
@@ -680,6 +694,7 @@ class StorageManager {
   // --- Summaries ---
 
   saveSummary(summary) {
+    writeGate.assertWritable('保存摘要');
     try {
       const dateStr = summary.date || this._toDateStr(summary.timestamp);
       const filePath = this._summaryFile(dateStr);
@@ -738,6 +753,7 @@ class StorageManager {
   }
 
   deleteSummary(summaryId) {
+    writeGate.assertWritable('删除摘要');
     try {
       const files = this._listJsonFiles(this.summariesDir);
       for (const file of files) {
@@ -759,6 +775,9 @@ class StorageManager {
   // --- Screenshots ---
 
   saveScreenshot(activityId, screenshot) {
+    // 名字是截图，实际做的是「改 activity.screenshot + 整文件重写 activities/<today>.json」，
+    // 与迁移目标完全重叠。即使当前没有调用点，也必须拦。
+    writeGate.assertWritable('保存截图信息');
     try {
       // Search today's file first, then all files
       const todayFile = this._activityFile(this._todayStr());
@@ -821,6 +840,8 @@ class StorageManager {
   // --- Cleanup ---
 
   cleanupOldData(daysToKeep = 30) {
+    // 会 unlinkSync 删掉 activities/ 与 summaries/ 的过期文件，比截图更危险。
+    writeGate.assertWritable('清理历史数据');
     try {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
@@ -926,6 +947,8 @@ class StorageManager {
   // --- Data migration between paths ---
 
   migrateDataTo(newPath) {
+    // 整个数据目录复制，与迁移互斥
+    writeGate.assertWritable('迁移数据目录');
     try {
       if (!fs.existsSync(newPath)) {
         fs.mkdirSync(newPath, { recursive: true });

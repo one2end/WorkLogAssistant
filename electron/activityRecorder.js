@@ -57,7 +57,19 @@ class ActivityRecorder {
     this._lastTick = 0;
     this._suspendCount = 0;
     this._lastFallbackSample = 0;
+    this._gateNoticeShown = false;
     this._stats = { segments: 0, activeMs: 0, idleMs: 0 };
+
+    // 迁移一结束就把缓冲写下去，不等下一个 15 秒周期。
+    // 用弱绑定：拿不到 writeGate 也不影响录制器工作。
+    try {
+      const writeGate = require('./writeGate');
+      this._offGateRelease = writeGate.onReleased(() => {
+        if (this._buffer.length) this.flush();
+      });
+    } catch (_) {
+      this._offGateRelease = () => {};
+    }
   }
 
   // --- 配置读取 ---
@@ -109,6 +121,11 @@ class ActivityRecorder {
   stop() {
     if (!this.running) return { ok: true, already: true };
     this.running = false;
+
+    if (this._offGateRelease) {
+      this._offGateRelease();
+      this._offGateRelease = null;
+    }
 
     if (this._timer) {
       clearInterval(this._timer);
@@ -283,8 +300,23 @@ class ActivityRecorder {
 
     try {
       if (!this.storage.appendActivityRecords(batch)) throw new Error('数据文件写入失败');
+      this._gateNoticeShown = false;
       return batch.length;
     } catch (error) {
+      // 迁移期间被写锁拒绝：这不是错误，也不是数据问题。
+      // 片段原样放回且**不截断**——迁移是可控的短时状态，缓冲不会无限增长，
+      // 一旦 slice(-200) 就会把最早录到的片段丢掉。
+      if (error && error.code === 'MIGRATION_IN_PROGRESS') {
+        this._buffer = batch.concat(this._buffer);
+        // 同一迁移期内会反复触发，只在第一次提示，避免日志刷屏
+        if (!this._gateNoticeShown) {
+          this._gateNoticeShown = true;
+          this.onLog('数据迁移进行中，录制数据暂存内存，迁移完成后写入', 'info');
+        }
+        return 0;
+      }
+
+      this._gateNoticeShown = false;
       this.onLog('写入活动记录失败: ' + error.message, 'error');
       // 放回去，下次再试（避免丢数据），但要防止无限增长
       this._buffer = batch.concat(this._buffer).slice(-200);
