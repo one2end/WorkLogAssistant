@@ -1,9 +1,9 @@
 # WorkLog 1.0 实施计划（V0.10.2a → V0.10.4）
 
-> 依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md` + 四项产品决策 + 三轮修订意见
-> 分支：`worklog-1.0-dev`　基准提交：`aecf04a`
-> 状态：**计划文档（第 4 版，最终方案）。本轮不修改任何生产代码和测试代码。**
-> 最后更新：2026-11-12 01:41
+> 依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md` + 四项产品决策 + 四轮修订意见
+> 分支：`worklog-1.0-dev`　基准提交：`a659e09`
+> 状态：**计划文档（第 5 版，最终方案）。本轮不修改任何生产代码和测试代码。**
+> 最后更新：2026-11-12 02:04
 
 ---
 
@@ -14,28 +14,32 @@
 | v1 | 初版，落实 D-01~D-04 |
 | v2 | 七项修订：摘要迁移、崩溃窗口、D-02 拒绝短时段、重叠分级、RID 限定、快照扩三目录、指纹覆盖摘要 |
 | v3 | 四项 P0 + 四项 P1：守恒公式、F5a、写入保护、D-02 原始值接口、指纹全字段、摘要半成功、起点进位、同卷实测 |
-| **v4** | **四项 P0 + 四项 P1 + 文档清理：状态机终态、回滚 SHA 保护、源文件最终校验、统一写入锁、导入续传、volatile 按类型、故障矩阵对称、manifest 补字段、章节重编号、旧方案作废、数量勘误** |
+| v4 | 四项 P0 + 四项 P1 + 文档清理：状态机终态、回滚 SHA 保护、源文件最终校验、统一写入锁、导入续传、volatile 按类型、故障矩阵对称、manifest 补字段、章节重编号、旧方案作废、数量勘误 |
+| **v5** | **四处修正：`saveScreenshot` 与 `cleanupOldData` 纳入写锁、回滚时文件不存在的歧义判定、归档三校验点与唯一归档名、导入重试规则统一** |
 
-### v4 修正清单
+### v5 修正清单
 
-| # | v3 的问题 | v4 修正 | 级别 |
+| # | v4 的问题 | v5 修正 | 级别 |
 |---|---|---|---|
-| 1 | `rolledback` 落入「非 done」分支，重启可能重跑迁移 | 引入**显式状态机**，`rolledback`/`conflict`/`failed` 为终态，启动时只读不动 | **P0-01** |
-| 2 | 回滚直接恢复备份，可能覆盖迁移后新数据 | 回滚前**逐文件比对 `expectedSha256`**，不符则隔离不覆盖 | **P0-02** |
-| 3 | 只在开始/恢复时查源文件，未保护最终改名 | `finishing` 阶段**重新校验源 SHA**，不符则拒绝改名并标记 conflict | **P0-03** |
-| 4 | 写入锁只列 IPC 层 7 个入口 | 锁下沉到 **StorageManager 数据层**，覆盖 13 个写方法 + 非 IPC 路径 | **P0-04** |
-| 5 | 整文件指纹无法支持部分续传 | 引入 **`imp.batch + imp.idx`** 写入身份，progress 仅作缓存 | **P1-01** |
-| 6 | 全局排除 `id`，且纳入未导入的 `summariesMd` | **按类型定义 volatile**，只覆盖实际导入的 `activities`/`summaries` | **P1-02** |
-| 7 | 摘要缺 S4a/S5a；「F1-F9+F5a=10」自相矛盾 | 摘要对称补齐，**显式枚举 22 个注入点** | **P1-03** |
-| 8 | manifest 缺 `preReplaceRecordCount` | 补齐全部字段并定义「文件不存在时 = 0」 | **P1-04** |
-| 9 | 两个 `### 3.5`；F1-F8 旧表述；37 项计数错误 | 章节重编号 3.1-3.11；矩阵重写为 47 条目 | 清理 |
-| 10 | §2.14 被引用但不存在 | 新增冲突处理章节 | 清理 |
+| 1 | `saveScreenshot` 被排除在锁外，理由「截图不是迁移目标」 | **该理由错误**：它实际重写 `activities/<today>.json`。已纳入锁并加独立测试 | **P0-01** |
+| 1b | 漏了 `cleanupOldData` | 它 `unlinkSync` 删历史文件（当前为死代码）。已纳入锁 | **P0-01 补充** |
+| 2 | 回滚时 `currentSha===null && preReplaceExists===true` 自动恢复 | 无法区分「外部删除」与「上次回滚已完成」，改为标记 `conflict` 保留备份 | **P1-01** |
+| 3 | 归档只在 rename 前校验一次 | 改为**三点校验**：改名前 → rename（唯一名）→ 改名后，归档 SHA 不符不标 `done` | **P1-03** |
+| 4 | §3.4 说「重试会重复」，与 §3.6 的 `imp` 机制矛盾 | 统一为「默认继续、以 `imp` 为事实依据、progress 仅缓存」 | **P1-02** |
 
-### v4 的关键立场
+### v5 用实际代码验证的三处
+
+| 结论 | 验证方式 |
+|---|---|
+| `saveScreenshot` 重写 activities | 读 `storageManager.js:761-774`，看到 `this._writeJsonFile(todayFile, activities)` |
+| `renameSync` 会静默覆盖已存在目标 | 临时目录实测：`rename 后 dst=NEW`（旧备份 OLD-BACKUP 丢失） |
+| 回滚时 null 有两种成因不可区分 | 逐场景推演：外部删除 vs 上次回滚已完成，status 无法区分 |
+
+### v5 的关键立场（不变）
 
 > **宁可停止、提示人工处理，也不静默丢失、覆盖或重复累计用户历史数据。**
 >
-> 具体体现：`conflict`/`failed` 是终态而非「重试态」；回滚遇到无法确认的文件只隔离不删除；源文件变化时拒绝改名；导入续传**明确声明不是 exactly-once**。
+> v5 新增体现：截图写入被阻塞、归档不覆盖旧备份、回滚不猜文件缺失原因、导入默认走「继续」。
 | 1 | 迁移只保护 `activities.json` | `activities.json` 与 `summaries.json` **两套独立**迁移保护 |
 | 2 | 先 rename 后写 status，存在崩溃窗口 | manifest 记录**预期 SHA256**，恢复时比对判定 |
 | 3 | `duration <= 0` 一律 +24h | **区分跨午夜与短时段**，不做统一加 24 小时 |
@@ -591,51 +595,123 @@ done / rolledback / conflict / failed → 终态，不再自动流转
   └─ status.phase = 'done'
 ```
 
-### 2.6a 源文件最终改名前校验（v4 新增，P0-03）
+### 2.6a 归档阶段的竞态处理（v5 重写，P1-03）
 
-> **v4 新增。** v3 只在「迁移开始」和「恢复时」检查源文件变化，**没有保护最后的改名动作**。若源文件在 staging 之后、改名之前被外部修改，直接改名会把新内容永久归档为「已迁移」，而目标文件里并没有这些新数据——**数据静默丢失**。
+> **v4 的问题**：在「校验源 SHA → rename → 标记 done」之间，**rename 本身没有被验证**。若外部同步软件在校验后、rename 前一刻修改文件，rename 会把被改过的内容归档为 `.migrated`，而目标文件里没有这些新数据 → **静默丢失**。
+>
+> **v5 方案：改名前后各校验一次，并且归档后必须与 manifest 一致才允许 `done`。**
 
-**执行校验**：
+**完整归档流程（三个校验点）**
 
 ```
-阶段 6 开始前：
-    currentSourceSha256 = sha256(sourcePath)
+【step A】改名前校验（拦住大部分情况）
+    preRenameSha = sha256(sourcePath)
+    if (preRenameSha !== manifest.sourceSha256):
+        → 标记 conflict，stage: 'pre-rename'（见下「不改名的处理」）
+        → 结束，不改名
 
-    if (currentSourceSha256 !== manifest.sourceSha256):
-        → **禁止改名**
-        → **禁止删除或覆盖源文件**
-        → 保留 migration workspace
-        → status.phase = 'conflict'（终态，见 §2.5a）
-        → status.conflictDetail = {
-            stage: 'pre-rename',
+【step B】确定安全归档名，然后 rename
+    original = sourcePath                       // e.g. activities.json
+    candidate = original + '.migrated'
+    if (fs.existsSync(candidate)):
+        // **绝不覆盖已有归档**（v5 修正：renameSync 在 Windows 会静默覆盖）
+        // 用唯一名称，避免丢失历史备份
+        candidate = original + '.migrated-' + <YYYYMMDD-HHmmssSSS>
+        if (fs.existsSync(candidate)):          // 极端：同一毫秒
+            candidate = original + '.migrated-' + <ts> + '-' + <random6>
+    renameSync(original, candidate)             // 同目录内 rename，原子
+    记录 status.archivedPath = candidate
+
+【step C】改名后校验归档文件（v5 新增，堵住 step A 与 B 之间的窗口）
+    archivedSha = sha256(candidate)
+    if (archivedSha !== manifest.sourceSha256):
+        // 源文件在 step A 之后、rename 之前被改过
+        → **不把状态标记为 done**
+        → status.phase = 'conflict'
+        → conflictDetail = {
+            stage: 'post-rename',
             expected: manifest.sourceSha256,
-            actual: currentSourceSha256,
-            sourceRecordCountAtStart: manifest.sourceRecordCount,
-            sourceRecordCountNow: <当前源文件条数>
+            actual: archivedSha,
+            archivedPath: candidate,
+            note: '源文件在改名前被外部修改，已归档内容与迁移开始时不一致'
           }
-        → 通知用户：
-          「源文件在迁移过程中被修改，为避免丢失新数据已停止。
-            目标文件已写入 N 个日期（可用），源文件保持原样。
-            请手工核对后决定：接受目标结果，或回滚。」
-        → **停止自动完成，等待人工处理**
+        → **保留归档文件**（candidate，不删除）
+        → **保留目标文件**（已替换的全部保留）
+        → **保留 migration workspace**
+        → 提示：「归档文件内容与迁移开始时不一致，可能包含迁移后期的新数据。
+                 目标文件与归档文件均已保留，请人工核对。」
+        → 结束，等人工处理
+    else:
+        status.phase = 'done'                   // 唯一允许进入 done 的路径
+```
+
+**为什么 step B 的「唯一归档名」必要**
+
+实测（`os.tmpdir()` 临时目录，未触碰真实数据）：
+
+```
+rename 前: src=NEW  dst=OLD-BACKUP
+rename 成功（覆盖了旧备份！）
+rename 后: dst=NEW
+src 还在? false
+```
+
+`fs.renameSync` 在目标已存在时会**静默覆盖**。若用户之前已经迁移过一次并留下 `activities.json.migrated`，第二次迁移会把它覆盖掉——**丢的是一份完整的历史备份**。
+
+**冲突时的三条保留承诺**
+
+| 保留对象 | 说明 |
+|---|---|
+| 归档文件（`candidate`） | 可能含新数据，不删不改名 |
+| 目标文件（`activities/`、`summaries/`） | 已替换的不回退 |
+| migration workspace | 含 manifest、快照、staging、status.history |
+
+**step A 失败（改名前发现不一致）的处理**：
+
+```
+→ 禁止改名（源文件保持原名原样）
+→ 禁止删除或覆盖源文件
+→ 保留 workspace
+→ status.phase = 'conflict'，stage: 'pre-rename'
+→ conflictDetail = {
+     expected: manifest.sourceSha256,
+     actual: preRenameSha,
+     sourceRecordCountAtStart: manifest.sourceRecordCount,
+     sourceRecordCountNow: <当前条数>
+   }
+→ 提示：「源文件在迁移过程中被修改，为避免丢失新数据已停止。
+         目标文件已写入 N 个日期（可用），源文件保持原样。
+         请手工核对后决定：接受目标结果，或回滚。」
 ```
 
 **源文件变化且目标已部分替换时如何安全恢复**：
 
-此时处于「半完成」状态，有两条路，**都不能自动选**：
+处于「半完成」状态，两条路，**都不能自动选**：
 
 | 方案 | 操作 | 风险 | 适用条件 |
 |---|---|---|---|
-| **A. 接受已替换结果** | 保留 `activities/` 现状；源文件重命名为 `<name>.conflict-<ts>`（**不归档为 `.migrated`**）；用户后续手工处理该文件 | 源文件的新增内容需手工合并 | 用户确认目标结果正确 |
-| **B. 回滚** | 走 §2.8 回滚流程（含逐文件 SHA 保护）；源文件改回原名 | 迁移期间新录数据受 §2.8 保护 | 用户认为目标结果不可信 |
+| **A. 接受已替换结果** | 保留 `activities/` 现状；源文件重命名为 `<name>.conflict-<ts>`（**不归档为 `.migrated`**）；用户后续手工处理 | 源文件的新增内容需手工合并 | 用户确认目标结果正确 |
+| **B. 回滚** | 走 §2.8（含逐文件 SHA 保护）；源文件改回原名 | 迁移期间新录数据受 §2.8 保护 | 用户认为目标结果不可信 |
 
 **绝不做的操作**：
 
-- ❌ 因源文件变化而**重跑整个迁移** → 会与已替换的目标文件叠加，导致重复累计
-- ❌ 把变化后的源文件直接改名为 `.migrated` → 新数据被误标为「已处理」
-- ❌ 删除源文件 → 直接丢数据
+- ❌ 因源文件变化而**重跑整个迁移** → 与已替换的目标叠加，导致重复累计
+- ❌ 把变化后的源文件改名为 `.migrated` → 新数据被误标为「已处理」
+- ❌ 覆盖已存在的 `.migrated` → 丢失历史归档
+- ❌ 删除源文件或归档文件 → 直接丢数据
+- ❌ rename 后不校验就标记 done → 竞态窗口内的修改被静默吞掉
 
-**实现要点**：`conflictDetail` 同时记录源文件条数变化（`AtStart` vs `Now`），用户可据此判断新增了什么。
+**竞态窗口的诚实说明**
+
+> step A 与 step B 之间仍有**微秒级窗口**。v5 不假装能消除它，而是用 **step C 的事后校验**把「静默丢失」降级为「可检测的冲突」：
+>
+> | 情况 | v4 行为 | v5 行为 |
+> |---|---|---|
+> | step A 前被改 | 检出，conflict | 检出，conflict |
+> | step A 后、rename 前被改 | **静默归档错误内容，标记 done** | **step C 检出，conflict，三份数据全保留** |
+> | rename 后被改 | 不影响（已归档） | 不影响 |
+>
+> 无法做到「零窗口」，但可以做到「**窗口内的变化不导致静默数据丢失**」。
 
 ### 2.7 F7：源文件在迁移前阶段变化
 
@@ -679,18 +755,27 @@ done / rolledback / conflict / failed → 终态，不再自动流转
    ┌─ 情况 1：currentSha === target.expectedSha256
    │    → 内容 == 迁移后预期，说明迁移后未被改动 → **允许回滚**
    │       ├─ preReplaceExists === true  → 用 preReplaceBackup 覆盖恢复
-   │       └─ preReplaceExists === false → 删除该文件
+   │       └─ preReplaceExists === false → 删除该文件（迁移新建的）
    │
    ├─ 情况 2：currentSha === target.preReplaceSha256
-   │    → 已是原始状态（可能上次回滚到一半）→ 跳过
+   │    → 已是原始状态（可能上次回滚到一半）→ **跳过**
    │
-   ├─ 情况 3：currentSha === null
-   │    → targetDir/<date>.json 不存在
-   │       ├─ preReplaceExists === true  → 用备份恢复（文件被删了）
-   │       └─ preReplaceExists === false → 本就该不存在，跳过
+   ├─ 情况 3：currentSha === null && preReplaceExists === false
+   │    → 该文件原本就不存在，现在也不存在 → **跳过**（已达目标状态）
    │
-   └─ 情况 4：以上都不匹配
-        → **禁止覆盖**（文件含迁移后的新数据）
+   ├─ 情况 4：currentSha === null && preReplaceExists === true
+   │    → **文件原本存在，现在没了，无法判断原因**
+   │       · 可能是迁移后被外部删除（用户手工删 / 同步软件冲突）
+   │       · 可能是上次回滚删了但 status 未更新
+   │       · **两者无法区分 → 禁止自动恢复**
+   │    → **标记 conflict**，不恢复备份，不创建文件
+   │    → 备份保留在 staging/<date>.pre-replace.json
+   │    → 记录到 conflictDetail.files[]，reason: 'target-missing-unexpectedly'
+   │    → 提示：「<date>.json 原本存在但当前缺失，原因无法确认。
+   │            备份已保留（路径）。请人工决定是否恢复。」
+   │
+   └─ 情况 5：以上都不匹配（文件存在但 SHA 既非预期也非替换前）
+        → **禁止覆盖**（文件含迁移后的新数据或外部修改）
         → 复制到保护目录 Data/.migration/<id>/conflict-files/<date>.json
         → 记录到 status.conflictDetail.files[]
         → 该文件**保持原样不动**
@@ -698,21 +783,25 @@ done / rolledback / conflict / failed → 终态，不再自动流转
 
 2. 汇总：
    ├─ 存在冲突文件 → status.phase = 'conflict'（终态）
-   │   提示：「回滚完成，但 N 个文件因含迁移后新增数据未被覆盖，
-   │           已备份到 conflict-files/。请人工核对。」
+   │   提示：「回滚完成，但 N 个文件未能安全处理，
+   │           明细与备份已保留。请人工核对。」
    └─ 无冲突 → status.phase = 'rolledback'（终态）
 
 3. 保留（**一律不删**）：
    ├─ source.snapshot.jsonl
-   ├─ migration workspace（可选重命名为 <id>.rolledback-<ts>/）
+   ├─ staging/<date>.pre-replace.json（**含情况 4 的全部备份**）
+   ├─ migration workspace
    └─ conflict-files/
 
 **绝不做**：
 - ❌ 为「让回滚成功」而删除无法确认的文件
+- ❌ 为「让回滚成功」而在情况 4 自动恢复备份（可能覆盖外部删除的意图）
 - ❌ 批量覆盖后再校验（必须**先校验再决定**）
 - ❌ 回滚失败时删除工作区
 - ❌ 触碰 manifest.targets 之外的日期文件
 ```
+
+> **v5 修正（P1-01）**：v4 在「`currentSha === null` 且 `preReplaceExists === true`」时**自动用备份恢复**。这无法区分「外部删除」与「上次回滚已完成」，属于**擅自替用户做决定**。v5 改为标记 `conflict` 并保留备份，等人工确认。
 
 **`rolledback` 是终态**：见 §2.5a。重启后**不会**重新执行该迁移。
 
@@ -836,26 +925,71 @@ sum(count(summaries/<date>.json) after)
 > 1. v3 只在 IPC 层列了 7 个入口，**漏掉了 `StorageManager` 自己的多个写方法**，也漏了非 IPC 路径（如 `convert-plan-to-fact`、`flush` 定时器）。锁必须建在**数据写入层**，不能建在调用层。
 > 2. v3 用模块级布尔变量，没定义获取/释放/异常语义，也没解决「迁移自身也要写」的自锁问题。
 
-**生产代码核实：13 个写方法 + 1 个目录设置**
+**生产代码核实：16 个写方法 + 2 个目录操作**
 
-| 方法 | 行号 | 写入目标 | 迁移期阻塞 |
+> **v5 修正两处 v4 遗漏：**
+>
+> 1. **`saveScreenshot` 必须阻塞。** v4 写「截图不涉及迁移目标」是**错误的**——核实 `storageManager.js:761-774`，它读 `activities/<today>.json`、改 `activity.screenshot`、再 `_writeJsonFile` **整文件重写**。与迁移目标完全重叠。
+> 2. **漏了 `cleanupOldData`。** `storageManager.js:823-851` 会 `unlinkSync` 删除 `activities/` 与 `summaries/` 下超出保留期的历史文件，是比截图更危险的入口（幸好当前**无人调用**，属死代码）。
+
+| 方法 | 行号 | 实际写入目标 | 迁移期阻塞 |
 |---|---|---|---|
 | `saveActivity` | 281 | `activities/*.json` | ✅ |
 | `appendActivityRecords` | 299 | `activities/*.jsonl` | ✅ |
-| `deleteActivity` | 388 | `activities/*.json` | ✅ |
+| `deleteActivity` | 388 | `activities/*.json` + `summaries/` 扫描 | ✅ |
 | `updateDisplayRecord` | 421 | `activities/*.jsonl` | ✅ |
 | `deleteDisplayRange` | 456 | `activities/*.jsonl` | ✅ |
 | `replaceDisplayRanges` | 483 | `activities/*.jsonl`（可跨日） | ✅ |
 | `recategorizeAppForDay` | 576 | `activities/*.jsonl` | ✅ |
 | `deleteDisplayRecord` | 638 | `activities/*.jsonl` | ✅ |
-| `clearActivities` | 663 | `activities/` 整目录 | ✅ |
+| `clearActivities` | 663 | `activities/` 整目录删除 | ✅ |
 | `saveSummary` | 682 | `summaries/*.json` + `summaries_md/*.md` | ✅ |
 | `deleteSummary` | 740 | `summaries/*.json` | ✅ |
-| `saveScreenshot` | 761 | `screenshots/` | ⚠️ 不阻塞（不涉及迁移目标） |
+| **`saveScreenshot`** | **761** | **`activities/<today>.json` 整文件重写** | **✅（v5 修正）** |
+| **`cleanupOldData`** | **823** | **`unlinkSync` 删除 `activities/` + `summaries/` 过期文件** | **✅（v5 新增）** |
 | `migrateDataTo` | 928 | 整个数据目录复制 | ✅（与迁移互斥） |
 | `setDataDir` | 47 | 切换数据根目录 | ✅（迁移中禁止切目录） |
+| `_migrateIfNeeded` | 220 | 旧版 JSON → 按天文件 | ⚠️ **本身即迁移**，由 `writeGate.withMigrationContext` 包裹 |
+| `_writeJsonFile` | 195 | 底层写（内部工具） | — 不单独加锁，由调用方负责 |
 
-**必须覆盖的非 IPC 路径**（v3 遗漏）：
+**`saveScreenshot` 的特殊说明**
+
+核实代码（`storageManager.js:761-774`）：
+
+```js
+saveScreenshot(activityId, screenshot) {
+  try {
+    const todayFile = this._activityFile(this._todayStr());   // ← activities/<today>.json
+    const activities = this._readJsonFile(todayFile);
+    const activity = activities.find(a => a.id === activityId);
+    if (activity) {
+      activity.screenshot = screenshot;
+      this._writeJsonFile(todayFile, activities);    // ← 整文件重写
+      return true;
+    }
+    return false;
+  } catch (error) { ... }
+}
+```
+
+**它虽然叫「截图」，实际做的是「往今天的活动 JSON 里写一个字段并整文件重写」**。迁移若正在替换该天的文件，两者会互相覆盖。v4 把它排除是错的。
+
+> 补充事实：`saveScreenshot` 当前**无任何调用点**（`grep -rn "saveScreenshot" electron/` 除定义外为空），属潜在入口。但锁必须覆盖它——**死代码迟早会被启用**。
+
+**`cleanupOldData` 的特殊说明**
+
+```js
+[this.activitiesDir, this.summariesDir].forEach(dir => {
+  fs.readdirSync(dir).filter(f => f.endsWith('.json') || f.endsWith('.jsonl'))
+    .forEach(file => {
+      if (dateStr < cutoffStr) fs.unlinkSync(path.join(dir, file));  // ← 直接删历史
+    });
+});
+```
+
+它会**永久删除**指定天数之前的全部活动与摘要文件。当前**无调用点**（死代码），但一旦被接上就是灾难性入口。同样必须纳入锁。
+
+**必须覆盖的非 IPC 路径**：
 
 | 路径 | 位置 | 写入方法 |
 |---|---|---|
@@ -1001,7 +1135,7 @@ catch (error) {
 | **T-M15** | **`finishing` 阶段源文件变化** | **不改名、不删源文件，标记 `conflict`** |
 | **T-M16** | **直接调 `appendActivityRecords()`（绕过 IPC）** | **抛错，磁盘无变化** |
 | **T-M17** | **直接调 `saveActivity()`（绕过 IPC）** | **抛错，磁盘无变化** |
-| **T-M18** | **9 个写方法全量** | **activities/summaries 相关全阻塞；`saveScreenshot` 不阻塞** |
+| **T-M18** | **全部 16 个写方法逐一验证** | **15 个阻塞（含 `saveScreenshot`、`cleanupOldData`）；`_writeJsonFile` 为内部工具不单独加锁** |
 | **T-M19** | **迁移结束后（成功/失败/冲突/回滚）** | **锁已释放，`isLocked() === false`，写入恢复** |
 | **T-M20** | **迁移期间录制 3 段** | **3 段全保留，迁移后全部落盘** |
 
@@ -1186,30 +1320,57 @@ for (const s of data.summaries || []) {
 }
 ```
 
-**规则 5：失败条目的重试**
+**规则 5：失败条目的重试（v5 重写，P1-02）**
+
+> **v5 修正**：v4 的规则 5 与 §3.6 的 `imp.batch + imp.idx` 机制**直接矛盾**——v4 说「重试会重复导入已成功的条目」，但 §3.6 恰恰解决了这个问题。v5 统一以 §3.6 为准。
+
+**统一的重试规则**：
 
 ```
-failed > 0（JSON 未写入）：
-    → 报告失败条数，用户可重试整个导入
-    → 但因 JSON 未写入，重试不会产生重复（除已成功的那部分）
-    → 已成功的部分会被指纹识别吗？→ 不会，指纹是整文件粒度
-    → 所以：**部分失败时，重试会重复导入已成功的条目**
-    → 处理：提示用户「有 M 条未能导入。重试将重新导入整个文件，
-      可能产生重复。建议先在设置页删除已导入的部分，或手工确认。」
+failed > 0（部分 JSON 未写入）：
+    1. 默认行为：**优先继续未完成的导入任务**（不是重新导入整个文件）
+    2. 事实依据：扫描目标文件中已有 imp.batch === 本批次 的记录，
+       其 imp.idx 集合即为「已成功」集合
+    3. 跳过这些 idx，只处理剩余的
+    4. progress.json 仅作加速缓存，不是判定依据
+    5. 已成功写入的记录 → **绝不重复导入**
 ```
 
-> **这里有个矛盾**：整文件粒度的指纹无法支持「部分重试」。这是刻意取舍——逐条指纹会退化成内容去重，而内容去重会误删合法重复（第二轮已实测）。
+**三条不可违反的约束**：
+
+| 编号 | 约束 | 原因 |
+|---|---|---|
+| ① | 默认优先「继续」而非「重新开始」 | 重新开始会重复 |
+| ② | 以数据中的 `imp.batch + idx` 为事实来源 | progress 可能陈旧或写入失败 |
+| ③ | 用户主动「重新开始」时才生成新批次，且**必须明确警告会产生重复** | 用户知情选择 |
+
+**JSON 成功、Markdown 失败的重试**：
+
+```
+→ 只补齐 Markdown，**不重写 JSON**
+→ 通过 generateMarkdownSummary(summary) 从已有 JSON 重建
+→ 不产生新的 JSON 记录
+```
+
+**不再把「手工删除重复记录」当正常恢复流程**：
+
+> v4 曾说「建议先在设置页删除已导入的部分」。这是**把工具的责任推给用户**。v5 取消这个建议：
 >
-> **v3 的立场**：宁可让用户承担「重试可能重复」的麻烦，也不做逐条内容去重。用户可在导入前先做快照，重试后可对比快照清理。
+> - 正常路径是「继续未完成任务」，不需要用户手工清理
+> - 只有在用户**主动选「重新开始」**后产生重复时，才提示「如需清理，可在设置页操作」——且这是**用户选择带来的后果**，不是正常流程的必要步骤
 
-**验收标准**（T-I08 ~ T-I11）：
+**与 §3.6 的关系**：本节是 §3.6 规则在「摘要 + Markdown 半成功」场景下的具体化，不得与 §3.6 冲突。若两处表述不一致，**以 §3.6 为准**。
+
+**验收标准**（T-I08 ~ T-I13，均待实现）
 
 | ID | 场景 | 断言 |
 |---|---|---|
-| T-I08 | MD 写入失败（mock 抛错） | JSON 成功计数正确，`mdFailed` 计数正确，指纹仍登记 |
+| T-I08 | MD 写入失败（mock 抛错） | JSON 成功计数正确，`mdFailed` 计数正确，任务标记为可续传 |
 | T-I09 | 所有摘要都导入成功 | `mdFailed === 0`，不提示 |
 | T-I10 | 重建 Markdown | 从 JSON 生成，条数正确，**不新增 JSON 记录** |
-| T-I11 | MD 失败后重复导入同一文件 | 指纹命中，默认不导入，**不会产生重复 JSON** |
+| T-I11 | MD 失败后续传 | **只补 MD，JSON 条数不变** |
+| T-I12 | 部分 JSON 失败后点「继续」 | 靠 `imp` 判定跳过已成功，**无重复** |
+| T-I13 | 部分 JSON 失败后点「重新开始」 | 新批次生成，**明确警告**可能重复 |
 
 ### 3.5 本次不做内容去重（理由）
 
@@ -1708,9 +1869,14 @@ V0.10.2b 导入安全 ──────────────┘
 | **T-M15** | **2a** | **`finishing` 阶段源文件变化** | **不改名、不删源文件；标记 `conflict`；目标保持已替换状态** |
 | **T-M16** | **2a** | **直接调 `appendActivityRecords()`（绕过 IPC）** | **抛 `MIGRATION_IN_PROGRESS`，磁盘无变化** |
 | **T-M17** | **2a** | **直接调 `saveActivity()`（绕过 IPC）** | **抛错，磁盘无变化** |
-| **T-M18** | **2a** | **其余写方法全量（delete/update/replace/recategorize/clear/saveSummary/deleteSummary/migrateDataTo/setDataDir）** | **全部阻塞；`saveScreenshot` 不阻塞（目标不重叠）** |
+| **T-M18** | **2a** | **16 个写方法逐一验证** | **15 个阻塞，含 `saveScreenshot`（重写 activities/<today>.json）与 `cleanupOldData`（删历史文件）** |
 | **T-M19** | **2a** | **迁移结束（成功/失败/冲突/回滚）后** | **锁已释放，`isLocked() === false`，所有写入恢复** |
 | **T-M20** | **2a** | **迁移期间录制 3 段** | **3 段全部保留并落盘，一条不丢** |
+| **T-M21** | **2a** | **迁移期间调用 `saveScreenshot()`** | **抛 `MIGRATION_IN_PROGRESS`；`activities/<today>.json` SHA 前后一致** |
+| **T-M22** | **2a** | **迁移期间调用 `cleanupOldData()`** | **抛 `MIGRATION_IN_PROGRESS`；无任何文件被删除** |
+| **T-M23** | **2a** | **归档时 `.migrated` 已存在** | **生成唯一归档名（不走覆盖）；旧归档内容不变；两份都在** |
+| **T-M24** | **2a** | **rename 成功但归档 SHA ≠ `sourceSha256`** | **不标记 `done`；标记 `conflict`；归档/目标/workspace 全部保留** |
+| **T-M25** | **2a** | **回滚时 `currentSha === null` 且 `preReplaceExists === true`** | **标 `conflict`，不自动恢复；备份保留在 staging** |
 | **导入 · 安全与快照** | | | |
 | T-I01 | 2b | 导入不清空原始记录 | 记录数增加而非归零 |
 | T-I02 | 2b | 三目录快照完整 | `activities`/`summaries`/`summaries_md` 计数 == 导入前 |
@@ -1728,6 +1894,7 @@ V0.10.2b 导入安全 ──────────────┘
 | **T-I12** | **2b** | **强制重新导入已完成文件** | **生成新 `batch`，与旧批次独立；明确警告可能重复** |
 | **T-I13** | **2b** | **摘要 JSON 成功、MD 失败后续传** | **不重写 JSON，仅补 MD** |
 | **T-I14** | **2b** | **原始字段完整性** | **除新增 `imp` 外，所有原字段逐字节保留** |
+| **T-I15** | **2b** | **部分失败后默认走「继续」而非「重新开始」** | **UI 默认按钮为「继续」；无重复导入** |
 | **记录标识（2.3）** | | | |
 | T-R01 | 2.3 | `rid` 生成/落盘/重启不变 | 重启后 `rid` 一致 |
 | T-R02 | 2.3 | 5 种去重组合 | 无 `rid` 一律保留 |
@@ -1744,7 +1911,7 @@ V0.10.2b 导入安全 ──────────────┘
 | T-D02-08 | 2.4 | 前后端一致性（**原始值接口**） | 同一原始输入，预览与保存结果逐字段相等 |
 | T-D02-09 | 2.4 | 起点吸附跨日 | `23:45`/`23:52` 正常；**`23:53`/`23:59` 拒绝** |
 
-**条目统计**：迁移 20（T-M01~T-M20）+ 导入 14（T-I01~T-I14）+ 记录标识 4 + 吸附 9 = **47 个测试条目**
+**条目统计**：迁移 25（T-M01~T-M25）+ 导入 15（T-I01~T-I15）+ 记录标识 4 + 吸附 9 = **53 个测试条目**
 
 **中断点统计**（与条目数不同口径）：活动 11 + 摘要 11 = **22 个故障注入点**
 
@@ -1789,14 +1956,16 @@ V0.10.2b 导入安全 ──────────────┘
 
 | 检查项 | 结果 |
 |---|---|
-| D-01~D-04 一致性 | ✅ 三份文档均含且语义一致 |
+| D-01~D-04 一致性 | ✅ 三份文档均含且语义一致；**无「待决策」残留**（第二轮末尾已标历史记录） |
 | 版本顺序一致性 | ✅ V0.10.2a → 2b → 3 → 4，三份文档一致 |
 | 旧方案作废标记 | ✅ `importBatchId`、`文件名+行号稳定指纹`、`待决策 D-02`、`V0.10.2 单一版本` 四处均已标删除线并说明 |
 | 重复章节编号 | ✅ 无（`grep -oE "^### [0-9]+\.[0-9]+" \| sort \| uniq -d` 为空） |
-| 过时 F1-F8 表述 | ✅ 已全部改为「F 系列 11 点 / S 系列 11 点」显式表述 |
-| 新测试是否进矩阵与验收 | ✅ T-M13~T-M20、T-I05~T-I14 均在 §七 与各版本验收标准中出现 |
-| 是否有「已实现」的虚假宣称 | ✅ 无。所有设计标为「待实现」，测试标为「待编写」 |
-| 测试条目数 | **47**（迁移 20 + 导入 14 + 记录标识 4 + 吸附 9） |
+| 过时 F1-F8 / F1-F9 区间表述 | ✅ 已统一为「F 系列 11 点 / S 系列 11 点」显式枚举 |
+| §2.9/§2.10/§2.11/§2.13 与 §七 一致性 | ✅ 方法数（16）、阻塞数（15）、注入点数（22）、条目数（53）四处数字对齐 |
+| T-M18 是否含 `saveScreenshot` | ✅ 含，且补入 `cleanupOldData` |
+| 新测试是否进矩阵与验收 | ✅ T-M13~T-M25、T-I05~T-I15 均在 §七 与各版本验收标准中出现 |
+| 是否有「已实现」的虚假宣称 | ✅ 无。所有设计标「待实现」，测试标「待实现、待执行」 |
+| 测试条目数 | **53**（迁移 25 + 导入 15 + 记录标识 4 + 吸附 9） |
 | 故障注入点 | **22**（活动 F 系列 11 + 摘要 S 系列 11） |
 
-> **口径提醒**：47 是「测试条目数」，22 是「故障注入点数」。两者不可混用——T-M01 这一个条目覆盖 11 个注入点。
+> **口径提醒**：**53 是「测试条目数」，22 是「故障注入点数」，16 是「写方法数」，15 是「需阻塞的写方法数」**。四者不可混用——T-M01 一个条目覆盖 11 个注入点，T-M18 一个条目覆盖 15 个方法。
