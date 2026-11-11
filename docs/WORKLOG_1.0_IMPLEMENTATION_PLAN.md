@@ -1,9 +1,9 @@
 # WorkLog 1.0 实施计划（V0.10.2a → V0.10.4）
 
-> 依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md`（已通过审查）+ 2026-11-12 四项产品决策 + 两轮修订意见
-> 分支：`worklog-1.0-dev`
-> 状态：**计划文档（第 3 版）。本轮不修改任何生产代码和测试代码。**
-> 最后更新：2026-11-12 01:13
+> 依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md` + 四项产品决策 + 三轮修订意见
+> 分支：`worklog-1.0-dev`　基准提交：`aecf04a`
+> 状态：**计划文档（第 4 版，最终方案）。本轮不修改任何生产代码和测试代码。**
+> 最后更新：2026-11-12 01:41
 
 ---
 
@@ -12,27 +12,30 @@
 | 版本 | 变更 |
 |---|---|
 | v1 | 初版，落实 D-01~D-04 |
-| v2 | 吸收七项审查意见：①摘要迁移纳入保护 ②修复迁移崩溃窗口 + F4a + 回滚修正 ③D-02 短时段改为拒绝 + 跨午夜判定 ④重叠处理细化 ⑤RID 补齐限制 ⑥导入快照扩到 summaries ⑦来源指纹覆盖全部有效数据 |
-| **v3** | 吸收四项 P0 + 四项 P1 + 文档清理：①守恒公式修正 ②F5a ③迁移期写入保护 ④D-02 接口改为传原始值 ⑤指纹改全字段 ⑥摘要半成功处理 ⑦起点进位边界 ⑧同卷验证改实测 ⑨旧方案统一标记作废 ⑩数量与文字勘误 |
+| v2 | 七项修订：摘要迁移、崩溃窗口、D-02 拒绝短时段、重叠分级、RID 限定、快照扩三目录、指纹覆盖摘要 |
+| v3 | 四项 P0 + 四项 P1：守恒公式、F5a、写入保护、D-02 原始值接口、指纹全字段、摘要半成功、起点进位、同卷实测 |
+| **v4** | **四项 P0 + 四项 P1 + 文档清理：状态机终态、回滚 SHA 保护、源文件最终校验、统一写入锁、导入续传、volatile 按类型、故障矩阵对称、manifest 补字段、章节重编号、旧方案作废、数量勘误** |
 
-### v3 相对 v2 的实质性更正
+### v4 修正清单
 
-| # | v2 的问题 | v3 更正 | 级别 |
+| # | v3 的问题 | v4 修正 | 级别 |
 |---|---|---|---|
-| 1 | 守恒标准写成「迁移后总数 = 源记录数」 | 应为 **`原有目标记录数 + 源记录数`**，活动与摘要分别计算 | **P0** |
-| 2 | 只测了 F5（源文件 rename 失败） | 补 **F5a**：源文件改名成功、status 更新前强杀 | **P0** |
-| 3 | 未考虑迁移期间的并发写入 | 补**写入暂停 / 维护锁** + 替换前**重新校验目标 SHA256** | **P0** |
-| 4 | D-02 让后端接收「已吸附的时长」 | **后端必须收原始 `startTime` + 原始 `durationMin`**，自行调 `slotRule` 验算 | **P0** |
-| 5 | 指纹用**白名单字段** | 改为**全字段**（排除 volatile 字段），key 规范化排序，数组顺序与重复保留 | P1 |
-| 6 | 摘要导入未说明 JSON/Markdown 半成功 | 补半成功检测、回滚、重试、指纹登记规则 | P1 |
-| 7 | 未测起点吸附到 24:00 的日期进位 | 补 `23:52/23:53/23:59` 边界，**发现 `23:53` 会跨日** | P1 |
-| 8 | 同卷验证用 `path.parse().root` | 改用**实测 rename 探测**（捕 `EXDEV`）+ `statSync().dev` 辅助 | P1 |
+| 1 | `rolledback` 落入「非 done」分支，重启可能重跑迁移 | 引入**显式状态机**，`rolledback`/`conflict`/`failed` 为终态，启动时只读不动 | **P0-01** |
+| 2 | 回滚直接恢复备份，可能覆盖迁移后新数据 | 回滚前**逐文件比对 `expectedSha256`**，不符则隔离不覆盖 | **P0-02** |
+| 3 | 只在开始/恢复时查源文件，未保护最终改名 | `finishing` 阶段**重新校验源 SHA**，不符则拒绝改名并标记 conflict | **P0-03** |
+| 4 | 写入锁只列 IPC 层 7 个入口 | 锁下沉到 **StorageManager 数据层**，覆盖 13 个写方法 + 非 IPC 路径 | **P0-04** |
+| 5 | 整文件指纹无法支持部分续传 | 引入 **`imp.batch + imp.idx`** 写入身份，progress 仅作缓存 | **P1-01** |
+| 6 | 全局排除 `id`，且纳入未导入的 `summariesMd` | **按类型定义 volatile**，只覆盖实际导入的 `activities`/`summaries` | **P1-02** |
+| 7 | 摘要缺 S4a/S5a；「F1-F9+F5a=10」自相矛盾 | 摘要对称补齐，**显式枚举 22 个注入点** | **P1-03** |
+| 8 | manifest 缺 `preReplaceRecordCount` | 补齐全部字段并定义「文件不存在时 = 0」 | **P1-04** |
+| 9 | 两个 `### 3.5`；F1-F8 旧表述；37 项计数错误 | 章节重编号 3.1-3.11；矩阵重写为 47 条目 | 清理 |
+| 10 | §2.14 被引用但不存在 | 新增冲突处理章节 | 清理 |
 
-### v3 发现的新缺陷（v2 未识别）
+### v4 的关键立场
 
-**起点吸附可能跨日。** `23:53` 起 15 分钟：`round(1433/15)*15 = 1440` = **次日 00:00**。整条记录被推到第二天，用户输入的日期与实际保存日期不一致。
-
-这是 v2 算法未覆盖的边界，v3 已定义处理规则（见 §1.8）。
+> **宁可停止、提示人工处理，也不静默丢失、覆盖或重复累计用户历史数据。**
+>
+> 具体体现：`conflict`/`failed` 是终态而非「重试态」；回滚遇到无法确认的文件只隔离不删除；源文件变化时拒绝改名；导入续传**明确声明不是 exactly-once**。
 | 1 | 迁移只保护 `activities.json` | `activities.json` 与 `summaries.json` **两套独立**迁移保护 |
 | 2 | 先 rename 后写 status，存在崩溃窗口 | manifest 记录**预期 SHA256**，恢复时比对判定 |
 | 3 | `duration <= 0` 一律 +24h | **区分跨午夜与短时段**，不做统一加 24 小时 |
@@ -45,9 +48,9 @@
 
 ---
 
-## 零、决策确认与 v3 落实
+## 零、决策确认与 v4 落实
 
-| 决策 | 结论 | v3 落实要点 |
+| 决策 | 结论 | v4 落实要点 |
 |---|---|---|
 | **D-01** | 取消危险覆盖导入；保留合并导入；普通导入不得清空原始记录；恢复备份单独立项 | 快照扩至三个目录；逐条统计；不做恢复功能 |
 | **D-02** | 起止**分别就近**吸附；时长=吸附后结束−开始；**不再单独取整**；最短 15 分钟（**选 B 拒绝**）；重叠需提示 | **后端收原始值自行验算**（v3 关键修正）；起点进位跨日单独处理 |
@@ -151,7 +154,7 @@ if (duration <= 0)       → 拒绝（理论上不可达，作为防御断言）
 
 **这一条是 v2 相对 v1 的关键修正**。v1 写的是「提升结束到 09:15」，会把 3 分钟凭空变成 15 分钟工时，用户明确否决。
 
-### 1.7 接口契约（v3 重写）
+### 1.7 接口契约（v3 重写，v4 保持）
 
 > **v3 修正：v2 的接口设计有缺陷。** v2 让后端接收「已吸附的 `startTime + durationMin`」，但这样**后端无法验证原始时长是否不足 15 分钟**。
 
@@ -379,62 +382,177 @@ function probeSameVolume(workspaceDir, targetDir) {
 
 **测试**（T-M05）：在临时目录与另一个已知不同卷的路径之间探测（测试环境若无第二卷，用 mock 让 `renameSync` 抛 `EXDEV`），断言拒绝且错误信息正确。
 
-### 2.5 manifest 与 SHA256 恢复判定（用户第 2 点核心）
+### 2.5 manifest 与 SHA256 恢复判定
+
+> **v4 修订（P1-04）**：补齐 `preReplaceRecordCount`，使 manifest、恢复流程、守恒公式、测试断言四者一致。
 
 ```jsonc
 // manifest.json
 {
-  "kind": "activities",
+  "kind": "activities",                    // activities | summaries
+  "manifestVersion": 1,
   "sourcePath": "C:\\...\\Data\\activities.json",
-  "sourceSha256": "a3f9c1...",          // 源文件整体哈希
+  "sourceSha256": "a3f9c1...",             // 源文件整体哈希（迁移开始时）
   "sourceRecordCount": 1284,
   "targetDir": "C:\\...\\Data\\activities",
   "createdAt": "2026-11-12T01:00:00Z",
   "targets": [
     {
       "date": "2026-11-05",
-      "expectedRecordCount": 42,
-      "expectedSha256": "b7e2...",       // ← 目标文件应有的内容哈希
-      "preReplaceSha256": "9a1c...",     // ← 替换前原文件的哈希（若原本不存在则为 null）
-      "preReplaceBackup": "staging/2026-11-05.pre-replace.json"
+
+      // ── 替换前状态（用于回滚与守恒校验）──
+      "preReplaceExists": true,            // 目标文件在替换前是否存在
+      "preReplaceRecordCount": 2,          // 替换前目标已有记录数；文件不存在时为 0
+      "preReplaceSha256": "9a1c...",       // 替换前哈希；文件不存在时为 null
+      "preReplaceBackup": "staging/2026-11-05.pre-replace.json",  // 不存在时为 null
+
+      // ── 替换后预期（用于恢复判定）──
+      "expectedRecordCount": 43,           // = preReplaceRecordCount + 源该天记录数
+      "expectedSha256": "b7e2..."          // 目标文件应有的内容哈希
     }
   ]
 }
 ```
 
-```jsonc
-// status.json
-{
-  "phase": "staging",                   // manifest | snapshot | staging | replacing | done
-  "completedTargets": ["2026-11-05"],   // 已确认就位的日期
-  "lastError": null
+**字段语义严格定义**：
+
+| 字段 | 目标文件原本不存在时 | 用途 |
+|---|---|---|
+| `preReplaceExists` | `false` | 回滚时决定「恢复备份」还是「删除文件」 |
+| `preReplaceRecordCount` | **`0`**（不是 `null`） | 守恒公式的加数，避免 `null + N` 的类型歧义 |
+| `preReplaceSha256` | `null` | 恢复判定时作为「应不存在」的标记 |
+| `preReplaceBackup` | `null` | 回滚时跳过恢复 |
+| `expectedRecordCount` | 源该天记录数 | 校验 staging 与最终结果 |
+| `expectedSha256` | 迁移后应有的哈希 | 恢复判定与回滚保护的依据 |
+
+**守恒关系（与 §2.11 一致）**：
+
+```
+expectedRecordCount == preReplaceRecordCount + (源文件中属于该天的记录数)
+
+sum(expectedRecordCount) == sum(preReplaceRecordCount) + sourceRecordCount
+```
+
+**迁移中目标文件变化的处理规则**：
+
+| 时机 | 检测方式 | 处理 |
+|---|---|---|
+| staging 生成后、替换前 | 重算 `actualSha256`，与 `preReplaceSha256` 比 | 不等 → **停止**，标记 `conflict`（§2.14） |
+| 恢复流程中 | 重算 `actualSha256`，与 `expectedSha256` / `preReplaceSha256` 比 | 都不等 → **停止**，标记 `conflict` |
+| 回滚时 | 重算 `actualSha256`，与 `expectedSha256` 比 | 不等 → **不覆盖**，隔离到保护目录（§2.8） |
+
+### 2.5a 迁移状态机（v4 新增，P0-01）
+
+> **v4 修正**：v3 的恢复判定用 `phase !== 'done'` 作为「继续迁移」的条件，导致 `rolledback` 也会落入该分支，重启后**可能重新执行已回滚的迁移**。这是明确的状态设计缺陷。
+
+**状态定义**：
+
+| 状态 | 含义 | 是否终态 | 启动时行为 |
+|---|---|---|---|
+| `init` | 工作区已建，manifest 已写 | 否 | 继续：进入 `snapshot` |
+| `snapshot` | 源快照生成中 | 否 | 继续：校验快照后进入 `staging` |
+| `staging` | 生成目标暂存文件 | 否 | 继续：按 SHA 判定后补齐缺失 staging |
+| `replacing` | 正在逐文件原子替换 | 否 | 继续：按 §2.5 判定已完成/未完成，续跑 |
+| `finishing` | 所有 target 已替换，待改源文件名 | 否 | 校验源 SHA 后完成改名（P0-03） |
+| `done` | **迁移成功完成** | **是** | **不执行任何操作**；仅做幂等确认 |
+| `rolledback` | **用户主动回滚完成** | **是** | **绝不自动重新迁移**；保留工作区供审计 |
+| `conflict` | 检测到无法确认的冲突 | **是** | **绝不自动继续**；等待人工处理 |
+| `failed` | 迁移过程中不可恢复的错误 | **是** | **绝不自动继续**；等待人工处理 |
+
+**终态的启动行为（关键）**：
+
+```
+启动时扫描 Data/.migration/*/status.json：
+
+switch (status.phase) {
+  case 'done':
+  case 'rolledback':
+    // 终态：不执行任何迁移动作
+    // 只做一致性快照记录，不写任何数据
+    log('迁移工作区 <id> 已处于终态 <phase>，跳过');
+    break;
+
+  case 'conflict':
+  case 'failed':
+    // 终态：停止并提示人工处理
+    notifyUser('<id> 迁移未完成（<phase>），已停止自动处理，请人工确认');
+    // 不重试、不新建工作区、不改动任何数据
+    break;
+
+  case 'init':
+  case 'snapshot':
+  case 'staging':
+  case 'replacing':
+  case 'finishing':
+    // 非终态：按 §2.5 判定续跑
+    resumeMigration(workspace);
+    break;
+
+  default:
+    // 未知状态：按最保守策略处理
+    markConflict(workspace, '未知状态 ' + status.phase);
 }
 ```
 
-**恢复判定（解决崩溃窗口）**：
+**只有用户显式重新发起才会新建迁移任务**：
+
+```
+新建迁移任务的前置条件（三者必须同时满足）：
+1. 用户通过 UI 显式触发（不是启动时自动）
+2. 不存在处于非终态的工作区
+3. 若存在 conflict/failed/rolledback 工作区：
+     用户必须明确选择「放弃旧任务并新建」，
+     旧工作区被重命名为 <id>.abandoned-<ts>/ 保留，不删除
+```
+
+**状态转移图**：
+
+```
+init → snapshot → staging → replacing → finishing → done
+  │       │          │          │           │
+  └───────┴──────────┴──────────┴───────────┴──→ conflict（任一阶段检测到冲突）
+  │       │          │          │           │
+  └───────┴──────────┴──────────┴───────────┴──→ failed（不可恢复错误）
+
+任意非终态 → rolledback（用户主动回滚）
+done / rolledback / conflict / failed → 终态，不再自动流转
+```
+
+**status.json 结构**：
+
+```jsonc
+{
+  "phase": "replacing",
+  "completedTargets": ["2026-11-05"],
+  "lastError": null,
+  "updatedAt": "2026-11-12T01:05:00Z",
+  "conflictDetail": null          // phase === 'conflict' 时说明冲突文件与原因
+}
+```
+
+**保留审计记录**：所有状态转换追加写入 `status.history[]`（时间 + 从 → 到 + 原因），工作区**永不自动删除**，仅在用户明确选择时重命名为 `.abandoned-*`。
+
+### 2.5b 恢复判定流程
 
 ```
 启动时若发现 .migration/<kind>-<sha8>/ 存在：
 
-1. 读 manifest + status
-2. 若 status.phase === 'done'：
-     → 若源文件仍在：执行最后一步 rename 为 .migrated，然后清理
-     → 若源文件已改名：删除工作区（保留日志）
-3. 若 phase !== 'done'（含 replacing）：
+1. 读 manifest + status，先按 §2.5a 的终态表分流
+2. 非终态时，逐 target 判定：
    for each target in manifest.targets:
        actualSha = sha256(targetDir/<date>.json)     // 不存在则为 null
        if actualSha === target.expectedSha256:
            → 已就位，标记完成（**不重算、不重写**）
        else if actualSha === target.preReplaceSha256:
            → 尚未替换，可用 staging 内容继续
-       else if actualSha === null && target.expectedRecordCount === 0:
-           → 空文件，视为完成
+       else if actualSha === null && target.preReplaceExists === false:
+           → 该天本无文件且尚未创建，属「未替换」
        else:
-           → **状态无法确认 → 停止迁移**，抛错并提示：
-             「无法确认 <date>.json 的状态，为避免重复追加已停止迁移。
-               请从 .migration/ 快照手工核对或联系支持。」
-4. 全部 target 判定完成后，按需生成缺失的 staging，再执行替换
-5. 每次 rename 后立即更新 status.completedTargets
+           → **状态无法确认 → 标记 conflict**，停止：
+             「无法确认 <date>.json 的状态，为避免重复追加已停止迁移。」
+3. 全部 target 判定完成后，按需生成缺失的 staging，再执行替换
+4. 每次 rename 后立即更新 status.completedTargets
+5. 所有 target 完成后进入 finishing，执行 P0-03 的源文件最终校验
 ```
 
 **关键**：`expectedSha256` 让「rename 成功但 status 未写」的崩溃窗口变得可判定——重启后比对正式文件的 SHA 就能知道它是否已就位，**不需要依赖 status**。
@@ -467,52 +585,136 @@ function probeSameVolume(workspaceDir, targetDir) {
   └─ 逐日：备份原文件 → rename(staging/<date>.json → targetDir/<date>.json)
      → 更新 status.completedTargets
 
-阶段 6：收尾
-  ├─ 源文件 rename 为 <name>.migrated
+阶段 6：收尾（finishing）
+  ├─ **重新计算源文件 SHA**（P0-03，见 §2.6a）
+  ├─ 一致 → 源文件 rename 为 <name>.migrated
   └─ status.phase = 'done'
 ```
 
-### 2.7 F7：源文件在迁移中变化（用户特别要求）
+### 2.6a 源文件最终改名前校验（v4 新增，P0-03）
+
+> **v4 新增。** v3 只在「迁移开始」和「恢复时」检查源文件变化，**没有保护最后的改名动作**。若源文件在 staging 之后、改名之前被外部修改，直接改名会把新内容永久归档为「已迁移」，而目标文件里并没有这些新数据——**数据静默丢失**。
+
+**执行校验**：
+
+```
+阶段 6 开始前：
+    currentSourceSha256 = sha256(sourcePath)
+
+    if (currentSourceSha256 !== manifest.sourceSha256):
+        → **禁止改名**
+        → **禁止删除或覆盖源文件**
+        → 保留 migration workspace
+        → status.phase = 'conflict'（终态，见 §2.5a）
+        → status.conflictDetail = {
+            stage: 'pre-rename',
+            expected: manifest.sourceSha256,
+            actual: currentSourceSha256,
+            sourceRecordCountAtStart: manifest.sourceRecordCount,
+            sourceRecordCountNow: <当前源文件条数>
+          }
+        → 通知用户：
+          「源文件在迁移过程中被修改，为避免丢失新数据已停止。
+            目标文件已写入 N 个日期（可用），源文件保持原样。
+            请手工核对后决定：接受目标结果，或回滚。」
+        → **停止自动完成，等待人工处理**
+```
+
+**源文件变化且目标已部分替换时如何安全恢复**：
+
+此时处于「半完成」状态，有两条路，**都不能自动选**：
+
+| 方案 | 操作 | 风险 | 适用条件 |
+|---|---|---|---|
+| **A. 接受已替换结果** | 保留 `activities/` 现状；源文件重命名为 `<name>.conflict-<ts>`（**不归档为 `.migrated`**）；用户后续手工处理该文件 | 源文件的新增内容需手工合并 | 用户确认目标结果正确 |
+| **B. 回滚** | 走 §2.8 回滚流程（含逐文件 SHA 保护）；源文件改回原名 | 迁移期间新录数据受 §2.8 保护 | 用户认为目标结果不可信 |
+
+**绝不做的操作**：
+
+- ❌ 因源文件变化而**重跑整个迁移** → 会与已替换的目标文件叠加，导致重复累计
+- ❌ 把变化后的源文件直接改名为 `.migrated` → 新数据被误标为「已处理」
+- ❌ 删除源文件 → 直接丢数据
+
+**实现要点**：`conflictDetail` 同时记录源文件条数变化（`AtStart` vs `Now`），用户可据此判断新增了什么。
+
+### 2.7 F7：源文件在迁移前阶段变化
 
 **v1 的做法有误**：直接建新 workspace 继续合并，会与旧的未完成迁移叠加，**导致重复累计**。
 
-**v2 正确做法**：
+**正确做法**（本节点针对**迁移开始前**检测到源变化；阶段 6 的变化见 §2.6a）：
 
 ```
-检测到 manifest.sourceSha256 !== 当前 sourceSha256：
+发现 manifest.sourceSha256 !== 当前 sourceSha256：
 
-1. 先判定旧 workspace 的状态（走 §2.5 的恢复判定）
-2. 若旧 workspace 有未完成的 target：
-     → **停止**，提示「上次迁移未完成且源文件已变化。请先完成或回滚上次迁移」
+1. 先按 §2.5a 状态机判定旧 workspace 状态
+2. 若旧 workspace 处于**非终态**：
+     → **停止**，标记 conflict
+     → 提示「上次迁移未完成且源文件已变化。请先完成或回滚上次迁移」
      → **不创建新 workspace**，不继续合并
-3. 若旧 workspace 已完成（phase=done）：
-     → 源文件已改名 → 当前的新源文件是另一份数据 → 允许新建 workspace
-4. 旧 workspace 一律**保留不删**，供审计
+3. 若旧 workspace 处于 done（源已改名）：当前新源文件是另一份数据 → 允许新建
+4. 若旧 workspace 处于 rolledback：**不自动续跑**，需用户显式重新发起
+5. 旧 workspace 一律**保留不删**，供审计
 ```
 
-### 2.8 回滚流程修正（用户第 2 点末段）
+### 2.8 回滚流程（v4 修订，P0-02）
 
-**v1 的错误**：「删掉 `activities/*.json`，把 `activities.json.migrated` 改回」——这会**误删迁移期间新录制/新补录的数据**。
+> **v4 修订。** v3 的回滚直接「用备份恢复」，**没校验目标文件当前内容**。若迁移后用户又编辑/新增了数据，回滚会把它们覆盖掉——**这正是要避免的静默丢数据**。
 
-**v2 正确回滚**：
+**v1 的错误**（保留记录）：「删掉 `activities/*.json`，把 `activities.json.migrated` 改回」——会误删迁移期间新录的数据。
+
+**v4 正确回滚（逐文件 SHA 保护）**：
 
 ```
-回滚步骤（需用户显式触发）：
-1. 停止录制（activityRecorder.stop() + flush()）
-2. 对每个 target 日期：
-     ├─ 若 manifest 有 preReplaceBackup（原文件曾存在）
-     │    → 用备份**恢复**该文件（不是删除）
-     └─ 若 preReplaceBackup 为 null（原文件本来不存在）
-          → 删除该日期文件（因为它是迁移新建的）
-3. 源文件：把 <name>.migrated 改回原名
-4. 保留 .migration/ 工作区（不删），标记 status.phase = 'rolledback'
-5. 重启后视为未迁移状态
+回滚步骤（需用户显式触发 + 二次确认）：
 
-**关键约束**：
-- 只处理 manifest.targets 里列出的日期，**不删除其他日期文件**
-- 迁移期间新产生的日期（不在 manifest 里）**完全不碰**
-- 回滚前后各日期记录数必须与迁移前一致
+0. 前置：
+   ├─ 停止录制（activityRecorder.stop()）
+   ├─ flush 缓冲到磁盘（回滚前先落盘，避免缓冲数据丢失）
+   └─ 获取写锁（§2.13）
+
+1. 对每个 target 日期**逐个**处理（不是批量）：
+
+   currentSha = sha256(targetDir/<date>.json)      // 不存在则为 null
+
+   ┌─ 情况 1：currentSha === target.expectedSha256
+   │    → 内容 == 迁移后预期，说明迁移后未被改动 → **允许回滚**
+   │       ├─ preReplaceExists === true  → 用 preReplaceBackup 覆盖恢复
+   │       └─ preReplaceExists === false → 删除该文件
+   │
+   ├─ 情况 2：currentSha === target.preReplaceSha256
+   │    → 已是原始状态（可能上次回滚到一半）→ 跳过
+   │
+   ├─ 情况 3：currentSha === null
+   │    → targetDir/<date>.json 不存在
+   │       ├─ preReplaceExists === true  → 用备份恢复（文件被删了）
+   │       └─ preReplaceExists === false → 本就该不存在，跳过
+   │
+   └─ 情况 4：以上都不匹配
+        → **禁止覆盖**（文件含迁移后的新数据）
+        → 复制到保护目录 Data/.migration/<id>/conflict-files/<date>.json
+        → 记录到 status.conflictDetail.files[]
+        → 该文件**保持原样不动**
+        → 继续处理下一个（不因单个冲突中止整个回滚）
+
+2. 汇总：
+   ├─ 存在冲突文件 → status.phase = 'conflict'（终态）
+   │   提示：「回滚完成，但 N 个文件因含迁移后新增数据未被覆盖，
+   │           已备份到 conflict-files/。请人工核对。」
+   └─ 无冲突 → status.phase = 'rolledback'（终态）
+
+3. 保留（**一律不删**）：
+   ├─ source.snapshot.jsonl
+   ├─ migration workspace（可选重命名为 <id>.rolledback-<ts>/）
+   └─ conflict-files/
+
+**绝不做**：
+- ❌ 为「让回滚成功」而删除无法确认的文件
+- ❌ 批量覆盖后再校验（必须**先校验再决定**）
+- ❌ 回滚失败时删除工作区
+- ❌ 触碰 manifest.targets 之外的日期文件
 ```
+
+**`rolledback` 是终态**：见 §2.5a。重启后**不会**重新执行该迁移。
 
 ### 2.9 文件范围
 
@@ -520,13 +722,20 @@ function probeSameVolume(workspaceDir, targetDir) {
 |---|---|
 | 新增 `electron/legacyMigration.js` | 通用迁移引擎，参数化 `kind`（activities / summaries） |
 | `electron/storageManager.js:220-271` | `_migrateIfNeeded` 改为调用 `legacyMigration.runMigration({kind, sourcePath, targetDir, ...})` 两次 |
-| 新增 `tests/legacyMigration.test.cjs` | 活动迁移 F1-F8 |
-| 新增 `tests/legacyMigrationSummaries.test.cjs` | 摘要迁移 F1-F8（独立） |
+| 新增 `tests/legacyMigration.test.cjs` | 活动迁移 F1-F9 + **F5a**（10 个中断点） |
+| 新增 `tests/legacyMigrationSummaries.test.cjs` | 摘要迁移 S1-S9 + **S5a**（10 个中断点，独立） |
 | 新增 `tests/migrationRecovery.test.cjs` | SHA256 判定、跨卷、源变化、回滚 |
 
-### 2.10 故障注入矩阵（v2 扩展）
+### 2.10 故障注入矩阵（v4 对称补齐）
 
-**活动迁移 F1-F9** + **摘要迁移 S1-S9**（结构相同，数值独立）
+**活动迁移：F1-F9 + F4a + F5a（11 个中断点）**
+**摘要迁移：S1-S9 + S4a + S5a（11 个中断点，结构与活动对称，数值独立）**
+
+> **v4 修正（P1-03）**：
+> 1. v3 只给活动补了 F5a，摘要没补 **S5a**。两套结构相同，摘要同样存在「改名成功、status 未更新」的窗口，**必须对称补齐**。同理补 S4a。
+> 2. v3 的「F1-F9 + F5a = 10 个」表述**自相矛盾**：F1-F9 本身是 9 个（含 F4），加 F5a 应为 10，但漏了 F4a 才是 9+2=11。**以显式枚举为准。**
+
+**活动迁移中断点（F 系列）**
 
 | # | 注入位置 | 预期行为 |
 |---|---|---|
@@ -536,13 +745,42 @@ function probeSameVolume(workspaceDir, targetDir) {
 | F4 | rename 第 2 个文件时崩溃 | 第 1 个已就位不重复，从第 2 个继续 |
 | **F4a** | **rename 成功、status 更新前强杀** | **重启时靠 expectedSha256 判定已就位，标记完成，不重复写入** |
 | F5 | 源文件 rename 失败（被锁） | 目标已就位，重启时检测到所有 target 完成 → 直接执行源文件改名 |
-| **F5a** | **源文件改名 `.migrated` 成功、status 更新前强杀** | **重启时通过「源文件不存在 + `.migrated` 存在 + `.migrated` 哈希 == manifest.sourceSha256 + 所有 target 哈希 == expectedSha256」四重判定为已完成，不重复改名、不重复迁移** |
+| **F5a** | **源文件改名 `.migrated` 成功、status 更新前强杀** | **四重判定为已完成：源文件不存在 + `.migrated` 存在 + `.migrated` 哈希 == `manifest.sourceSha256` + 所有 target 哈希 == `expectedSha256`。不重复改名、不重复迁移** |
 | F6 | 两次崩溃（F4 后再次崩溃） | 最终结果逐字节等同一次成功 |
-| F7 | 源文件迁移中被修改 | **停止**，不建新 workspace，提示先处理旧的 |
-| F8 | 目标目录已有旧数据 | 合并进 staging，替换后 = 源天数 + 原文件数，不重复 |
-| F9 | workspace 与 targetDir 跨卷 | 前置检查拒绝，提示用户 |
+| F7 | 源文件在**迁移前阶段**被修改 | 按 §2.5a 判定旧 workspace；非终态则**停止并标记 conflict** |
+| F8 | 目标目录已有旧数据 | 合并进 staging，替换后 = `preReplaceRecordCount + 源该天记录数` |
+| F9 | workspace 与 targetDir 跨卷 | rename 探测捕获 EXDEV，拒绝迁移 |
 
-### 2.11 验收标准（v3 修正守恒公式）
+**摘要迁移中断点（S 系列）**
+
+与 F 系列**逐条对应**，仅对象从 `activities.json` → `summaries.json`、目标从 `activities/` → `summaries/`：
+
+| # | 对应 | 注入位置 | 预期行为 |
+|---|---|---|---|
+| S1 | F1 | 写 summaries manifest 后崩溃 | 复用 workspace |
+| S2 | F2 | 生成第 2 个 staging 时崩溃 | 第 1 个复用 |
+| S3 | F3 | staging 完成、替换前崩溃 | 直接进入替换 |
+| S4 | F4 | rename 第 2 个文件时崩溃 | 第 1 个不重复 |
+| **S4a** | **F4a** | **rename 成功、status 未更新前强杀** | **靠 expectedSha256 判定** |
+| S5 | F5 | 摘要源文件 rename 失败 | 直接执行改名 |
+| **S5a** | **F5a** | **摘要源文件改名成功、status 未更新前强杀** | **四重判定（同 F5a）** |
+| S6 | F6 | 两次崩溃 | 逐字节等同一次成功 |
+| S7 | F7 | 摘要源文件迁移前变化 | 停止并标记 conflict |
+| S8 | F8 | summaries 目录已有旧数据 | 合并，不重复 |
+| S9 | F9 | 跨卷 | 拒绝 |
+
+**统计口径（严禁混用）**
+
+| 口径 | 数值 | 定义 |
+|---|---|---|
+| **测试矩阵条目数** | 见 §七汇总表实际行数 | 每个 `T-xxx` 一行；一个条目可能覆盖多个注入点 |
+| **活动迁移中断点** | **11** | F1、F2、F3、F4、F4a、F5、F5a、F6、F7、F8、F9 |
+| **摘要迁移中断点** | **11** | S1、S2、S3、S4、S4a、S5、S5a、S6、S7、S8、S9 |
+| **迁移故障注入点合计** | **22** | 活动 11 + 摘要 11 |
+
+> **不要写「F1-F9」这种区间写法** —— 它包含 F4 却不含 F4a/F5a，容易让人数错。文中有需要引用时，一律显式枚举或用「F 系列 11 点 / S 系列 11 点」表述。
+
+### 2.11 验收标准（v3 修正守恒公式，v4 补并发与终态）
 
 > **v3 修正：v2 的守恒标准是错的。**
 >
@@ -591,85 +829,238 @@ sum(count(summaries/<date>.json) after)
 | 保护 6 | **替换前重新校验目标 SHA256**，不匹配则停止 |
 | 回滚 | 见 §2.8，**不是删目录，而是按 manifest 恢复**；**迁移期间新产生的日期完全不碰** |
 
-### 2.13 迁移期间的写入保护（v3 新增，P0）
+### 2.13 统一写入锁（v4 重写，P0-04）
 
-> **v2 完全没考虑这个场景。** 迁移不是瞬时的——如果源文件有上千条记录、几十个日期，迁移可能持续数秒。这期间 `activityRecorder` 的 flush 定时器（15 秒一次）、用户的补录操作、AI 摘要生成都可能写入 `activities/` 或 `summaries/`。若不处理，有两种事故：
+> **v4 修正两处 v3 缺陷：**
 >
-> 1. **写入被覆盖**：迁移 rename 覆盖了刚写入的文件，用户刚记的东西消失
-> 2. **哈希校验失败**：替换前校验发现目标文件变成了预期外的内容，迁移失败（这个反而是好的，因为被拦住了）
+> 1. v3 只在 IPC 层列了 7 个入口，**漏掉了 `StorageManager` 自己的多个写方法**，也漏了非 IPC 路径（如 `convert-plan-to-fact`、`flush` 定时器）。锁必须建在**数据写入层**，不能建在调用层。
+> 2. v3 用模块级布尔变量，没定义获取/释放/异常语义，也没解决「迁移自身也要写」的自锁问题。
 
-**v3 三层保护**：
+**生产代码核实：13 个写方法 + 1 个目录设置**
 
-**第一层：维护锁（互斥）**
+| 方法 | 行号 | 写入目标 | 迁移期阻塞 |
+|---|---|---|---|
+| `saveActivity` | 281 | `activities/*.json` | ✅ |
+| `appendActivityRecords` | 299 | `activities/*.jsonl` | ✅ |
+| `deleteActivity` | 388 | `activities/*.json` | ✅ |
+| `updateDisplayRecord` | 421 | `activities/*.jsonl` | ✅ |
+| `deleteDisplayRange` | 456 | `activities/*.jsonl` | ✅ |
+| `replaceDisplayRanges` | 483 | `activities/*.jsonl`（可跨日） | ✅ |
+| `recategorizeAppForDay` | 576 | `activities/*.jsonl` | ✅ |
+| `deleteDisplayRecord` | 638 | `activities/*.jsonl` | ✅ |
+| `clearActivities` | 663 | `activities/` 整目录 | ✅ |
+| `saveSummary` | 682 | `summaries/*.json` + `summaries_md/*.md` | ✅ |
+| `deleteSummary` | 740 | `summaries/*.json` | ✅ |
+| `saveScreenshot` | 761 | `screenshots/` | ⚠️ 不阻塞（不涉及迁移目标） |
+| `migrateDataTo` | 928 | 整个数据目录复制 | ✅（与迁移互斥） |
+| `setDataDir` | 47 | 切换数据根目录 | ✅（迁移中禁止切目录） |
+
+**必须覆盖的非 IPC 路径**（v3 遗漏）：
+
+| 路径 | 位置 | 写入方法 |
+|---|---|---|
+| `activityRecorder.flush()` 定时器 | `activityRecorder.js:278` | `appendActivityRecords`（**不经 IPC，15 秒自动触发**） |
+| `convert-plan-to-fact` | `main.js:984` | 经 `planManager.markActual`，需阻塞避免计划/事实不一致 |
+| `add-manual-record` | `main.js:1176` | `appendActivityRecords` |
+| 标注采纳 | `main.js:1026` | `appendActivityRecords` |
+| `replace-display-ranges` | `main.js:1189` | `replaceDisplayRanges` |
+| `recategorize-app-for-day` | `main.js:1208` | `recategorizeAppForDay` |
+| `import-data` | `main.js:1453` | `saveActivity` / `saveSummary` |
+| `migrate-storage` | `main.js:1557` | `migrateDataTo` |
+
+**已核实不需阻塞的模块（写入目标不重叠）**：
+
+| 模块 | 写入目标 |
+|---|---|
+| `planManager` | `plans.json` |
+| `arhatManager` | `arhat/sessions/`、`arhat/notes/` |
+| `focusManager` | `focus/<date>.json` |
+| `logManager` | `logs/*.log` |
+
+**锁的设计（`electron/writeGate.js`）**
 
 ```js
-// electron/legacyMigration.js
-let migrationLock = null;
+'use strict';
+// 统一写入闸门：迁移期间阻止所有写 activities/ 与 summaries/ 的路径。
+// 建在 StorageManager 层而非 IPC 层，因为 flush 定时器不走 IPC。
 
-function acquireLock() {
-  if (migrationLock) return false;
-  migrationLock = { since: Date.now(), pid: process.pid };
+let holder = null;          // { owner, reason, since }
+let migrationDepth = 0;     // > 0 表示在迁移特权上下文内
+
+const ERR = 'MIGRATION_IN_PROGRESS';
+
+class WriteBlockedError extends Error {
+  constructor(message) {
+    super(message);
+    this.code = ERR;
+    this.name = 'WriteBlockedError';
+  }
+}
+
+function tryAcquire(owner, reason) {
+  if (holder) return false;
+  holder = { owner, reason, since: Date.now() };
   return true;
+}
+
+function release(owner) {
+  if (!holder || holder.owner !== owner) return false;
+  holder = null;
+  return true;
+}
+
+// 迁移自己的写入走特权上下文，避免自我死锁
+function withMigrationContext(fn) {
+  migrationDepth += 1;
+  try { return fn(); }
+  finally { migrationDepth -= 1; }
+}
+
+// 所有写方法入口调用
+function assertWritable(operation) {
+  if (migrationDepth > 0) return;
+  if (holder) {
+    throw new WriteBlockedError(
+      `数据迁移进行中，暂不能${operation}。请等待迁移完成后重试。`
+    );
+  }
+}
+
+function isLocked() { return !!holder; }
+function getHolder() { return holder ? { ...holder } : null; }
+
+module.exports = {
+  tryAcquire, release, withMigrationContext, assertWritable,
+  isLocked, getHolder, WriteBlockedError, ERR
+};
+```
+
+**StorageManager 接入**（每个写方法首行）：
+
+```js
+appendActivityRecords(records) {
+  writeGate.assertWritable('写入活动记录');   // ← 第一行
+  ...
 }
 ```
 
-**需要申请锁的操作**（迁移期间被拒绝或排队）：
+**迁移侧使用**（异常必须释放）：
 
-| 操作 | 迁移期间行为 |
-|---|---|
-| `activityRecorder.flush()` | 暂停，把片段留在内存缓冲，迁移结束后统一落盘 |
-| `add-manual-record` | 拒绝，返回「数据迁移中，请稍后」 |
-| `replace-display-ranges` | 拒绝 |
-| `update-display-record` / `delete-display-record` | 拒绝 |
-| `saveSummary` | 拒绝 |
-| `import-data` | 拒绝 |
-| `recategorizeAppForDay` | 拒绝 |
-
-**实现方式**：在 `storageManager` 的写方法入口检查 `migrationLock`，抛特定错误码 `MIGRATION_IN_PROGRESS`，由 IPC 层转成友好提示。
-
-**第二层：替换前重新校验目标 SHA256**
-
-不依赖锁完全可靠（万一有绕过锁的写入路径），替换每个文件前再校验一次：
-
-```
-for each target in manifest.targets:
-    currentSha = sha256(targetDir/<date>.json)   // 当前实际内容
-    if currentSha !== manifest.targets[i].preReplaceSha256:
-        → 目标文件在准备阶段之后被修改过
-        → **停止替换**，记录冲突文件，提示：
-          「<date>.json 在迁移准备后被修改，为保护数据已停止迁移。
-            请关闭其他操作后重启。」
-    → 校验通过，执行 rename
+```js
+const OWNER = `migration:${kind}:${process.pid}`;
+if (!writeGate.tryAcquire(OWNER, `migrating ${kind}`)) {
+  return { ok: false, error: '另一个迁移正在进行' };
+}
+try {
+  writeGate.withMigrationContext(() => doMigrationPhases());
+} finally {
+  writeGate.release(OWNER);       // 无条件释放
+}
 ```
 
-**注意**：只在**替换该文件前**校验该文件，不是一次性全校验——这样已完成的文件不受后续影响。
+**`activityRecorder.flush()` 的行为（不丢数据）**
 
-**第三层：回滚不覆盖迁移期间新数据**
-
-回滚（§2.8）只处理 `manifest.targets` 列出的日期，且用 `preReplaceBackup` 恢复：
-
+```js
+catch (error) {
+  if (error.code === writeGate.ERR) {
+    // 迁移中：不是错误，片段原样放回，**不截断**
+    this._buffer = batch.concat(this._buffer);
+    this.onLog('数据迁移进行中，录制数据暂存内存，迁移后写入', 'info');
+    return 0;
+  }
+  this.onLog('写入活动记录失败: ' + error.message, 'error');
+  this._buffer = batch.concat(this._buffer).slice(-200);   // 原逻辑不变
+  return 0;
+}
 ```
-for each target in manifest.targets:
-    if target.preReplaceBackup exists:
-        恢复备份到 targetDir/<date>.json   // 回到迁移前状态
-    else:
-        删除 targetDir/<date>.json          // 该文件是迁移新建的
 
-// 不在 manifest.targets 里的日期文件：**完全不动**
-```
+迁移分支**不做 `slice(-200)` 截断**——迁移是可控的短时状态，缓冲不会无限增长，保证录制数据一条不丢。迁移完成后主动触发一次 `flush()`。
 
-这样迁移期间若有新的日期产生（例如用户迁移中跨了零点，新建了次日文件），回滚不会碰它。
+**锁的能力边界（必须明确）**
 
-**验收标准**（T-M09 ~ T-M12）：
+> ⚠️ **应用内写锁无法阻止 iCloud / OneDrive / 杀毒软件 / 手工编辑器等外部进程修改文件。**
+>
+> 因此必须保留 SHA256 检测。三层防线：
+
+| 防线 | 防的是 | 防不了 |
+|---|---|---|
+| 应用内写锁 | 本应用内的并发写入 | 外部进程 |
+| 替换/回滚前 SHA 校验 | 准备阶段后的任何修改（含外部） | 校验与 rename 之间的毫秒级窗口 |
+| 原子 rename | 半截文件 | 逻辑错误 |
+
+**验收标准**（T-M09 ~ T-M20）
 
 | ID | 场景 | 断言 |
 |---|---|---|
-| T-M09 | 迁移中调用 `add-manual-record` | 返回 `MIGRATION_IN_PROGRESS`，不写入 |
-| T-M10 | 迁移中 `activityRecorder.flush()` 触发 | 片段留在缓冲，迁移后正确落盘，**不丢失** |
-| T-M11 | 迁移准备后、替换前，外部修改目标文件 | 替换停止，`activities/` 保持准备后状态，错误信息说明冲突文件 |
-| T-M12 | 迁移期间新增了「次日」文件，然后回滚 | 该次日文件**仍存在且内容不变** |
+| T-M09 | 迁移中 IPC `add-manual-record` | 返回 `MIGRATION_IN_PROGRESS`，不写入 |
+| T-M10 | 迁移中 `flush()` 定时器触发 | 片段留缓冲，迁移后落盘，**不丢失** |
+| T-M11 | 替换前外部修改目标文件 | 停止替换，标记 `conflict`，说明冲突文件 |
+| T-M12 | 迁移期新增「次日」文件后回滚 | 该文件**存在且内容不变** |
+| **T-M13** | **回滚完成后重启** | **`rolledback` 终态，不再次迁移，记录数不变** |
+| **T-M14** | **迁移后目标文件被外部修改，再回滚** | **不覆盖，冲突文件隔离到 `conflict-files/`** |
+| **T-M15** | **`finishing` 阶段源文件变化** | **不改名、不删源文件，标记 `conflict`** |
+| **T-M16** | **直接调 `appendActivityRecords()`（绕过 IPC）** | **抛错，磁盘无变化** |
+| **T-M17** | **直接调 `saveActivity()`（绕过 IPC）** | **抛错，磁盘无变化** |
+| **T-M18** | **9 个写方法全量** | **activities/summaries 相关全阻塞；`saveScreenshot` 不阻塞** |
+| **T-M19** | **迁移结束后（成功/失败/冲突/回滚）** | **锁已释放，`isLocked() === false`，写入恢复** |
+| **T-M20** | **迁移期间录制 3 段** | **3 段全保留，迁移后全部落盘** |
+
 
 ---
+
+### 2.14 冲突处理与人工介入（v4 新增）
+
+`conflict` 与 `failed` 都是**终态**（§2.5a）：迁移停止自动执行，等待人工处理。本节定义人工可做的操作。
+
+**触发冲突的场景**：
+
+| 场景 | 检测点 | `conflictDetail.stage` |
+|---|---|---|
+| 目标文件在准备后被改动 | 替换前 SHA 比对 | `pre-replace` |
+| 恢复时目标文件状态不明 | 恢复判定三分支都不匹配 | `resume` |
+| 源文件在改名前被改动 | `finishing` 阶段 SHA 比对 | `pre-rename` |
+| 回滚时目标文件含迁移后新数据 | 回滚前 SHA 比对 | `rollback` |
+| 跨卷 | 前置探测 | `precheck` |
+
+**人工可选操作（UI 提供，不自动执行）**：
+
+| 操作 | 前提 | 效果 |
+|---|---|---|
+| **A. 接受当前结果** | 用户核对过 `activities/` 内容正确 | workspace 重命名为 `<id>.accepted-<ts>/`，标记终态，不再提示 |
+| **B. 回滚到迁移前** | 无（但逐文件 SHA 保护仍生效） | 走 §2.8，成功则 `rolledback`，遇冲突文件转 `conflict` 并隔离 |
+| **C. 放弃本次迁移** | 无 | workspace 重命名为 `<id>.abandoned-<ts>/`，标记终态。**目标文件保持现状** |
+| **D. 查看冲突明细** | 无 | 展示 `conflictDetail`，含文件列表、期望/实际哈希、源文件条数变化 |
+
+**操作 A 的安全性要求**：
+
+```
+用户选择「接受当前结果」前，UI 必须展示：
+  - 已替换的日期数量
+  - 冲突文件的列表与原因
+  - 源文件的当前状态（是否仍在、条数变化）
+必须二次确认。确认后：
+  - workspace 重命名为 .accepted-<ts>/（保留，不删）
+  - **不改动任何数据文件**
+```
+
+**操作 C 的注意事项**：
+
+> 放弃迁移**不会**把 `activities/` 恢复到迁移前。若用户想要恢复，必须选 B。
+> 这一点必须在 UI 上写清楚，避免用户误以为「放弃 = 还原」。
+
+**所有终态工作区一律保留**：
+
+- 命名规则：`<id>.<outcome>-<timestamp>/`
+- 内容：manifest、status、source.snapshot.jsonl、staging/、conflict-files/
+- **永不自动删除**。用户需要清理时手动删除，UI 只提供「打开目录」入口
+
+**日志**：每次状态转换追加到 `status.history[]`：
+
+```jsonc
+{ "at": "2026-11-12T01:40:00Z", "from": "replacing", "to": "conflict",
+  "reason": "pre-replace SHA mismatch", "detail": { "date": "2026-11-05" } }
+```
+
 
 ## 三、V0.10.2b — 导入安全与危险入口处理
 
@@ -824,109 +1215,265 @@ failed > 0（JSON 未写入）：
 
 用户明确「宁可保留，不允许误删」。无 `rid` 时任何内容去重都会误删（第二轮实测：4 条合法记录合并成 1 条）。**V0.10.2b 容忍重复，去重放 V0.10.3。**
 
-### 3.5 导入来源指纹（v3 重写：全字段而非白名单）
+### 3.6 导入任务持久化与安全续传（v4 新增，P1-01）
 
-> **v3 修正：v2 用「白名单字段」计算指纹有缺陷。** 白名单遗漏任何字段都会导致「两个不同的文件算出相同指纹」，从而被误判为「已导入过」而被拒绝。这是**静默丢数据**风险。
+> **v4 新增。** 整文件指纹只能回答「这份文件导过没有」，无法回答「导到第几条」。部分失败后重试会重复导入已成功的部分。
 >
-> 例：v2 的白名单没含 `note`、`cat`、`groupId`、`rid` 等字段。用户在两个文件里活动完全相同但备注不同，指纹相同 → 第二个文件被拒绝导入 → **备注永久丢失**。
+> 更关键的是：**「先写数据、再更新 progress」这个顺序本身就不可靠**——若数据写完、progress 未写就崩溃，重试仍然重复。
 
-**v3 定义：全字段参与，仅排除 volatile 字段**
+**代码核实前提**
+
+`main.js:1526-1544` 当前逻辑（逐条 `saveActivity` / `saveSummary`，无进度记录）：
 
 ```js
-// 明确排除的 volatile 字段（导入时会被重新赋值或本就不该影响指纹）
-const VOLATILE_KEYS = new Set([
-  'id',          // 读取时生成的数组下标 id，非持久
-  'editedAt',    // 编辑时间戳，不影响数据内容
-  'importedAt',  // 导入记录时间
-]);
-
-function computeFingerprint(importedJson) {
-  const parts = [];
-
-  // 活动：全字段，key 排序
-  for (const a of importedJson.activities || []) {
-    parts.push('A:' + canonicalFull(a));
+data.activities.forEach(a => {
+  if (a.timestamp && a.processName) {
+    storageManager.saveActivity(a);   // 返回值被丢弃
+    importedCount++;
   }
+});
+```
 
-  // 摘要：全字段，key 排序
-  for (const s of importedJson.summaries || []) {
-    parts.push('S:' + canonicalFull(s));
-  }
+`storageManager.saveActivity` 内部是「读整文件 → push → 全量重写」，**没有幂等键**。同一数组元素写两次就是两条记录。
 
-  // 摘要 Markdown：若备份包含，一并纳入
-  for (const m of importedJson.summariesMd || []) {
-    parts.push('M:' + canonicalFull(m));
+**设计：以「导入批次标记」实现可判定的续传**
+
+核心思路：**在数据落地时就带上可追溯的批次身份**，使「这条是否已导入」可以在重试时被判定，而不是依赖事后写的 progress 文件。
+
+**做法：为每条导入的记录附加 `imp` 标记**
+
+```
+imp = { batch: <fingerprint 前 16 位>, idx: <原数组下标> }
+```
+
+写入时落在记录的 `imp` 字段上（与 `rid` 同层，属于新增可选字段，旧数据无此字段不受影响）。
+
+**为什么这样能解决崩溃窗口**：
+
+| 崩溃时机 | 结果 | 重试时如何判定 |
+|---|---|---|
+| 写到第 500 条崩溃 | 前 500 条已落盘，`imp.idx` = 0..499 | 读目标文件，收集已有 `imp.batch === 本批次` 的 `idx`，从 500 继续 |
+| 数据写完、progress 未写 | 数据里有完整 `imp` 标记 | 靠数据本身判定，**不依赖 progress** |
+| progress 写了、数据未写完 | progress 声称完成但数据缺 | 以**数据实际内容**为准，progress 仅作提示 |
+
+**关键原则：progress.json 只是加速缓存，不是事实来源。事实来源是数据文件里的 `imp` 标记。**
+
+**导入任务文件**
+
+```jsonc
+// Data/.import-tasks/<fingerprint16>.json
+{
+  "fingerprint": "a3f9c1d2e8b74560",     // 来源文件内容指纹（全字段，见 §3.7）
+  "fingerprintVersion": 4,
+  "sourceName": "worklog_full_export_20261112.json",
+  "sourceSha256": "f0a1...",             // 原始文件字节哈希（仅用于展示/审计）
+  "createdAt": "2026-11-12T01:30:00Z",
+  "updatedAt": "2026-11-12T01:31:12Z",
+  "status": "in_progress",               // in_progress | completed | aborted
+  "counts": {
+    "activities": { "total": 1284, "done": 500, "failed": 2, "skipped": 3 },
+    "summaries":  { "total": 128,  "done": 128, "failed": 0, "skipped": 0,
+                    "mdFailed": 1 }
+  },
+  "doneIdx": {
+    "activities": [0,1,2,...499],        // 仅作缓存；重试时以数据中的 imp 为准
+    "summaries":  [0,1,...,127]
   }
+}
+```
+
+**续传流程**
+
+```
+导入开始
+ ├─ 计算 fingerprint（§3.7）
+ ├─ 读 Data/.import-tasks/<fp>.json
+ │
+ ├─ 若 status === 'completed'
+ │     → 提示「该文件已于 <updatedAt> 完整导入（N 条），是否强制重新导入？」
+ │     → 用户选「否」→ 结束
+ │     → 用户选「是」→ **新建批次**（batch = fp + '-' + newTaskId），
+ │                        形成独立的 imp.batch，与旧批次互不干扰
+ │
+ ├─ 若 status === 'in_progress'
+ │     → 提示「该文件上次导入未完成（已完成 X/Y），继续还是重新开始？」
+ │     → 继续：
+ │         batch = 该任务的 batch（**保持不变**，这样 imp 判定能接上）
+ │         扫描目标目录，收集 imp.batch === batch 的 idx 集合
+ │         跳过这些 idx，从剩余开始
+ │     → 重新开始：
+ │         batch = 新 taskId
+ │         注意：旧批次记录**不删除**（无法安全区分），会产生重复
+ │         必须明确警告：「重新开始会产生重复数据，建议先备份」
+ │
+ └─ 若不存在
+       → 新建任务，batch = fp 前 16 位
+```
+
+**逐条写入**
+
+```js
+for (let idx = 0; idx < list.length; idx++) {
+  if (doneIdxSet.has(idx)) { skipped++; continue; }   // 续传跳过
+
+  const rec = { ...list[idx], imp: { batch, idx } };  // 写入身份
+
+  const ok = storageManager.saveActivity(rec);
+  if (ok) { done++; doneIdxSet.add(idx); }
+  else    { failed++; }
+
+  // progress.json 每 N 条批量刷一次（不是每条），减少 IO
+  // 即使这里没刷成功，重试也能靠 imp 判定
+  if (done % 50 === 0) flushProgress();
+}
+flushProgress();   // 收尾刷一次
+```
+
+**边界说明（必须如实写出，不得夸大）**
+
+> ⚠️ **本方案不承诺严格 exactly-once。** 明确的边界：
+>
+> | 场景 | 是否会重复 | 说明 |
+> |---|---|---|
+> | 崩溃后点「继续」 | **不会** | 靠 `imp.batch + idx` 判定已写入的记录 |
+> | 崩溃后点「重新开始」 | **会** | 新批次无法与旧批次匹配，无法安全去重；已明确警告 |
+> | `saveActivity` 返回 true 但实际未落盘（如 fs 缓存问题） | 可能 | 极端情况，依赖 atomicFile 的写入语义 |
+> | 用户在导入过程中手工删除部分记录 | 可能 | 无法区分「已删」与「未导入」，宁可重导 |
+>
+> **为什么不用内容去重**：同一文件内部的合法重复必须保留（D-03 第 7 条）。内容去重会把「两条相同记录」误判为「一条重复」，直接违反要求 1。
+>
+> **本方案满足的 6 条要求**：① 文件内合法重复全部保留（`imp.idx` 不同即不同记录）；② 部分成功可安全续传；③ 不用内容相同作去重依据；④ 不丢用户原始字段（`imp` 是附加字段，原字段原样保留）；⑤ 强制重导产生新批次；⑥ 摘要半成功有明确规则（§3.4 + 下方）。
+
+**摘要 JSON/Markdown 半成功的续传规则**
+
+| 情况 | 处理 |
+|---|---|
+| JSON 成功、MD 失败 | JSON 记 `done`，MD 记 `mdFailed`；重试时**不重写 JSON**，只补 MD |
+| JSON 失败 | 记 `failed`，重试时重写该条 |
+| 续传时检测到某条 `imp` 存在但 MD 缺失 | 走「重建 Markdown」路径（§3.4 规则 2），不重写 JSON |
+
+**保留用户原始字段**
+
+`imp` 是唯一的附加字段，命名带前缀避免冲突。原始记录的所有字段**原样写入**，不做任何裁剪或重排。导出时 `imp` 会一并导出（属正常字段，可用于跨设备续传识别）。
+
+### 3.7 指纹算法的 volatile 字段定义（v4 修正，P1-02）
+
+> **v4 修正 v3 的两处问题：**
+>
+> 1. v3 全局排除 `id` —— 但**嵌套对象里也可能有合法的 `id`**（例如摘要的 `slots[].id`），全局排除会把这些合法内容从指纹中抹掉，导致不同文件算出相同指纹。
+> 2. v3 把 `summariesMd` 纳入指纹，但**核实生产代码：`import-data` 只处理 `activities` 和 `summaries`，从不导入 Markdown**（`main.js:1526-1544`）。把未实际导入的内容纳入指纹是错的。
+
+**代码核实：导出结构 vs 导入实际处理**
+
+| 导出字段（`main.js` `export-full-data`） | 是否被 `import-data` 导入 | 是否纳入指纹 |
+|---|---|---|
+| `version` | 否（元信息） | 否 |
+| `exportDate` | 否（元信息，每次导出都变） | 否 |
+| `activities` | **是** | **是** |
+| `summaries` | **是** | **是** |
+| `arhatSessions` | **否** | 否（未导入，纳入会造成误判） |
+| `arhatNotes` | **否** | 否 |
+| `config` | **否** | 否 |
+| `summariesMd` | **不存在此字段** | **不纳入** |
+
+**结论**：指纹**只覆盖 `activities` 与 `summaries`**，与「实际导入什么」严格对齐。`summariesMd` 是派生数据，由 `saveSummary` 内部生成，不作为导入源，也不进指纹。
+
+**volatile 字段：按对象类型 + 字段路径定义**
+
+```js
+// 只有经过代码核实的临时字段才排除。每条都要写清来源。
+const VOLATILE_BY_TYPE = {
+  // 活动记录（activities[]）
+  activity: new Set([
+    'id',        // storageManager._fromSegment 生成：`${t}#${index}`，读取时算，非持久
+    'editedAt',  // updateDisplayRecord 写入的时间戳，属操作元数据
+  ]),
+
+  // 摘要记录（summaries[]）
+  summary: new Set([
+    'id',        // deleteSummary 匹配用，由调用方生成
+    'generatedAt', // 若存在，为生成时间元数据
+  ]),
+};
+
+// 嵌套对象**不做任何排除** —— 嵌套里的 id 是数据内容，必须参与指纹
+```
+
+**为什么 `imp` 不排除**：它是本方案引入的导入身份，**属于数据内容的一部分**，会影响指纹（不同批次的同一文件应算出不同指纹？——不，指纹算的是**源文件内容**，`imp` 是写入时附加的，不在源文件里，所以不会进入指纹。这点需在实现时确认：**指纹只对源文件的原始内容计算，不算附加字段**）。
+
+**修正后的算法**
+
+```js
+const FINGERPRINT_VERSION = 4;
+
+/**
+ * 计算导入来源指纹。
+ * 只覆盖 import-data 实际导入的字段（activities / summaries）。
+ * 对每条记录，仅排除该类型已核实的 volatile 字段；
+ * 嵌套对象与数组一律全量参与。
+ */
+function computeFingerprint(sourceJson) {
+  const parts = [`v${FINGERPRINT_VERSION}`];
+
+  for (const a of sourceJson.activities || []) {
+    parts.push('A:' + canonicalByType(a, VOLATILE_BY_TYPE.activity));
+  }
+  for (const s of sourceJson.summaries || []) {
+    parts.push('S:' + canonicalByType(s, VOLATILE_BY_TYPE.summary));
+  }
+  // arhatSessions / arhatNotes / config / summariesMd 不参与（未被导入）
 
   return sha256(parts.join('\n'));
 }
 
 /**
- * 全字段规范化：
- * - 递归处理嵌套对象与数组
- * - 对象 key 按字典序排序（保证 {a:1,b:2} 与 {b:2,a:1} 指纹相同）
- * - 数组**保持原顺序**（不排序）
- * - 数组**不去重**（保留合法重复）
- * - undefined 统一记为 null
+ * 只对顶层 key 做 volatile 过滤；嵌套层级全量参与。
+ * 对象 key 字典序排序；数组保持顺序与重复。
  */
-function canonicalFull(value) {
+function canonicalByType(value, volatileKeys) {
+  return canon(value, volatileKeys, 0);
+}
+
+function canon(value, volatileKeys, depth) {
   if (value === null || value === undefined) return 'null';
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'string') return JSON.stringify(value);
 
   if (Array.isArray(value)) {
-    // 顺序与重复都保留
-    return '[' + value.map(canonicalFull).join(',') + ']';
+    // 顺序与重复均保留
+    return '[' + value.map(v => canon(v, null, depth + 1)).join(',') + ']';
   }
 
   if (typeof value === 'object') {
-    const keys = Object.keys(value)
-      .filter(k => !VOLATILE_KEYS.has(k))
-      .sort();                                  // 字典序，保证稳定
-    return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalFull(value[k])).join(',') + '}';
+    const skip = depth === 0 && volatileKeys ? volatileKeys : null;  // 只在顶层过滤
+    const keys = Object.keys(value).filter(k => !skip || !skip.has(k)).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + canon(value[k], null, depth + 1)).join(',') + '}';
   }
 
   return 'null';
 }
 ```
 
-**关键设计点（v3）**：
+**关键设计点**
 
 | 要求 | 落实 |
 |---|---|
-| **不能遗漏字段** | **全字段参与**，改用「排除 volatile」而非「包含白名单」——新增字段自动纳入，不会漏 |
-| key 规范化排序 | 对象 key 按字典序排序，嵌套对象递归处理 |
-| 数组顺序保留 | `canonicalFull` 对数组**不排序**，按原顺序 |
-| 合法重复保留 | 数组**不去重** |
-| 摘要 Markdown 纳入 | `M:` 前缀，覆盖 `summaries_md/` 内容 |
-| 稳定跨运行 | 排除 `id`、`editedAt`、`importedAt` 三个 volatile 键 |
+| 按类型定义 volatile | `VOLATILE_BY_TYPE.activity` / `.summary` 分开定义，各自写明来源 |
+| 只有核实过的才排除 | 每个键都有注释说明「由哪个方法写入、为何非持久」 |
+| 嵌套合法 ID 不得误删 | `canon` 只在 `depth === 0` 应用 volatile 集合，嵌套层级传 `null` |
+| 全字段参与原则不变 | 除上述已核实字段外，顶层与嵌套全部参与 |
+| 与实际导入对齐 | 只算 `activities` / `summaries`，不算 `arhat*` / `config` / `summariesMd` |
+| 保留顺序与重复 | 数组不排序、不去重 |
 
-**指纹算法版本标记**：
+**版本不匹配的处理**：`fingerprintVersion !== 4` 时不判定「已导入」，仅提示「该文件可能曾以旧算法导入过，无法确认」——宁可让用户多导一次，也不能错误拒绝。
 
-```js
-const FINGERPRINT_VERSION = 3;   // 算法变更时必须 +1
-```
 
-`.import-history.json` 里每条记录都存 `fingerprintVersion`。查询时：
-- 同版本 → 直接比对
-- 不同版本 → **不判定为「已导入」**，仅提示「该文件可能曾以旧版本算法导入过，无法确认」
-
-这样算法演进不会导致误判。**宁可让用户多导一次，也不能错误拒绝。**
-
-**指纹用途**：
-
-| 用途 | 做法 |
-|---|---|
-| 识别「这份文件导入过」 | 比对 `Data/.import-history.json` |
-| 防重复导入 | 命中则提示「该文件已于 X 导入过，共 N 条」，**默认不导入**，允许强制 |
-| 不逐条去重 | 指纹是整文件粒度，同一文件内部重复完整保留 |
-
-### 3.6 `clearActivities` 处置
+### 3.8 `clearActivities` 处置
 
 保留方法（规范第 9 条），但移除唯一生产调用，加「生产禁用」注释，并新增测试断言生产代码无非定义调用。
 
-### 3.7 「切换数据目录」≠「导入备份」（回应 D-01 第 5 条）
+### 3.9 「切换数据目录」≠「导入备份」（回应 D-01 第 5 条）
 
 | 维度 | 切换数据目录 | 导入备份 |
 |---|---|---|
@@ -935,7 +1482,7 @@ const FINGERPRINT_VERSION = 3;   // 算法变更时必须 +1
 | 是否删数据 | 否 | 是（需六重保护） |
 | 适用 | 换机（把旧目录拷到新机指向它） | 恢复到某个历史状态 |
 
-### 3.8 文件范围
+### 3.10 文件范围
 
 | 文件 | 改动 |
 |---|---|
@@ -948,7 +1495,7 @@ const FINGERPRINT_VERSION = 3;   // 算法变更时必须 +1
 | 新增 `tests/importSafety.test.cjs` | 不清空、三目录快照、逐条统计 |
 | 新增 `tests/importFingerprint.test.cjs` | 指纹含摘要、保留顺序、保留重复 |
 
-### 3.9 验收标准
+### 3.11 验收标准
 
 1. 合并导入后，`activities/`、`summaries/`、`summaries_md/` 三处快照完整，计数与导入前一致
 2. 模拟某条 `saveActivity` 返回 false → 返回结果里 `failed` 计数正确，UI 如实展示
@@ -1131,55 +1678,76 @@ V0.10.2b 导入安全 ──────────────┘
 
 ## 七、测试矩阵汇总
 
-> **v3 修正计数错误。** v2 声称「25 项」，实际汇总表只有 24 行；v3 补充 F5a 与迁移期写入保护相关用例后共 **37 项**。
+> **v4 修正三处统计问题：**
+> 1. v3 写「37 项」，但当时遗漏了 T-M13~T-M20（8 项）——v3 正文只列到 T-M12。
+> 2. v3 把「F1-F9 + F5a」当作「10 个中断点」，实际漏了 F4a，且区间写法易错。
+> 3. v3 摘要侧没有对应 F4a 的 S4a、对应 F5a 的 S5a。
+>
+> **本表口径**：一行 = 一个测试条目。中断点单独统计在 §2.10。
 
 | ID | 版本 | 场景 | 断言 |
 |---|---|---|---|
-| **迁移 · 故障注入** | | | |
-| T-M01 | 2a | F1-F9 **+ F5a** 活动迁移故障注入 | 10 个中断点各恢复正确 |
-| T-M02 | 2a | S1-S9 摘要迁移故障注入 | 9 个中断点各恢复正确 |
-| T-M03 | 2a | **活动记录数守恒（修正公式）** | 迁移后 == **迁移前目标已有 + 活动源条数** |
-| T-M04 | 2a | **摘要记录数守恒（修正公式）** | 迁移后 == **迁移前目标已有 + 摘要源条数** |
-| T-M05 | 2a | 跨卷 workspace（**rename 探测**） | 实测探测捕获 EXDEV，拒绝迁移 |
-| T-M06 | 2a | 源文件迁移中变化 | 停止不新建 workspace |
-| T-M07 | 2a | 回滚 | 各日期逐条一致，**迁移期间新日期不受影响** |
-| T-M08 | 2a | 自定义数据目录 | 源默认目录→目标自定义目录成功 |
-| T-M09 | 2a | 迁移中调用 `add-manual-record` | 返回 `MIGRATION_IN_PROGRESS`，不写入 |
-| T-M10 | 2a | 迁移中 `activityRecorder.flush()` | 片段留缓冲，迁移后正确落盘，**不丢失** |
-| T-M11 | 2a | 替换前目标文件被外部修改 | 停止替换，`activities/` 保持准备后状态 |
-| T-M12 | 2a | 迁移期新增次日文件后回滚 | 该文件**仍存在且内容不变** |
-| **导入 · 安全与指纹** | | | |
-| T-I01 | 2b | 导入不清空原始记录 | 导入前后记录数增加而非归零 |
-| T-I02 | 2b | 三目录快照完整 | 快照计数 == 导入前计数 |
-| T-I03 | 2b | 逐条写入统计 | `succeeded/failed/skipped` 计数准确 |
-| T-I04 | 2b | 无 clearActivities 生产调用 | 静态检查 |
-| T-I05 | 2b | **指纹含摘要与全字段** | 只改任一字段（含 `note`、`cat`）则指纹变 |
-| T-I06 | 2b | 指纹保留顺序与重复 | 两条相同记录指纹稳定，**不排序不去重** |
-| T-I07 | 2b | 重复导入提示 | 第二次默认不执行 |
-| T-I08 | 2b | **摘要 MD 写入失败** | JSON 成功计数正确，`mdFailed` 正确，指纹仍登记 |
-| T-I09 | 2b | 摘要全部成功 | `mdFailed === 0`，不提示 |
-| T-I10 | 2b | **重建 Markdown** | 从 JSON 生成，**不新增 JSON 记录** |
-| T-I11 | 2b | MD 失败后重复导入同文件 | 指纹命中，不产生重复 JSON |
-| T-I12 | 2b | **指纹版本不匹配** | 不判定为已导入，仅提示无法确认 |
-| **记录标识** | | | |
-| T-R01 | 2.3 | rid 生成/落盘/重启不变 | — |
-| T-R02 | 2.3 | 5 种去重组合 | 无 rid 一律保留 |
-| T-R03 | 2.3 | 只补被编辑那条 | 其他记录逐字节不变 |
-| T-R04 | 2.3 | 严格副本正则 | `-backup`/`.old` 不读 |
-| **D-02 吸附规则** | | | |
+| **迁移 · 故障注入（活动 F 系列 11 点）** | | | |
+| T-M01 | 2a | F 系列全部 11 个中断点 | 每个中断点恢复后状态与「一次成功」等价 |
+| **迁移 · 故障注入（摘要 S 系列 11 点）** | | | |
+| T-M02 | 2a | S 系列全部 11 个中断点 | 同 T-M01，摘要侧独立验证 |
+| **迁移 · 守恒与前置检查** | | | |
+| T-M03 | 2a | 活动记录数守恒（修正公式） | 迁移后 == **`sum(preReplaceRecordCount) + 活动源条数`** |
+| T-M04 | 2a | 摘要记录数守恒（修正公式） | 迁移后 == **`sum(preReplaceRecordCount) + 摘要源条数`** |
+| T-M05 | 2a | 跨卷检测（**实测 rename 探测**） | 捕获 `EXDEV`，拒绝迁移，错误信息明确 |
+| T-M06 | 2a | 源文件在迁移前阶段变化 | 非终态 workspace 时停止并标记 `conflict` |
+| T-M07 | 2a | 回滚（逐文件 SHA 保护） | 各日期逐条一致；**迁移期间新日期不受影响** |
+| T-M08 | 2a | 自定义数据目录 | 源在默认目录、目标在自定义目录，迁移成功 |
+| **迁移 · 写入锁（P0-04）** | | | |
+| T-M09 | 2a | 迁移中 IPC `add-manual-record` | 返回 `MIGRATION_IN_PROGRESS`，磁盘无变化 |
+| T-M10 | 2a | 迁移中 `flush()` 定时器触发 | 片段留缓冲，迁移后落盘，**不丢失、不截断** |
+| T-M11 | 2a | 替换前外部修改目标文件 | 停止替换，标记 `conflict`，说明冲突文件 |
+| T-M12 | 2a | 迁移期新增「次日」文件后回滚 | 该文件**存在且内容不变** |
+| **T-M13** | **2a** | **回滚完成后重启软件** | **状态 `rolledback` 为终态，不再次自动迁移，记录数不变** |
+| **T-M14** | **2a** | **迁移后目标文件被外部修改，再回滚** | **不覆盖；冲突文件复制到 `conflict-files/`；原文件保持原样** |
+| **T-M15** | **2a** | **`finishing` 阶段源文件变化** | **不改名、不删源文件；标记 `conflict`；目标保持已替换状态** |
+| **T-M16** | **2a** | **直接调 `appendActivityRecords()`（绕过 IPC）** | **抛 `MIGRATION_IN_PROGRESS`，磁盘无变化** |
+| **T-M17** | **2a** | **直接调 `saveActivity()`（绕过 IPC）** | **抛错，磁盘无变化** |
+| **T-M18** | **2a** | **其余写方法全量（delete/update/replace/recategorize/clear/saveSummary/deleteSummary/migrateDataTo/setDataDir）** | **全部阻塞；`saveScreenshot` 不阻塞（目标不重叠）** |
+| **T-M19** | **2a** | **迁移结束（成功/失败/冲突/回滚）后** | **锁已释放，`isLocked() === false`，所有写入恢复** |
+| **T-M20** | **2a** | **迁移期间录制 3 段** | **3 段全部保留并落盘，一条不丢** |
+| **导入 · 安全与快照** | | | |
+| T-I01 | 2b | 导入不清空原始记录 | 记录数增加而非归零 |
+| T-I02 | 2b | 三目录快照完整 | `activities`/`summaries`/`summaries_md` 计数 == 导入前 |
+| T-I03 | 2b | 逐条写入统计 | `succeeded`/`failed`/`skipped` 计数准确 |
+| T-I04 | 2b | 无 `clearActivities` 生产调用 | 静态检查通过 |
+| **导入 · 指纹（P1-02）** | | | |
+| **T-I05** | **2b** | **指纹覆盖 `activities` + `summaries` 全部字段** | **改任一非 volatile 字段（含 `note`/`cat`/嵌套 `slots[].id`）指纹必变** |
+| **T-I06** | **2b** | **指纹保留数组顺序与合法重复** | **两条相同记录参与指纹两次；顺序调换则指纹改变** |
+| **T-I07** | **2b** | **`arhat*` / `config` / `summariesMd` 不参与指纹** | **仅修改这些字段时指纹不变** |
+| **T-I08** | **2b** | **fingerprintVersion 不匹配** | **不判定为已导入，仅提示无法确认** |
+| **导入 · 续传（P1-01）** | | | |
+| **T-I09** | **2b** | **写到第 N 条崩溃后点「继续」** | **靠 `imp.batch+idx` 判定，不重复导入前 N 条** |
+| **T-I10** | **2b** | **数据写完、progress 未写就崩溃** | **重试以数据中 `imp` 为准，不重复** |
+| **T-I11** | **2b** | **文件内两条完全相同的记录** | **`imp.idx` 不同，两条都导入，不合并** |
+| **T-I12** | **2b** | **强制重新导入已完成文件** | **生成新 `batch`，与旧批次独立；明确警告可能重复** |
+| **T-I13** | **2b** | **摘要 JSON 成功、MD 失败后续传** | **不重写 JSON，仅补 MD** |
+| **T-I14** | **2b** | **原始字段完整性** | **除新增 `imp` 外，所有原字段逐字节保留** |
+| **记录标识（2.3）** | | | |
+| T-R01 | 2.3 | `rid` 生成/落盘/重启不变 | 重启后 `rid` 一致 |
+| T-R02 | 2.3 | 5 种去重组合 | 无 `rid` 一律保留 |
+| T-R03 | 2.3 | 只补被编辑那条 | 同文件其他记录逐字节不变 |
+| T-R04 | 2.3 | 严格副本正则 | `-backup`/`.old`/`-080` 不读 |
+| **D-02 吸附规则（2.4）** | | | |
 | T-D02-01 | 2.4 | `09:07—10:42` | 105 分钟 |
-| T-D02-02 | 2.4 | `09:00 + 22min` | 15 分钟（**并提示失真**） |
+| T-D02-02 | 2.4 | `09:00 + 22min` | 15 分钟（**UI 必须提示失真**） |
 | T-D02-03 | 2.4 | `09:07 + 3min` | **拒绝**（原始时长 < 15） |
-| T-D02-04 | 2.4 | `23:45 + 15min` | 次日 00:00，15 分钟（终点合法跨日） |
+| T-D02-04 | 2.4 | `23:45 + 15min` | 次日 00:00 终点，15 分钟 |
 | T-D02-05 | 2.4 | `23:50 + 30min` | 30 分钟，正确拆分 |
-| T-D02-06 | 2.4 | 与自动记录重叠 | 允许，记录层逐字节不变 |
+| T-D02-06 | 2.4 | 与自动记录重叠 | 允许，**记录层逐字节不变** |
 | T-D02-07 | 2.4 | 与人工记录重叠 | 阻断 |
-| T-D02-08 | 2.4 | **前后端一致性（原始值接口）** | 同一原始输入，预览与保存的吸附结果逐字段相等 |
-| **T-D02-09** | **2.4** | **起点吸附跨日边界** | `23:45`/`23:52` 正常；**`23:53`/`23:59` 拒绝**，提示会改变日期 |
+| T-D02-08 | 2.4 | 前后端一致性（**原始值接口**） | 同一原始输入，预览与保存结果逐字段相等 |
+| T-D02-09 | 2.4 | 起点吸附跨日 | `23:45`/`23:52` 正常；**`23:53`/`23:59` 拒绝** |
 
-**总计：37 项**（迁移 12 + 导入 12 + 记录标识 4 + 吸附规则 9）
+**条目统计**：迁移 20（T-M01~T-M20）+ 导入 14（T-I01~T-I14）+ 记录标识 4 + 吸附 9 = **47 个测试条目**
 
----
+**中断点统计**（与条目数不同口径）：活动 11 + 摘要 11 = **22 个故障注入点**
+
 
 ## 八、全局验收基线
 
@@ -1199,19 +1767,36 @@ V0.10.2b 导入安全 ──────────────┘
 
 | 要求 | 执行情况 |
 |---|---|
-| 更新三份文档 | ✅ 计划、第一轮、第二轮 |
-| 逐项核对版本号/决策编号/测试矩阵/验收标准 | ✅ 见 §十 自检 |
-| 只改文档，不改生产代码和测试代码 | ✅ `git diff -- electron/ src/ tests/` 为空 |
-| 提交并推送后停止 | ✅ |
+| 先核实分支与提交 | ✅ `worklog-1.0-dev` @ `aecf04a`，工作区干净，与远程一致 |
+| 重读三份文档与相关生产代码 | ✅ 核实了 13 个写方法、导出/导入字段差异、planManager/arhat/focus 写入目标 |
+| 只改三份文档 | ✅ `git diff -- electron/ src/ tests/` 为空 |
+| 不操作真实数据 | ✅ 全部用 `os.tmpdir()` 临时目录验证 |
+| 不宣称未经验证的设计已通过 | ✅ 所有新增设计标注为「待实现」，测试均为「待编写」 |
+| 审查意见与实际代码不符时以代码为准 | ✅ 详见下方 |
+
+### 与实际代码核对后修正的审查意见
+
+| 审查意见 | 核对结果 |
+|---|---|
+| 「导出字段包括 `activities、summaries、arhatSessions、arhatNotes、config`」 | **正确**。另含 `version`、`exportDate`。核实位置 `main.js` `export-full-data` |
+| 「方案引入了 `summariesMd`，需明确是否属于独立导入数据」 | **审查正确，我的方案有误**。`import-data` 只处理 `activities` 和 `summaries`，**从不导入 Markdown**，也没有 `summariesMd` 这个导出字段。已在 §3.7 移除 |
+| 「§2.13 只列出了部分写入入口」 | **正确**。实际有 13 个写方法，v3 只列了 7 个 IPC 入口，漏了 `deleteActivity`/`deleteSummary`/`saveScreenshot`/`clearActivities`/`migrateDataTo`/`setDataDir` 等 |
+| 「计划转实际记录也必须受保护」 | **正确**。`convert-plan-to-fact`（`main.js:984`）经 `planManager.markActual`，需阻塞以避免计划/事实不一致 |
+| 「§2.9 仍有 F1-F8 旧表述」 | **正确**。722-723 行仍写 F1-F8，已改 |
+| 「两个 3.5」 | **正确**。823 行与 827 行重复，已重编号为 3.1-3.11 |
 
 ### 自检结果
 
 | 检查项 | 结果 |
 |---|---|
-| 版本号一致性 | V0.10.2a / V0.10.2b / V0.10.3 / V0.10.4 四**个版本**，三**份文档**表述一致 |
-| 决策编号 | D-01~D-04 三份文档均出现且语义一致 |
-| 测试矩阵 | **37 项**（迁移 12 + 导入 12 + 记录标识 4 + 吸附规则 9），覆盖两套迁移、并发写保护、导入半成功、rid、D-02 |
-| 故障注入 | F1-F9 + **F5a**（活动）、S1-S9（摘要），共 19 个中断点 |
-| 验收标准 | 每个版本均有独立验收标准，含修正后的守恒公式 |
-| 历史风险与回滚 | §2.12 保护 6 层、§2.8 回滚按 manifest 恢复 |
-| 旧方案作废标记 | `importBatchId`、`文件名+行号稳定指纹`、`待决策 D-02`、`V0.10.2 单一版本` 四处均已标注作废 |
+| D-01~D-04 一致性 | ✅ 三份文档均含且语义一致 |
+| 版本顺序一致性 | ✅ V0.10.2a → 2b → 3 → 4，三份文档一致 |
+| 旧方案作废标记 | ✅ `importBatchId`、`文件名+行号稳定指纹`、`待决策 D-02`、`V0.10.2 单一版本` 四处均已标删除线并说明 |
+| 重复章节编号 | ✅ 无（`grep -oE "^### [0-9]+\.[0-9]+" \| sort \| uniq -d` 为空） |
+| 过时 F1-F8 表述 | ✅ 已全部改为「F 系列 11 点 / S 系列 11 点」显式表述 |
+| 新测试是否进矩阵与验收 | ✅ T-M13~T-M20、T-I05~T-I14 均在 §七 与各版本验收标准中出现 |
+| 是否有「已实现」的虚假宣称 | ✅ 无。所有设计标为「待实现」，测试标为「待编写」 |
+| 测试条目数 | **47**（迁移 20 + 导入 14 + 记录标识 4 + 吸附 9） |
+| 故障注入点 | **22**（活动 F 系列 11 + 摘要 S 系列 11） |
+
+> **口径提醒**：47 是「测试条目数」，22 是「故障注入点数」。两者不可混用——T-M01 这一个条目覆盖 11 个注入点。
