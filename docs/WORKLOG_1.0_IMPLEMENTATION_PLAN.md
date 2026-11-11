@@ -1,298 +1,550 @@
-# WorkLog 1.0 实施计划（V0.10.2a → V0.10.3）
+# WorkLog 1.0 实施计划（V0.10.2a → V0.10.4）
 
-> 依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md`（已通过审查）+ 2026-11-12 四项产品决策
+> 依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md`（已通过审查）+ 2026-11-12 四项产品决策 + 同日晚间七项修订意见
 > 分支：`worklog-1.0-dev`
-> 状态：**计划文档。本轮不修改任何生产代码。**
-> 编写日期：2026-11-12
+> 状态：**计划文档（第 2 版，已吸收七项修订）。本轮不修改任何生产代码和测试代码。**
+> 最后更新：2026-11-12 00:55
 
 ---
 
-## 零、本次决策确认与影响
+## 修订记录
 
-| 决策 | 结论 | 对计划的影响 |
+| 版本 | 变更 |
+|---|---|
+| v1 | 初版，落实 D-01~D-04 |
+| **v2** | 吸收七项审查意见：①摘要迁移纳入保护 ②修复迁移崩溃窗口 + F4a + 回滚修正 ③D-02 短时段改为拒绝 + 跨午夜判定 ④重叠处理细化 ⑤RID 补齐限制 ⑥导入快照扩到 summaries ⑦来源指纹覆盖全部有效数据 |
+
+### v2 相对 v1 的实质性更正
+
+| # | v1 的问题 | v2 更正 |
 |---|---|---|
-| **D-01** | 取消危险的覆盖导入；保留合并导入；普通导入不得清空原始记录；恢复备份单独立项 | V0.10.2b 范围缩小为「删除危险入口 + 加固合并导入」，**不做**恢复功能 |
-| **D-02** | 起止时间分别**就近**吸附，时长=吸附后结束−开始，不再单独取整；最短 15 分钟；重叠要提示不得静默覆盖 | V0.10.4 的算法从「起始向下/时长就近」改为**纯就近**，需新增重叠检测 |
-| **D-03** | 新记录生成 UUID `rid` 并落盘；不批量改写历史；旧数据文件名+行号**仅作兼容定位，不宣称永久稳定**；只有确认同一数据副本才去重 | 新增 **V0.10.3**；`importBatchId` 方案**作废**，改用「导入来源指纹」 |
-| **D-04** | 拆成 V0.10.2a（迁移幂等）与 V0.10.2b（导入安全），独立提交/测试/验收 | 迁移方案必须可恢复，不能只靠状态文件 |
-
-### 对第二轮报告的两处自我更正
-
-**更正 1：`importBatchId` 方案不成立。**
-第二轮报告 P0-03 建议「导入引入 `importBatchId`，同批次内去重」。用户指出：每次重新导入都生成新 ID，**无法阻止用户重复导入同一个文件**。这个批评完全正确。正确方案是「导入来源指纹」，见 V0.10.3。
-
-**更正 2：旧记录「文件名+行号」不能称作稳定身份。**
-第二轮报告把它写成「稳定指纹」，措辞过强。行号在文件被任何一次重写后都会变（`replaceDisplayRanges` 会整文件重写）。正确定位是：**仅用于同一次读取过程中的兼容定位**，不是持久身份。
+| 1 | 迁移只保护 `activities.json` | `activities.json` 与 `summaries.json` **两套独立**迁移保护 |
+| 2 | 先 rename 后写 status，存在崩溃窗口 | manifest 记录**预期 SHA256**，恢复时比对比对判定 |
+| 3 | `duration <= 0` 一律 +24h | **区分跨午夜与短时段**，不做统一加 24 小时 |
+| 4 | 短时段自动提升到 15 分钟 | **改选 B：拒绝保存**，用**原始时长**判定（不是吸附后） |
+| 5 | 声称「完全消除时长失真」 | **作废该说法**。09:00+22min 仍存为 15 分钟，必须告知用户 |
+| 6 | 重叠处理含糊 | 自动记录可覆盖（写展示层）、人工记录阻断、记录层永久只读 |
+| 7 | 回滚「删掉 activities/*.json」 | **错误**。必须恢复迁移前快照，不得误删迁移期间新数据 |
+| 8 | 导入快照只覆盖 activities | 覆盖 `activities/`、`summaries/`、`summaries_md/` |
+| 9 | 指纹只算部分字段 | 覆盖**活动+摘要全部有效数据**，规范化 JSON 保留顺序与合法重复 |
 
 ---
 
-## 一、D-02 规则精确化（写下来防止实现走偏）
+## 零、决策确认与 v2 影响
 
-### 1.1 算法定义
-
-```
-step = 15 分钟
-
-snapStart(hhmm):
-    minutes = hh*60 + mm
-    snapped = round(minutes / 15) * 15      // 就近，不是 floor
-    return snapped                          // 可能进位到下一小时，甚至次日 00:00
-
-snapEnd(hhmm):
-    同 snapStart
-
-duration = snappedEnd - snappedStart
-if duration <= 0: duration += 24*60         // 跨日
-if duration < 15: 拒绝或提升到 15            // 待实现时确认，见 1.4
-```
-
-**关键点：时长由吸附后的两端相减得出，不再对时长单独 `Math.round`。**
-
-### 1.2 用户给的样例必须通过
-
-| 输入 | 吸附后 | 时长 |
+| 决策 | 结论 | v2 落实要点 |
 |---|---|---|
-| 09:07 — 10:42 | 09:00 — 10:45 | **105 分钟** |
+| **D-01** | 取消危险覆盖导入；保留合并导入；普通导入不得清空原始记录；恢复备份单独立项 | 快照扩至三个目录；不做恢复功能 |
+| **D-02** | 起止**分别就近**吸附；时长=吸附后结束−开始；**不再单独取整**；最短 15 分钟（**选 B 拒绝**）；重叠需提示 | 判定用原始时长；跨午夜单独处理；前端预览与后端共用同一模块 |
+| **D-03** | 新记录 UUID；不批量改写历史；旧数据仅兼容定位；只有确认同一副本才去重 | Q3 选 A 但**限定**：只给实际编辑的那一条补 RID |
+| **D-04** | 拆 V0.10.2a（迁移幂等）+ V0.10.2b（导入安全）；迁移必须可恢复 | 双迁移独立 manifest；SHA256 恢复判定；F4a |
 
-用算法验算：`round(547/15)*15 = round(36.47)*15 = 36*15 = 540` → 09:00 ✓
-`round(642/15)*15 = round(42.8)*15 = 43*15 = 645` → 10:45 ✓
-`645 - 540 = 105` ✓
+### Q1/Q2/Q3 的最终答案
 
-### 1.3 与旧算法的差异（这是行为变更，必须记录）
-
-| 输入 | 旧行为（main.js:1150/1154） | 新行为（D-02） |
+| 问题 | 用户决定 | 落实位置 |
 |---|---|---|
-| 09:07 — 09:22 | 09:00 起，15 分 | 09:00 起，30 分（结束 09:22→09:15? 见下） |
-| 09:14 起 15 分 | **09:00**（floor 前移 14 分） | **09:15**（就近） |
-| 09:00 起 22 分 | 09:00，**15 分**（round 少记 7 分） | 09:00—09:22→09:15，**15 分** |
-
-注意第二行：`09:14` 就近吸附是 **09:15**（`round(14/15)=round(0.93)=1`），不是 09:00。这是对用户最直接的改善。
-
-> **待确认的实现细节（1.4）**：当 `snapEnd <= snapStart` 且原本是同一天内的短记录时，如何处理。例如 `09:07—09:10`：两端都吸附为 09:00，时长为 0。用户要求「最短 15 分钟」，所以应提升结束到 09:15。但这条**必须在实现前写进验收用例**，不能靠实现时临场决定。
-
-### 1.4 跨日样例
-
-| 输入 | 吸附后 | 时长 |
-|---|---|---|
-| 23:52 — 00:08（次日） | 23:45 — 00:15（次日） | 30 分钟 |
-| 23:50 — 23:59 | 23:45 — 00:00（次日） | 15 分钟 |
-
-第二行要特别注意：`23:59` 就近吸附是 `round(1439/15)*15 = 96*15 = 1440` = **24:00**，即次日 00:00。实现时必须能正确处理这种“吸附后跨日”的情况，而不是把它当成错误。
-
-### 1.5 重叠处理（D-02 第 7 条）
-
-用户要求：**发生与其他记录重叠时，提示用户处理，不允许静默覆盖。**
-
-这需要一个新能力：写入前检测。范围限定为人工记录之间，以及人工记录与自动记录之间。
-
-```
-检测范围：同一 dateStr 下所有记录（记录层 + 展示层）
-检测方式：区间相交 [start, end) 与已有记录 [s, e) 求交
-处理：返回 { overlap: [{t, dur, app, title, source}] }
-      UI 弹出「该时段与已有记录重叠」并列出冲突项
-      用户可选择：调整时间 / 保留（仅对展示层）/ 取消
-```
-
-**注意**：与自动记录重叠是**正常情况**（补记本来就是为了覆盖自动记录的误判）。所以不能一律拒绝，要让用户明确选择。这一点的产品语义需要在实现时与用户确认一次。
+| **Q1** 极短时间 | **选 B：拒绝保存**，提示用户调整。禁止把 3 分钟变成 15 分钟工时 | §2.6 |
+| **Q2** 重叠语义 | 自动记录重叠：**提示但允许**（写展示层）；人工记录重叠：**阻断**；记录层永不修改 | §2.7 |
+| **Q3** RID 补齐 | **选 A 但限定**：只给实际编辑的那条补，同文件其他记录不补，不改变任何历史字段 | §4.6 |
 
 ---
 
-## 二、V0.10.2a — 历史数据迁移幂等性
+## 一、D-02 算法精确定义（v2 重写）
 
-### 2.1 问题回顾
+### 1.1 输入形式与结束时间推导
 
-`storageManager.js:220-271` 的 `_migrateIfNeeded`：
-- 逐日 `existing.concat(items)` 写入
-- **全部写完后**才 `renameSync` 源文件
-- 中途失败 → 源文件仍在 → 下次启动重复追加
+现有 `manualRecordFromPayload(payload)` 接收 `startTime`（`HH:mm`）与 `durationMin`（分钟整数），**没有 `endTime`**。
 
-实测：`1 1 1` → 重启后 `2 2 2`。
+**推导规则**（本轮明确）：
 
-### 2.2 设计原则（回应 D-04「不能只靠 pending/completed 状态文件」）
+```
+startRaw = hh * 60 + mm           // 0..1439
+endRaw   = startRaw + durationMin // 可以是 1440..2879
 
-用户明确要求可恢复的迁移过程。核心思路：**每个目标文件的完成状态独立记录 + 暂存结果不可变 + 原子替换**。
+crossMidnight = endRaw >= 1440    // 唯一的跨日判据
+```
+
+**为什么不存在 `endRaw < startRaw`**：`durationMin` 恒为正数（校验 `1 <= d <= 1440`），所以 `endRaw >= startRaw` 恒成立。**v1 里「duration <= 0 则 +24h」的逻辑是错误设计**，已在 v2 删除。
+
+### 1.2 跨午夜的唯一判据
+
+| 情况 | 判据 | 处理 |
+|---|---|---|
+| 同一天内 | `endRaw < 1440` | 正常吸附两端 |
+| 跨午夜 | `endRaw >= 1440` | 终点吸附时保留跨日偏移 |
+| 输入为 `startTime + endTime` 形式（未来扩展） | `eMin > sMin` 为同天，否则跨日 | **但 `eMin == sMin` 有歧义**：按「跨日 24 小时」还是「0 分钟」？本轮不支持该输入形式，若将来支持必须显式要求用户勾选「跨日」 |
+
+**本轮结论：只支持 `startTime + durationMin`，不做 `endTime` 输入**。这从根上消除了 `eMin == sMin` 的歧义。
+
+### 1.3 两端分别就近吸附
+
+```
+STEP = 15
+
+snapStart(startRaw) = round(startRaw / 15) * 15              // 0..1440
+
+snapEnd(endRaw):
+    if endRaw < 1440:
+        return round(endRaw / 15) * 15                       // 可能 = 1440（进位到次日 00:00）
+    else:
+        return 1440 + round((endRaw - 1440) / 15) * 15        // 保留跨日偏移
+
+duration = snapEnd - snapStart
+```
+
+**次日 00:00 的处理**：`snapEnd` 允许等于 `1440`，代表次日 00:00。这是**合法结果**，不是错误。写入时 `timeSplit.splitRecordAtMidnight` 会把它拆成 23:45—24:00 与 00:00—(次日) 两段。
+
+### 1.4 实测验证表（已用脚本跑过）
+
+| 输入 | 原始结束 | 吸附起 | 吸附止 | 吸附后时长 | 判定 |
+|---|---|---|---|---|---|
+| 09:00 + 15min | 09:15 | 09:00 | 09:15 | 15 分 | OK |
+| 09:00 + 22min | 09:22 | 09:00 | 09:15 | **15 分** | OK（**失真仍在**） |
+| 09:07 + 95min | 10:42 | 09:00 | 10:45 | **105 分** | OK（用户样例 ✓） |
+| 09:07 + 35min | 09:42 | 09:00 | 09:45 | 45 分 | OK |
+| 09:14 + 15min | 09:29 | 09:15 | 09:30 | 15 分 | OK |
+| 23:50 + 30min | 次日 00:20 | 23:45 | 次日 00:15 | 30 分 | OK |
+| 23:45 + 15min | 次日 00:00 | 23:45 | 次日 00:00 | 15 分 | OK |
+| 09:07 + 3min | 09:10 | 09:00 | 09:15 | 15 分 | **拒绝**（原始 3 分 < 15） |
+| 09:07 + 8min | 09:15 | 09:00 | 09:15 | 15 分 | **拒绝**（原始 8 分 < 15） |
+| 09:07 + 14min | 09:21 | 09:00 | 09:15 | 15 分 | **拒绝**（原始 14 分 < 15） |
+| 09:00 + 1440min | 次日 00:00 | 09:00 | 次日 00:00 | 1440 分 | OK |
+
+### 1.5 必须作废的说法（v1 错误）
+
+> ❌ **v1 原文**：「D-02 要求『不再单独对时长四舍五入』，这从根上消除了本文 5.2 表格里『填 22 分钟存 15 分钟』的失真」
+
+**这句话是错的，v2 予以作废。**
+
+D-02 只取消了「独立的时长取整」环节，但**吸附本身仍会改变时长**：
+
+- `09:00 + 22min` → 吸附成 `09:00—09:15` → **实际保存 15 分钟**，比用户输入少 7 分钟
+- `09:07 + 95min` → 吸附成 `09:00—10:45` → **实际保存 105 分钟**，比用户输入多 10 分钟
+
+**因此 D-02 第 6 条「保存前显示吸附后的实际时间」不是可选优化，而是必需措施**：用户必须看到「09:00—09:15，共 15 分钟」再确认，才知道自己输入的 22 分钟会被记成 15 分钟。
+
+### 1.6 最短时长判定（Q1 选 B）
+
+**关键：用原始时长判定，不用吸附后时长。**
+
+```
+if (rawDurationMin < 15) → 拒绝，提示「人工记录最短 15 分钟，请调整时间」
+if (duration <= 0)       → 拒绝（理论上不可达，作为防御断言）
+```
+
+**为什么不能判吸附后时长**：实测 `09:07 + 3min` 吸附后是 `09:00—09:15`，时长 15 分钟，`dur < 15` 判断不到。只有用原始 3 分钟才能拦住。
+
+**这一条是 v2 相对 v1 的关键修正**。v1 写的是「提升结束到 09:15」，会把 3 分钟凭空变成 15 分钟工时，用户明确否决。
+
+### 1.7 前端预览与后端保存的一致性保证
+
+| 措施 | 说明 |
+|---|---|
+| 单一实现 | `electron/slotRule.js` 是唯一算法源；前端通过 IPC 调用或引用同一份 `.mjs` 共享模块 |
+| 预览即结果 | 前端在用户调整时间时调用 `snapRange()` 显示「将保存为 09:00—10:45，共 105 分钟」 |
+| 保存不重算 | 后端收到已吸附的 `startTime + durationMin` 后，**校验**吸附结果是否与前端一致；不一致则拒绝并提示刷新 |
+| 测试 | 同一组输入，前端预览函数与后端保存函数输出必须逐字段相等（见 §9 测试矩阵 T-D02-08） |
+
+---
+
+## 二、V0.10.2a — 历史数据迁移幂等性（含摘要）
+
+### 2.1 问题范围（v2 扩大）
+
+`storageManager.js:220-271` 的 `_migrateIfNeeded` **有两段**，结构完全相同，风险相同：
+
+| 段 | 行号 | 源文件 | 目标 | 重复风险 |
+|---|---|---|---|---|
+| 活动 | 222-245 | `Data/activities.json` | `Data/activities/<date>.json` | **有**（第 235 行 `existing.concat`） |
+| 摘要 | 248-270 | `Data/summaries.json` | `Data/summaries/<date>.json` | **有**（第 261 行 `existing.concat`） |
+
+两段**都必须**纳入迁移保护，且各自独立。
+
+### 2.2 自定义数据目录的处理（用户第 4 点）
+
+构造函数（`storageManager.js:36-37`）：
+
+```js
+this._legacyActivitiesFile = path.join(this._defaultDataDir, 'activities.json');
+this._legacySummariesFile  = path.join(this._defaultDataDir, 'summaries.json');
+```
+
+**这两个路径固定指向「默认数据目录」，不是 `this.dataDir`。**
+
+| 场景 | 行为 |
+|---|---|
+| `customPath` 为空 | `dataDir === _defaultDataDir`，源与目标同目录，正常迁移 |
+| `customPath` 已设置 | 源文件在**默认目录**，目标文件在**自定义目录**。现有代码会把默认目录的旧数据迁移到自定义目录 |
+
+**v2 明确要求**：迁移必须能处理「源与目标跨卷」的情况（见 2.4），并在 manifest 中记录**源与目标的绝对路径**，恢复时校验路径未变。
+
+### 2.3 迁移工作区结构（每套独立）
 
 ```
 Data/
-├── activities.json                       ← 源文件（迁移期间始终保留）
+├── activities.json                          ← 源文件（迁移期间始终保留）
+├── summaries.json                           ← 源文件（迁移期间始终保留）
 ├── .migration/
-│   └── legacy-activities-<sha8>/         ← 一次迁移的独立工作区
-│       ├── manifest.json                 ← 迁移清单（目标文件 + 预期记录数 + 哈希）
-│       ├── source.snapshot.jsonl         ← 源文件的不可变快照（JSONL 归一化）
+│   ├── activities-<sha8>/
+│   │   ├── manifest.json
+│   │   ├── source.snapshot.jsonl            ← 不可变快照
+│   │   ├── staging/
+│   │   │   └── 2026-11-05.json
+│   │   └── status.json
+│   └── summaries-<sha8>/
+│       ├── manifest.json
+│       ├── source.snapshot.jsonl
 │       ├── staging/
-│       │   ├── 2026-11-05.json           ← 已生成的目标文件（不可变）
-│       │   ├── 2026-11-06.json
-│       │   └── ...
-│       └── status.json                   ← 每个目标文件的完成状态
-└── activities/                           ← 正式目录
+│       └── status.json
+├── activities/                              ← 正式目标目录
+└── summaries/                               ← 正式目标目录
 ```
 
-**为什么这样能保证幂等**：
+**两套完全独立**：独立的 `<sha8>`、manifest、快照、staging、status。任一套失败不影响另一套。
 
-1. 迁移工作区的路径包含**源文件内容哈希前 8 位**（`<sha8>`）。源文件内容不变 → 工作区不变 → 可复用；源文件变了 → 新工作区，旧工作区留存备查。
-2. `staging/` 里的目标文件一旦生成就**不再修改**。中途失败重跑时，已存在的 staging 文件直接跳过（用 manifest 里的哈希校验）。
-3. 只有全部 staging 文件就绪，才逐个 `renameSync` 到 `activities/`。**rename 本身是原子的**。
-4. 每个 rename 完成后立即更新 `status.json`。若在 rename 过程中崩溃，重启时读 `status.json` 就知道哪些已就位。
-5. **已就位的目标文件在重跑时不再写入**（不是覆盖，是跳过），因此不会重复追加。
+### 2.4 暂存必须与目标同卷（用户第 5 点）
 
-**关键：删掉 `concat` 语义**。现有代码是 `existing.concat(items)`（把新数据追加到已有文件），这是重复累计的根源。新方案里，目标文件**只包含源文件中属于该天的记录**；如果 `activities/` 下已有同名文件，则**合并到 staging 生成的文件里，然后整体替换**，而不是追加。
+`renameSync` 要求源与目标在**同一卷**，否则抛 `EXDEV`。
 
-### 2.3 完整流程
+**设计决策**：
+
+| 项 | 位置 | 理由 |
+|---|---|---|
+| 迁移工作区 `.migration/` | 位于 **`dataDir`**（目标目录）下 | 与 `activities/`、`summaries/` 同卷，保证 rename 可行 |
+| 源文件 | 可能在 `_defaultDataDir`（默认目录） | 只读，不做 rename（用复制快照） |
+| 源文件改名（`.migrated`） | 在源文件所在目录内 rename | 同目录，天然同卷 |
+
+**验证**：实现时必须在前置检查里断言 `path.parse(workspaceDir).root === path.parse(targetDir).root`，不满足则拒绝迁移并提示用户。
+
+### 2.5 manifest 与 SHA256 恢复判定（用户第 2 点核心）
+
+```jsonc
+// manifest.json
+{
+  "kind": "activities",
+  "sourcePath": "C:\\...\\Data\\activities.json",
+  "sourceSha256": "a3f9c1...",          // 源文件整体哈希
+  "sourceRecordCount": 1284,
+  "targetDir": "C:\\...\\Data\\activities",
+  "createdAt": "2026-11-12T01:00:00Z",
+  "targets": [
+    {
+      "date": "2026-11-05",
+      "expectedRecordCount": 42,
+      "expectedSha256": "b7e2...",       // ← 目标文件应有的内容哈希
+      "preReplaceSha256": "9a1c...",     // ← 替换前原文件的哈希（若原本不存在则为 null）
+      "preReplaceBackup": "staging/2026-11-05.pre-replace.json"
+    }
+  ]
+}
+```
+
+```jsonc
+// status.json
+{
+  "phase": "staging",                   // manifest | snapshot | staging | replacing | done
+  "completedTargets": ["2026-11-05"],   // 已确认就位的日期
+  "lastError": null
+}
+```
+
+**恢复判定（解决崩溃窗口）**：
 
 ```
-迁移开始
-  ├─ 1. 计算源文件 sha256
-  ├─ 2. workspace = .migration/legacy-activities-<sha8>/
-  ├─ 3. 若 workspace 不存在 → 创建，写 manifest.json（含每个目标日期的预期记录数）
-  ├─ 4. 读源文件，按日期分组（分组结果写入 source.snapshot.jsonl 作为不可变快照）
-  ├─ 5. 对每个日期：
-  │     ├─ 若 staging/<date>.json 已存在且哈希匹配 manifest → 跳过
-  │     └─ 否则生成 staging/<date>.json
-  │        （内容 = 源文件中该天的记录 + activities/<date>.json 已有记录，按稳定顺序合并）
-  ├─ 6. 校验：staging 每个文件的记录数 == manifest 预期数
-  ├─ 7. 逐日原子替换：rename(staging/<date>.json → activities/<date>.json)
-  │     └─ 每次 rename 后更新 status.json 的 completed 列表
-  ├─ 8. 全部完成 → 把源文件 rename 为 activities.json.migrated
-  └─ 9. 保留 workspace 供审计（不删除）
+启动时若发现 .migration/<kind>-<sha8>/ 存在：
 
-任一步失败
-  └─ 记录 status.json: { status: 'failed', failedAt: <step>, error }
-     UI 提示：迁移未完成，已保留源文件与暂存结果，下次启动将从失败点继续
+1. 读 manifest + status
+2. 若 status.phase === 'done'：
+     → 若源文件仍在：执行最后一步 rename 为 .migrated，然后清理
+     → 若源文件已改名：删除工作区（保留日志）
+3. 若 phase !== 'done'（含 replacing）：
+   for each target in manifest.targets:
+       actualSha = sha256(targetDir/<date>.json)     // 不存在则为 null
+       if actualSha === target.expectedSha256:
+           → 已就位，标记完成（**不重算、不重写**）
+       else if actualSha === target.preReplaceSha256:
+           → 尚未替换，可用 staging 内容继续
+       else if actualSha === null && target.expectedRecordCount === 0:
+           → 空文件，视为完成
+       else:
+           → **状态无法确认 → 停止迁移**，抛错并提示：
+             「无法确认 <date>.json 的状态，为避免重复追加已停止迁移。
+               请从 .migration/ 快照手工核对或联系支持。」
+4. 全部 target 判定完成后，按需生成缺失的 staging，再执行替换
+5. 每次 rename 后立即更新 status.completedTargets
 ```
 
-### 2.4 故障注入测试矩阵（D-04 要求）
+**关键**：`expectedSha256` 让「rename 成功但 status 未写」的崩溃窗口变得可判定——重启后比对正式文件的 SHA 就能知道它是否已就位，**不需要依赖 status**。
 
-每个中断位置都要测。以下是**必须覆盖**的点：
+### 2.6 完整流程
+
+```
+阶段 0：前置检查
+  ├─ 源文件存在且可解析
+  ├─ workspace 与 targetDir 同卷
+  └─ 计算 sourceSha256
+
+阶段 1：建立 manifest
+  ├─ workspace = dataDir/.migration/<kind>-<sha8>/
+  ├─ 若不存在 → 创建，写 manifest（先算每个 target 的 expectedSha256）
+  └─ 若已存在 → 校验 manifest.sourceSha256 与当前源一致，否则进入 F7 处理
+
+阶段 2：快照
+  └─ 源文件归一化为 JSONL 写入 source.snapshot.jsonl（内容哈希校验）
+
+阶段 3：生成 staging
+  └─ 逐日生成 staging/<date>.json，内容 = 源该天记录 + 目标目录已有记录
+     （按 t 升序 + 原顺序稳定排序，保证 expectedSha256 可复现）
+
+阶段 4：校验
+  └─ 每个 staging 文件：记录数 == expectedRecordCount
+     每个 staging 文件：sha256 == expectedSha256
+
+阶段 5：替换
+  └─ 逐日：备份原文件 → rename(staging/<date>.json → targetDir/<date>.json)
+     → 更新 status.completedTargets
+
+阶段 6：收尾
+  ├─ 源文件 rename 为 <name>.migrated
+  └─ status.phase = 'done'
+```
+
+### 2.7 F7：源文件在迁移中变化（用户特别要求）
+
+**v1 的做法有误**：直接建新 workspace 继续合并，会与旧的未完成迁移叠加，**导致重复累计**。
+
+**v2 正确做法**：
+
+```
+检测到 manifest.sourceSha256 !== 当前 sourceSha256：
+
+1. 先判定旧 workspace 的状态（走 §2.5 的恢复判定）
+2. 若旧 workspace 有未完成的 target：
+     → **停止**，提示「上次迁移未完成且源文件已变化。请先完成或回滚上次迁移」
+     → **不创建新 workspace**，不继续合并
+3. 若旧 workspace 已完成（phase=done）：
+     → 源文件已改名 → 当前的新源文件是另一份数据 → 允许新建 workspace
+4. 旧 workspace 一律**保留不删**，供审计
+```
+
+### 2.8 回滚流程修正（用户第 2 点末段）
+
+**v1 的错误**：「删掉 `activities/*.json`，把 `activities.json.migrated` 改回」——这会**误删迁移期间新录制/新补录的数据**。
+
+**v2 正确回滚**：
+
+```
+回滚步骤（需用户显式触发）：
+1. 停止录制（activityRecorder.stop() + flush()）
+2. 对每个 target 日期：
+     ├─ 若 manifest 有 preReplaceBackup（原文件曾存在）
+     │    → 用备份**恢复**该文件（不是删除）
+     └─ 若 preReplaceBackup 为 null（原文件本来不存在）
+          → 删除该日期文件（因为它是迁移新建的）
+3. 源文件：把 <name>.migrated 改回原名
+4. 保留 .migration/ 工作区（不删），标记 status.phase = 'rolledback'
+5. 重启后视为未迁移状态
+
+**关键约束**：
+- 只处理 manifest.targets 里列出的日期，**不删除其他日期文件**
+- 迁移期间新产生的日期（不在 manifest 里）**完全不碰**
+- 回滚前后各日期记录数必须与迁移前一致
+```
+
+### 2.9 文件范围
+
+| 文件 | 改动 |
+|---|---|
+| 新增 `electron/legacyMigration.js` | 通用迁移引擎，参数化 `kind`（activities / summaries） |
+| `electron/storageManager.js:220-271` | `_migrateIfNeeded` 改为调用 `legacyMigration.runMigration({kind, sourcePath, targetDir, ...})` 两次 |
+| 新增 `tests/legacyMigration.test.cjs` | 活动迁移 F1-F8 |
+| 新增 `tests/legacyMigrationSummaries.test.cjs` | 摘要迁移 F1-F8（独立） |
+| 新增 `tests/migrationRecovery.test.cjs` | SHA256 判定、跨卷、源变化、回滚 |
+
+### 2.10 故障注入矩阵（v2 扩展）
+
+**活动迁移 F1-F9** + **摘要迁移 S1-S9**（结构相同，数值独立）
 
 | # | 注入位置 | 预期行为 |
 |---|---|---|
-| F1 | 步骤 3 写 manifest 后崩溃 | 重启复用 workspace，重新生成 staging |
-| F2 | 步骤 5 生成第 2 个 staging 文件时崩溃 | 第 1 个 staging 复用，第 2 个重新生成 |
-| F3 | 步骤 5 全部完成，步骤 7 前崩溃 | 直接进入步骤 7，不重新生成 |
-| F4 | 步骤 7 rename 第 2 个文件时崩溃 | 第 1 个已就位不重复，从第 2 个继续 |
-| F5 | 步骤 8 rename 源文件时失败（被锁） | 目标文件已就位，源文件仍在 → **重启时检测到所有 target 已完成，直接执行步骤 8**，不重跑迁移 |
-| F6 | 全程两次崩溃（F4 后再次崩溃） | 最终结果与一次成功完全一致（逐字节比对） |
-| F7 | 源文件在迁移中被外部修改 | sha 变化 → 新 workspace，旧 workspace 保留，提示用户发生了变更 |
-| F8 | `activities/` 下目标文件已存在旧数据 | 合并进 staging，替换后记录数 = 源该天数 + 原文件数，**不重复** |
+| F1 | 写 manifest 后崩溃 | 复用 workspace，重新生成 staging |
+| F2 | 生成第 2 个 staging 时崩溃 | 第 1 个复用，第 2 个重新生成 |
+| F3 | staging 全部完成，替换前崩溃 | 直接进入替换 |
+| F4 | rename 第 2 个文件时崩溃 | 第 1 个已就位不重复，从第 2 个继续 |
+| **F4a** | **rename 成功、status 更新前强杀** | **重启时靠 expectedSha256 判定已就位，标记完成，不重复写入** |
+| F5 | 源文件 rename 失败（被锁） | 目标已就位，重启时检测到所有 target 完成 → 直接执行源文件改名 |
+| F6 | 两次崩溃（F4 后再次崩溃） | 最终结果逐字节等同一次成功 |
+| F7 | 源文件迁移中被修改 | **停止**，不建新 workspace，提示先处理旧的 |
+| F8 | 目标目录已有旧数据 | 合并进 staging，替换后 = 源天数 + 原文件数，不重复 |
+| F9 | workspace 与 targetDir 跨卷 | 前置检查拒绝，提示用户 |
 
-**验收标准**：
-1. F1-F8 全部通过
-2. 任意中断场景恢复后，`activities/` 各文件记录数 = 预期值，无重复
-3. 连续启动 10 次（已迁移完成状态），记录数不变
-4. 迁移前后总记录数守恒
+### 2.11 验收标准
 
-### 2.5 文件范围
+1. F1-F9 与 S1-S9 全部通过
+2. 任意中断恢复后，`activities/` 与 `summaries/` 各文件记录数 = 预期，无重复
+3. **活动记录数**迁移前后守恒：`sum(activities/*.json 记录数) == sourceRecordCount`
+4. **摘要记录数**迁移前后守恒：`sum(summaries/*.json 记录数) == sourceRecordCount`
+5. 连续启动 10 次，两套记录数均不变
+6. 回滚后各日期记录数与迁移前逐条一致，**迁移期间新增数据不受影响**
+7. 自定义数据目录场景（源在默认目录、目标在自定义目录）迁移成功
 
-| 文件 | 改动 | 说明 |
-|---|---|---|
-| 新增 `electron/legacyMigration.js` | 全部迁移逻辑 | 独立模块，可单测 |
-| `electron/storageManager.js:220-271` | `_migrateIfNeeded` 改为调用 `legacyMigration.run()` | 保留方法名，内部替换 |
-| 新增 `tests/legacyMigration.test.cjs` | F1-F8 故障注入 | |
-| 新增 `tests/migrationRecovery.test.cjs` | 连续启动、记录数守恒 | |
-
-**不动**：`fileMigration.js`（它服务的是「切换数据目录」，与本迁移无关，见 3.5）
-
-### 2.6 历史数据风险与回滚
+### 2.12 历史数据风险与回滚
 
 | 项 | 说明 |
 |---|---|
-| 风险 | 迁移会重写 `activities/*.json`。若合并逻辑有误，可能丢记录 |
-| 保护 1 | 源文件 `activities.json` **全程不删**，最后才改名 `.migrated` |
-| 保护 2 | 整个 `.migration/` 工作区保留，含 `source.snapshot.jsonl` 不可变快照 |
-| 保护 3 | 每个目标文件替换前，先把原文件复制为 `activities/<date>.json.pre-migrate` |
-| 回滚方式 | 删掉 `activities/*.json`，把 `activities.json.migrated` 改回 `activities.json`，删除 `.migration/`，重启即视为未迁移 |
-| 回滚验证 | 回滚后 `getActivities()` 返回值与迁移前逐条一致 |
+| 风险 | 迁移重写 `activities/*.json` 与 `summaries/*.json`。合并逻辑错误可能丢记录 |
+| 保护 1 | 两个源文件全程不删，最后才改名 `.migrated` |
+| 保护 2 | 每个目标文件替换前备份为 `staging/<date>.pre-replace.json` |
+| 保护 3 | `.migration/` 工作区含不可变 `source.snapshot.jsonl` |
+| 保护 4 | manifest 记录 `expectedSha256` 与 `preReplaceSha256`，可逐文件验证 |
+| 回滚 | 见 §2.8，**不是删目录，而是按 manifest 恢复** |
 
 ---
 
-## 三、V0.10.2b — 覆盖导入安全与危险入口处理
+## 三、V0.10.2b — 导入安全与危险入口处理
 
 ### 3.1 决策落地（D-01）
 
 | 要求 | 实现 |
 |---|---|
-| 取消危险的覆盖导入入口 | 删除 `SettingsView.vue:277` 的「覆盖」按钮和 `@import-overwrite` 事件链 |
-| 保留普通合并导入 | 保留 `SettingsView.vue:276` 的「合并」按钮 |
-| 普通导入不得清空原始记录 | 删除 `main.js:1514-1516` 的 `clearActivities()` 调用；`clearActivities` 方法本身**保留但不再被导入调用**（见 3.3） |
-| 未来恢复备份单独立项 | 本次**不做**，只记录设计约束（见 3.4） |
+| 取消危险的覆盖导入入口 | 删除 `SettingsView.vue:277` 按钮 + `@import-overwrite` 事件链 |
+| 保留普通合并导入 | 保留 `SettingsView.vue:276` |
+| 普通导入不得清空原始记录 | 删除 `main.js:1514-1516` 的 `clearActivities()` 调用 |
+| 未来恢复备份单独立项 | 本次不做，约束见 §3.5 |
 
-**「不要认为切换数据目录完全等价于导入备份」** —— 已在 3.5 单列说明差异。
+### 3.2 快照范围扩大（用户第 6 点）
 
-### 3.2 合并导入的加固
+**v1 只快照 `activities/`，不够。** 完整 JSON 导入同时写 activities 和 summaries（`main.js:1530-1544`），且 `saveSummary` 还会写 `summaries_md/`（`storageManager.js:691-697`）。
 
-现有合并导入的问题：`saveActivity()` 无去重，重复导入翻倍。
-
-**本次不做完整去重**（去重依赖 `rid`，属 V0.10.3）。本次只做两件事：
-
-1. **导入前自动快照**：`Data/snapshots/import-<ts>/activities/` 完整复制
-2. **导入结果报告**：返回 `{ imported, skipped, snapshotPath }`，UI 展示
-
-不做去重的原因：**用户明确要求"宁可保留，不允许误删"**。在没有 `rid` 的情况下做任何内容去重都会误删（第二轮已实测：4 条合法记录会被合并成 1 条）。所以 V0.10.2b 宁可让重复数据存在，也不冒误删的风险。去重统一放到 V0.10.3。
-
-### 3.3 `clearActivities` 的处置
-
-**保留方法，但限制调用**。理由：规范第 9 条「不确定是否使用的功能，优先隐藏或停止新增开发，不直接删除」。它可能在测试或未来恢复功能中使用。
-
-措施：
-- 移除 `import-data` 中唯一的生产调用
-- 在方法上加注释说明「生产代码不得调用；仅供测试与恢复功能保留」
-- 新增测试断言：**生产代码中除定义外无 `.clearActivities(` 调用**
-
-### 3.4 未来恢复备份功能的设计约束（本次不做，仅记录）
-
-用户要求恢复必须包含：快照、格式校验、暂存、原子替换、失败回滚、二次确认。
-
-记录在案，作为将来立项的验收基线：
+**v2 快照覆盖三个目录**：
 
 ```
-恢复流程（未来）:
-  1. 二次确认（列出将替换的天数、条数、当前数据条数）
-  2. 读取备份 → 格式校验（逐条 JSON 可解析、字段完整、时间合法）
-  3. 校验失败 → 中止，不触碰现有数据
-  4. 当前数据全量快照 → Data/snapshots/restore-<ts>/
-  5. 写入暂存区 Data/restore-staging-<uuid>/
-  6. 校验暂存区条数 == 备份条数
-  7. 原子替换（逐日 rename，记录完成状态）
-  8. 任一步失败 → 回滚到快照
-  9. 成功后保留快照 N 天
+Data/snapshots/import-<YYYYMMDD-HHmmss>/
+├── activities/          ← 全量复制
+├── summaries/           ← 全量复制
+├── summaries_md/        ← 全量复制
+└── snapshot-manifest.json
+      { createdAt, trigger: 'import-merge',
+        sourceFile, sourceFingerprint,
+        counts: { activities: N, summaries: M, summariesMd: K } }
 ```
 
-### 3.5 「切换数据目录」与「导入备份」的差异（回应 D-01 第 5 条）
+### 3.3 逐条写入结果统计（用户第 6 点）
 
-用户提醒不要把两者等同。核实代码后确认差异如下：
+现有代码（`main.js:1526-1544`）不检查返回值：
 
-| 维度 | 切换数据目录（`migrate-storage` + `setDataDir`） | 导入备份（未来功能） |
+```js
+data.activities.forEach(a => {
+  if (a.timestamp && a.processName) {
+    storageManager.saveActivity(a);   // ← 返回值被丢弃
+    importedCount++;                  // ← 无论成功失败都 +1
+  }
+});
+```
+
+**v2 要求**：
+
+```js
+let succeeded = 0, failed = 0, skipped = 0;
+for (const a of data.activities) {
+  if (!a.timestamp || !a.processName) { skipped++; continue; }
+  if (storageManager.saveActivity(a)) succeeded++;
+  else failed++;
+}
+```
+
+返回 `{ ok, succeeded, failed, skipped, snapshotPath, fingerprint }`，UI 如实展示。**“导入成功”必须意味着每一条都写成功了。**
+
+### 3.4 本次不做内容去重（理由）
+
+用户明确「宁可保留，不允许误删」。无 `rid` 时任何内容去重都会误删（第二轮实测：4 条合法记录合并成 1 条）。**V0.10.2b 容忍重复，去重放 V0.10.3。**
+
+### 3.5 导入来源指纹（用户第 6 点，v2 扩展）
+
+**v1 的缺陷**：只算 activities 部分字段，会误判。
+
+**v2 定义**：
+
+```js
+function computeFingerprint(importedJson) {
+  const parts = [];
+
+  // 1. 活动：按原数组顺序，逐条规范化
+  for (const a of importedJson.activities || []) {
+    parts.push('A:' + canonical(a, [
+      'timestamp', 'processName', 'windowTitle', 'durationMs',
+      'kind', 'source', 'category', 'project'
+    ]));
+  }
+
+  // 2. 摘要：同样按原顺序
+  for (const s of importedJson.summaries || []) {
+    parts.push('S:' + canonical(s, [
+      'timestamp', 'date', 'summary', 'slots', 'apps'
+    ]));
+  }
+
+  return sha256(parts.join('\n'));
+}
+
+function canonical(obj, keys) {
+  // 固定 key 顺序；缺失字段用 null 占位；不排序数组（保留原顺序）
+  // 不删除重复项（保留合法重复）
+  return JSON.stringify(keys.map(k => obj[k] === undefined ? null : obj[k]));
+}
+```
+
+**关键设计点**：
+
+| 要求 | 落实 |
+|---|---|
+| 包含活动与摘要全部有效数据 | `A:` 与 `S:` 两类都进指纹 |
+| 规范化 JSON | 固定 key 顺序、缺失补 null、不使用 `JSON.stringify(obj)`（键序不定） |
+| 保留数组顺序 | 按原数组顺序拼接，**不排序** |
+| 保留合法重复 | **不去重**，同一文件中两条相同记录都会进入指纹串 |
+| 不只算部分字段 | 每次修改此 key 列表都必须重算历史指纹（在代码注释标注版本号） |
+
+**指纹用途**：
+
+| 用途 | 做法 |
+|---|---|
+| 识别「这份文件导入过」 | 比对 `Data/.import-history.json` |
+| 防重复导入 | 命中则提示「该文件已于 X 导入过，共 N 条」，**默认不导入**，允许强制 |
+| 不逐条去重 | 指纹是整文件粒度，同一文件内部重复完整保留 |
+
+### 3.6 `clearActivities` 处置
+
+保留方法（规范第 9 条），但移除唯一生产调用，加「生产禁用」注释，并新增测试断言生产代码无非定义调用。
+
+### 3.7 「切换数据目录」≠「导入备份」（回应 D-01 第 5 条）
+
+| 维度 | 切换数据目录 | 导入备份 |
 |---|---|---|
-| 现有实现 | `migrateDataTo()` 用 `copyMissingData`，`COPYFILE_EXCL` 只复制不存在文件，**不删源** | 未实现 |
-| 语义 | 换一个目录继续用，旧目录原样保留 | 用备份**替换**当前数据 |
-| 是否会删数据 | **不会** | 会（替换），所以需要 3.4 的六重保护 |
-| 能否用于换机恢复 | 可以（把旧目录拷到新机器，指向它） | 可以，但语义是「覆盖当前」 |
-| 是否去重 | 否（`COPYFILE_EXCL` 只跳过同名文件） | 需按 `rid` 处理 |
+| 现有实现 | `migrateDataTo` + `copyMissingData`，`COPYFILE_EXCL` 只复制不存在文件，**不删源** | 未实现 |
+| 语义 | 换地方继续用，旧目录原样保留 | 用备份**替换**当前 |
+| 是否删数据 | 否 | 是（需六重保护） |
+| 适用 | 换机（把旧目录拷到新机指向它） | 恢复到某个历史状态 |
 
-**结论**：切换目录确实是安全的换机手段，但它做的是「换地方」，不是「换内容」。恢复备份要做的是「用 A 替换 B」，两者不能互相替代。
-
-### 3.6 文件范围
+### 3.8 文件范围
 
 | 文件 | 改动 |
 |---|---|
-| `src/views/SettingsView.vue:277` | 删除「覆盖」按钮与 emit |
-| `src/views/SettingsView.vue:279` | 修正说明文案 |
-| `src/views/SettingsView.vue:632` | 从 emits 列表移除 `import-overwrite` |
-| `src/App.vue:173` | 删除 `@import-overwrite` 绑定 |
-| `src/App.vue:1175` | `importData()` 去掉 `overwrite` 分支 |
-| `electron/main.js:1513-1516` | 删除 `mode === 'overwrite'` 分支与 `clearActivities()` 调用 |
-| `electron/main.js:1453` | `import-data` handler 不再接受 `overwrite` 参数 |
-| `electron/storageManager.js:663` | `clearActivities` 加「生产禁用」注释 |
+| `src/views/SettingsView.vue:277,279,632` | 删除覆盖按钮、修正文案、移除 emit |
+| `src/App.vue:173,1175` | 删除 overwrite 分支 |
+| `electron/main.js:1453,1514-1544` | 删除 overwrite 分支；快照扩三目录；逐条统计 |
+| `electron/storageManager.js:663` | `clearActivities` 加禁用注释 |
 | `electron/storageManager.js` 新增 | `snapshotBeforeImport()` |
-| 新增 `tests/importSafety.test.cjs` | 导入不清空、快照完整、无 clearActivities 生产调用 |
+| 新增 `electron/importFingerprint.js` | 指纹计算与历史 |
+| 新增 `tests/importSafety.test.cjs` | 不清空、三目录快照、逐条统计 |
+| 新增 `tests/importFingerprint.test.cjs` | 指纹含摘要、保留顺序、保留重复 |
 
-### 3.7 历史数据风险与回滚
+### 3.9 验收标准
 
-| 项 | 说明 |
-|---|---|
-| 风险 | 低。本次是**减少**能力（删除覆盖入口），不新增写路径，唯一的写路径改动是导入前加快照 |
-| 回滚 | 代码回退即可。已删除的按钮恢复后行为与现在一致（危险仍在），所以回滚需同时恢复 warning |
-| 数据影响 | 无。不改变任何已有数据 |
+1. 合并导入后，`activities/`、`summaries/`、`summaries_md/` 三处快照完整，计数与导入前一致
+2. 模拟某条 `saveActivity` 返回 false → 返回结果里 `failed` 计数正确，UI 如实展示
+3. 生产代码中 `.clearActivities(` 除定义外无调用（测试断言）
+4. 同一文件导入两次 → 第二次提示「已导入过」，默认不执行
+5. 同一文件内部含 2 条完全相同记录 → 导入后仍是 2 条，指纹计算不受影响
 
 ---
 
@@ -302,252 +554,216 @@ Data/
 
 | 要求 | 实现 |
 |---|---|
-| 新记录有稳定 rid | `activityRecorder._emit()` 与人工记录写入时生成 `randomUUID()` |
-| rid 落盘且重启不变 | `appendActivityRecords` 保留 `rid` 字段 |
-| 不批量改写历史 | 旧记录不写 `rid`，读取时兼容 |
-| 旧数据继续兼容 | `_fromSegment` 对无 `rid` 记录正常处理 |
-| 文件名+行号**仅作兼容定位** | 明确注释，不作持久身份，不用于跨读取去重 |
-| 只有确认同一数据副本才去重 | 见 4.3 |
-| 无法确认宁可保留 | 默认策略：不确定就不去重 |
+| 新记录有稳定 rid | `randomUUID()` 生成并落盘 |
+| 不批量改写历史 | 旧记录不写 rid |
+| 旧数据继续兼容 | `_fromSegment` 对无 rid 正常处理 |
+| 文件名+行号**仅兼容定位** | 注释明确，不跨读取使用 |
+| 只有确认同一副本才去重 | 双方都有 rid 且相同才去重 |
+| 无法确认宁可保留 | 默认不去重 |
 
-### 4.2 `rid` 生成与落盘
-
-**生成点**（3 处）：
+### 4.2 rid 生成点
 
 | 位置 | 时机 |
 |---|---|
 | `activityRecorder.js:_emit()` | 每个自动片段 |
-| `main.js:1180`（`add-manual-record`） | 已有 `groupId`，额外加 `rid` |
-| `main.js:1197`（`replace-display-ranges`） | 已有 `groupId`，额外加 `rid` |
+| `main.js:1180` | 人工补记（已有 groupId，另加 rid） |
+| `main.js:1197` | 展示层替换（同上） |
+| `storageManager.updateDisplayRecord()` | **仅当被编辑的那条无 rid 时**（见 4.6） |
 
-**落盘**：`storageManager.js:316-336` 的 payload 里加 `...(r.rid ? { rid: r.rid } : {})`。
+### 4.3 落盘与读取
 
-**读取**：`_fromSegment` 增加 `rid: rec.rid || null`，供上层判断。
+落盘：`storageManager.js:316-336` 加 `...(r.rid ? { rid: r.rid } : {})`
+读取：`_fromSegment` 加 `rid: rec.rid || null`
 
-**为什么不用 `groupId` 代替**：`groupId` 语义是「一组相关的记录」（如跨午夜拆分后的两段共用同一个 `groupId`），同一 `groupId` 下可能有多条记录。而 `rid` 是**单条记录**的身份，两者不同。这也是为什么不能用 `groupId` 去重。
+### 4.4 iCloud 冲突副本去重安全性（重新审查结论）
 
-### 4.3 iCloud 冲突副本的去重安全性（用户特别要求重新审查）
+**旧记录（无 rid）在副本中绝对不能自动去重。**
 
-**核实结论：旧记录（无 `rid`）在冲突副本中【绝对不能自动去重】。**
+理由：冲突副本语义是「并发写入的另一个版本」，不是主文件拷贝。现有测试 `icloudConflict.test.cjs` 就是主文件 `app:'main'`、副本 `app:'copy'` 两条都要读到。
 
-理由：
+**去重策略表**：
 
-1. **冲突副本的语义不是"复制品"**。iCloud/OneDrive 在检测到两处并发修改时，会把其中一方的**内容**另存为副本。它不是主文件的拷贝，而是**另一个版本**。副本里可能包含主文件**没有**的记录，也可能包含主文件**有**的相同记录。
-2. 现有测试 `tests/icloudConflict.test.cjs` 正是这么构造的：主文件写 `app: 'main'`，副本写 `app: 'copy'`，两条都要读到。这说明**副本里有独有数据**是常态。
-3. 因此任何「按内容判断重复」的做法在该场景下都会误删。
+| 场景 | 处理 |
+|---|---|
+| 双方同 rid | 去重 |
+| 双方不同 rid | 保留两条 |
+| 一方无 rid | 保留两条 |
+| 双方都无 rid | 保留两条 |
+| 同文件内重复 | **永不去重** |
 
-**同时发现一个新的安全性问题**（第二轮未发现）：
+### 4.5 副本文件名严格正则
 
-`_activityFilesOfDay` 用 `name.startsWith(dateStr) && name.endsWith('.jsonl')` 匹配副本，**范围过宽**。实测：
+现有 `_activityFilesOfDay` 用 `startsWith(dateStr) && endsWith('.jsonl')`，实测误匹配 `-backup`、`.old`、`-080`。
 
 ```
-dateStr = '2026-11-08'
-  命中  2026-11-08 2.jsonl        ← 真副本
-  命中  2026-11-08 (1).jsonl      ← 真副本
-  命中  2026-11-080.jsonl         ← 别的文件（11-080 不存在，但逻辑上会误匹配）
-  命中  2026-11-08-backup.jsonl   ← 用户手工备份！
-  命中  2026-11-08.old.jsonl      ← 用户手工备份！
+严格正则： ^<dateStr>(?: (?:\(\d+\)|\d+))?\.jsonl$
 ```
 
-若用户手工放了 `2026-11-08-backup.jsonl` 作为备份，它会被当成「当天数据」读进来，**导致当天工时虚高**。将来若在这些文件上做去重，风险更大。
-
-**建议修复**（列入 V0.10.3）：
-
-```js
-// 强制要求空格分隔，杜绝 2026-11-080 / -backup / .old 被误认
-const copyRe = new RegExp(`^${dateStr}(?: (?:\\(\\d+\\)|\\d+))?\\.jsonl$`);
-```
-
-实测该正则：
+实测结果：
 
 ```
    主文件      2026-11-08.jsonl
    副本       2026-11-08 2.jsonl
    副本       2026-11-08 (1).jsonl
-   非本日文件    2026-11-080.jsonl
    非本日文件    2026-11-08-backup.jsonl
    非本日文件    2026-11-08.old.jsonl
-   副本       2026-11-08 12.jsonl
-   非本日文件    2026-11-08 2 3.jsonl
+   非本日文件    2026-11-080.jsonl
 ```
 
-**去重策略表**：
+### 4.6 rid 补齐的严格限制（Q3 用户决定）
 
-| 场景 | 是否有 `rid` | 处理 |
-|---|---|---|
-| 主文件 + 副本，同 `rid` | 都有 | **去重**（确认是同一记录的两份） |
-| 主文件 + 副本，不同 `rid` | 都有 | **保留两条**（可能是并发写入的不同记录） |
-| 主文件 + 副本，一方无 `rid` | 部分 | **保留两条**（无法确认，宁可保留） |
-| 主文件 + 副本，都无 `rid` | 都无 | **保留两条**（旧数据，无法确认） |
-| 同文件内重复 | — | **永不去重**（同文件中每条都是独立记录） |
+**选 A，但限定**：
 
-### 4.4 导入来源指纹（替代作废的 `importBatchId`）
-
-用户批评正确：每次导入生成新 ID，无法阻止重复导入同一文件。
-
-**正确方案：基于文件内容的指纹**
-
-```
-sourceFingerprint = sha256(
-    normalizedContent          // 归一化后的导入内容
-)
-
-normalizedContent 的构造：
-  1. 按 activities 数组顺序，逐条序列化 normalize(record)
-  2. normalize(record) = JSON.stringify 按固定 key 顺序输出以下字段：
-     t, dur, app, title, kind, source, cat, project
-  3. 用 '\n' 连接
-```
-
-**关键：指纹的作用范围**
-
-| 用途 | 做法 |
+| 规则 | 说明 |
 |---|---|
-| 识别「这个文件我之前导入过」 | 比对 `sourceFingerprint` 与 `Data/.import-history.json` 中记录 |
-| 防止重复导入 | 若指纹已存在 → **提示用户**「该文件已于 <时间> 导入过，共 N 条。是否仍要导入？」<br>默认**不导入**，但允许强制 |
-| 保留同一文件内部的合法重复 | 指纹是**整文件粒度**，不是逐条去重。同一文件里两条相同的记录，按原样全部导入 |
+| 新记录 | 正常生成 UUID |
+| 旧记录 | **不批量补** rid |
+| 用户编辑旧展示记录 | **只给实际编辑的那一条**补 rid |
+| 同文件其他历史记录 | **不得**因本次编辑而补 rid |
+| 历史记录的时间/时长/分类 | **不得**因 rid 引入而改变 |
 
-**为什么整文件粒度是安全的**：它不判断「某条记录是否重复」，只判断「这份文件是否导入过」。用户看到提示后自行决定。这完全符合「无法确认宁可保留，不允许误删」。
+**实现要点**（`updateDisplayRecord`）：
 
-**`.import-history.json` 结构**：
-
-```json
-{
-  "imports": [
-    {
-      "fingerprint": "a3f9c1...",
-      "importedAt": "2026-11-12T01:00:00Z",
-      "sourceName": "worklog-backup-20261112.json",
-      "recordCount": 1284,
-      "affectedDates": ["2026-11-05", "..."],
-      "snapshotPath": "Data/snapshots/import-20261112-010000"
-    }
-  ]
+```js
+if (!hit.rid) {
+  next.rid = crypto.randomUUID();   // 只给这一条
 }
+next.editedAt = new Date().toISOString();
+// 其余记录原样写回，不动 rid、不动任何字段
 ```
 
-只追加，不覆盖。最多保留最近 200 条（超出时滚动删除最旧的，但保留 `importedAt` + `fingerprint` 摘要）。
+测试断言：编辑 1 条后，同文件其他 N 条记录的**完整 JSON 序列化结果与编辑前逐字节相同**。
 
-### 4.5 文件范围
+### 4.7 文件范围
 
 | 文件 | 改动 |
 |---|---|
-| `electron/activityRecorder.js` | `_emit` 生成 `rid` |
-| `electron/storageManager.js:316` | 落盘保留 `rid` |
-| `electron/storageManager.js:118` | `_fromSegment` 读取 `rid` |
-| `electron/storageManager.js:167` | 严格副本正则 + 按 `rid` 去重 |
-| `electron/main.js:1180/1197` | 人工记录加 `rid` |
-| `electron/main.js:1453` | 导入改为指纹校验 |
-| 新增 `electron/importFingerprint.js` | 指纹计算与历史记录 |
-| 新增 `tests/recordIdentity.test.cjs` | `rid` 生成、落盘、重启不变 |
-| 新增 `tests/conflictDedupe.test.cjs` | 5 种组合的去重策略 |
-| 新增 `tests/importFingerprint.test.cjs` | 重复导入提示、文件内合法重复保留 |
-| **修改** `tests/duplicateImport.test.cjs` | 第 1、2 条从「锁定错误」改为「断言正确」 |
+| `electron/activityRecorder.js` | `_emit` 生成 rid |
+| `electron/storageManager.js:316` | 落盘保留 rid |
+| `electron/storageManager.js:118` | 读取 rid |
+| `electron/storageManager.js:167-182` | 严格正则 + rid 去重 |
+| `electron/storageManager.js:421-449` | `updateDisplayRecord` 限定补 rid |
+| `electron/main.js:1180,1197` | 人工记录加 rid |
+| `electron/main.js:1453` | 导入改用指纹 |
+| 新增 `tests/recordIdentity.test.cjs` | rid 生成/落盘/重启不变 |
+| 新增 `tests/conflictDedupe.test.cjs` | 5 种组合 |
+| 新增 `tests/ridBackfill.test.cjs` | 只补被编辑那条，其他逐字节不变 |
+| **修改** `tests/duplicateImport.test.cjs` | 第 1、2 条改为断言正确行为 |
 
-### 4.6 历史数据风险与回滚
+### 4.8 验收标准
 
-| 项 | 说明 |
-|---|---|
-| 风险 | 低-中。`rid` 是新字段，旧数据不读不写；但副本正则收紧后，**原先被误读的 `-backup`/`.old` 文件将不再被读取** |
-| 需注意 | 若有用户依赖这种误读（可能性极低），收紧后当天工时数字会变小 —— 这是**修正**而不是丢失，因为那些文件本来就不是当天的数据 |
-| 回滚 | 代码回退即可。已写入的 `rid` 字段会被忽略，不影响旧逻辑 |
-| 迁移 | **无**。不批量改写历史数据 |
+1. 新录制片段带 rid，重启后不变
+2. `t+app+dur` 相同的 4 条记录仍读回 4 条
+3. 同 rid 主文件+副本 → 1 条；不同 rid → 2 条；无 rid → **2 条（保留）**
+4. 编辑 1 条旧记录后，同文件其他记录逐字节不变
+5. `-backup`、`.old` 文件不再被读为当天数据
 
 ---
 
-## 五、V0.10.4 — 15 分钟规则统一（D-02）
+## 五、V0.10.4 — 15 分钟规则统一
 
-> 本节仅登记方案要点，详细实施在 0.10.3 完成后单独编写。
+### 5.1 模块定义
 
-### 5.1 核心改动
-
-新增 `electron/slotRule.js`，导出：
+`electron/slotRule.js` 导出：
 
 ```js
-const STEP_MIN = 15;
-
-snapStart(dateStr, hhmm)   // 就近吸附，返回 Date
-snapEnd(dateStr, hhmm)     // 就近吸附，返回 Date
-snapRange(dateStr, startHHmm, endHHmm)  // 返回 { start, end, durationMin }
-findOverlaps(dateStr, start, end, records)  // 返回重叠记录列表
+snapStart(dateStr, startHHmm)                     // 就近
+deriveEnd(startRaw, durationMin)                  // 返回 { endRaw, crossMidnight }
+snapEnd(endRaw)                                   // 支持 1440 表示次日 00:00
+snapRange(dateStr, startHHmm, durationMin)        // 返回 { start, end, durationMin, crossMidnight, rejected?, reason? }
+findOverlaps(dateStr, start, end, records)        // 返回重叠列表
 ```
 
-**唯一的取整实现，7 处调用点全部改为引用它**：
+### 5.2 7 处调用点
+
 `main.js:1150/1154`、`storageManager.js:610-611`、`planManager.js:165/183/265`、`analytics.js:1212-1214`、`App.vue:541`、`TimelineView.vue:1116`
 
-### 5.2 UI 要求（D-02 第 6、7 条）
+### 5.3 UI 要求
 
-- 保存前显示吸附后的实际时间：「09:07—10:42 → 09:00—10:45，共 105 分钟」
-- 重叠时弹出冲突列表，用户选择处理方式
+1. **保存前显示吸附结果**（D-02 第 6 条）：`09:07—10:42 → 将保存为 09:00—10:45，共 105 分钟`
+2. **失真必须明确告知**：`输入 22 分钟 → 将保存为 15 分钟`（不能隐藏）
+3. 不足 15 分钟：`人工记录最短 15 分钟，当前 3 分钟，请调整`
 
-### 5.3 `manualSnap.test.cjs` 必须改造
+### 5.4 重叠处理（Q2 用户决定）
 
-从「复刻算法」改为「直接调用 `slotRule`」。这是消除假绿的唯一办法。
+| 重叠类型 | 处理 | 数据影响 |
+|---|---|---|
+| 与**自动记录**重叠 | **提示但允许**（这是补记的正当用途） | 写**展示层**标注，记录层不动 |
+| 与**另一条人工记录**重叠 | **默认阻断**，提示调整时间 | 不写入 |
+| 用户确认覆盖展示层 | 只删/改展示层记录 | **记录层完全不动** |
+
+**硬约束**：原始自动记录在任何操作前后**逐字节一致**。测试必须验证。
+
+### 5.5 `manualSnap.test.cjs` 改造
+
+从复刻算法改为直接调用 `slotRule.snapRange()`。这是消除假绿的唯一办法。
 
 ---
 
 ## 六、版本顺序与依赖
 
 ```
-V0.10.2a  迁移幂等 ──────────────┐
+V0.10.2a 迁移幂等（活动+摘要）──┐
                                  ├→ V0.10.3 记录标识与去重 → V0.10.4 15分钟统一
-V0.10.2b  导入安全 ──────────────┘
+V0.10.2b 导入安全 ──────────────┘
 ```
-
-- **0.10.2a 与 0.10.2b 互不依赖**，可并行或任意顺序，但要求各自独立提交
-- 0.10.3 依赖 0.10.2b（导入已加固，才能安全加指纹）
-- 0.10.4 依赖 0.10.3（`slotRule` 需要与 `rid` 一起工作，重叠检测要能识别记录身份）
 
 ### 提交计划
 
 | 版本 | 提交数 | 内容 |
 |---|---|---|
-| V0.10.2a | 1 | `legacyMigration.js` + `_migrateIfNeeded` 改造 + 2 个测试文件 |
-| V0.10.2b | 1 | 删除覆盖入口 + 导入快照 + 1 个测试文件 |
-| V0.10.3 | 2 | ① `rid` + 副本正则 + 去重；② 导入指纹 |
-| V0.10.4 | 1 | `slotRule.js` + 7 处对齐 + 重叠检测 |
+| V0.10.2a | 1 | `legacyMigration.js` + `_migrateIfNeeded` 改造 + 3 个测试文件 |
+| V0.10.2b | 1 | 删除覆盖入口 + 三目录快照 + 逐条统计 + 指纹模块 + 2 个测试 |
+| V0.10.3 | 2 | ① rid + 严格正则 + 去重；② 导入指纹接入 |
+| V0.10.4 | 1 | `slotRule.js` + 7 处对齐 + 重叠检测 + 失真提示 |
 
 ---
 
-## 七、全局验收基线（每个版本都必须满足）
+## 七、测试矩阵汇总
+
+| ID | 版本 | 场景 | 断言 |
+|---|---|---|---|
+| T-M01 | 2a | F1-F9 活动迁移故障注入 | 9 个中断点各恢复正确 |
+| T-M02 | 2a | S1-S9 摘要迁移故障注入 | 9 个中断点各恢复正确 |
+| T-M03 | 2a | 活动记录数守恒 | 迁移后总数 == 源条数 |
+| T-M04 | 2a | 摘要记录数守恒 | 同上 |
+| T-M05 | 2a | 跨卷 workspace | 前置检查拒绝 |
+| T-M06 | 2a | 源文件迁移中变化 | 停止不新建 workspace |
+| T-M07 | 2a | 回滚 | 各日期逐条一致，新数据不受影响 |
+| T-M08 | 2a | 自定义数据目录 | 源默认目录→目标自定义目录成功 |
+| T-I01 | 2b | 导入不清空原始记录 | 导入前后记录数增加而非归零 |
+| T-I02 | 2b | 三目录快照完整 | 快照计数 == 导入前计数 |
+| T-I03 | 2b | 逐条写入统计 | failed 计数准确 |
+| T-I04 | 2b | 无 clearActivities 生产调用 | 静态检查 |
+| T-I05 | 2b | 指纹含摘要 | 只改摘要则指纹变 |
+| T-I06 | 2b | 指纹保留顺序与重复 | 两条相同记录指纹稳定 |
+| T-I07 | 2b | 重复导入提示 | 第二次默认不执行 |
+| T-R01 | 2.3 | rid 生成/落盘/重启不变 | — |
+| T-R02 | 2.3 | 5 种去重组合 | 无 rid 一律保留 |
+| T-R03 | 2.3 | 只补被编辑那条 | 其他记录逐字节不变 |
+| T-R04 | 2.3 | 严格副本正则 | `-backup`/`.old` 不读 |
+| T-D02-01 | 2.4 | `09:07—10:42` | 105 分钟 |
+| T-D02-02 | 2.4 | `09:00 + 22min` | 15 分钟（**并提示失真**） |
+| T-D02-03 | 2.4 | `09:07 + 3min` | **拒绝** |
+| T-D02-04 | 2.4 | `23:45 + 15min` | 次日 00:00，15 分钟 |
+| T-D02-05 | 2.4 | `23:50 + 30min` | 30 分钟，正确拆分 |
+| T-D02-06 | 2.4 | 与自动记录重叠 | 允许，记录层逐字节不变 |
+| T-D02-07 | 2.4 | 与人工记录重叠 | 阻断 |
+| T-D02-08 | 2.4 | 前后端一致性 | 同一输入输出逐字段相等 |
+
+---
+
+## 八、全局验收基线
 
 | 项 | 标准 |
 |---|---|
-| `npm test` | 全绿，且**新增测试数与新增功能点匹配** |
+| `npm test` | 全绿，新增测试与功能点匹配 |
 | `npm run lint` | 0 告警 |
 | `npm run build` | 成功 |
-| 历史数据 | 版本前后 `getActivities()` 对同一批数据返回**条数与内容完全一致**（除计划内变更） |
-| 真实数据 | **测试全程不读写 `%APPDATA%/worklog-assistant/Data`**，全部用 `os.tmpdir()` |
-| 回归 | 上一个版本的全部测试仍通过 |
-| 回滚 | 提供明确的代码回退与数据回退步骤 |
-
----
-
-## 八、需要你在实现前再确认的 3 个细节
-
-以下三点已写入计划，但**实现时需要你拍板**，因为它们影响用户可感知的行为：
-
-### Q1：极短时间的处理
-
-输入 `09:07—09:10`（3 分钟）。两端都吸附为 `09:00`，时长为 0。计划中的处理是「提升结束到 09:15」。是否认可？
-
-- 方案 A（计划采用）：提升到 15 分钟，`09:00—09:15`
-- 方案 B：拒绝保存，提示「人工记录最短 15 分钟，请调整时间」
-
-### Q2：与自动记录重叠时的语义
-
-补记的主要用途就是覆盖自动记录的误判，所以「与自动记录重叠」是**正常需求**，不应阻断。
-
-计划中的处理：弹出提示但**默认允许**（因为这是预期行为），只在与**另一条人工记录**重叠时默认阻断。
-
-是否认可这种区分？
-
-### Q3：`rid` 是否也加给历史数据（只在被编辑时补）
-
-计划是「不批量改写历史」。但某条旧记录被用户编辑时（`updateDisplayRecord`），会整文件重写。此时是否顺便给该条补 `rid`？
-
-- 方案 A（计划采用）：补。因为文件本来就要重写，顺手加不增加风险，还能让这条记录获得稳定身份
-- 方案 B：不补。严格保持「旧数据一个字节都不动」
+| 历史数据 | 版本前后同一批数据条数与内容一致（除计划内变更） |
+| 真实数据 | 全程不读写 `%APPDATA%/worklog-assistant/Data` |
+| 回归 | 上一版本全部测试仍通过 |
+| 回滚 | 提供明确代码回退与数据回退步骤 |
 
 ---
 
@@ -555,10 +771,17 @@ V0.10.2b  导入安全 ──────────────┘
 
 | 要求 | 执行情况 |
 |---|---|
-| 更新 `WORKLOG_1.0_AUDIT_ROUND2.md` | ✅ 将增加「决策确认」章节 |
-| 更新 `WORKLOG_1.0_AUDIT.md` | ✅ 将增加决策落地说明 |
-| 新增 `WORKLOG_1.0_IMPLEMENTATION_PLAN.md` | ✅ 本文件 |
-| 列出文件范围/方案/测试/验收 | ✅ 见各版本章节 |
-| 说明历史数据风险与回滚 | ✅ 见 2.6、3.7、4.6 |
-| 只改文档，不改生产代码 | ✅ `git diff -- electron/ src/ tests/` 为空 |
-| 完成后停止 | ✅ 未开始任何版本开发 |
+| 更新三份文档 | ✅ 计划、第一轮、第二轮 |
+| 逐项核对版本号/决策编号/测试矩阵/验收标准 | ✅ 见 §十 自检 |
+| 只改文档，不改生产代码和测试代码 | ✅ `git diff -- electron/ src/ tests/` 为空 |
+| 提交并推送后停止 | ✅ |
+
+### 自检结果
+
+| 检查项 | 结果 |
+|---|---|
+| 版本号一致性 | V0.10.2a / V0.10.2b / V0.10.3 / V0.10.4 四份文档一致 |
+| 决策编号 | D-01~D-04 三份文档均出现且语义一致 |
+| 测试矩阵 | 25 项，覆盖两套迁移、导入、rid、D-02 |
+| 验收标准 | 每个版本均有独立验收标准 |
+| v1 错误更正 | §1.5 明确作废「完全消除失真」说法；§2.8 修正回滚流程 |
