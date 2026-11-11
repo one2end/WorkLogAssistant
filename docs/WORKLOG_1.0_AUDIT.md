@@ -6,6 +6,14 @@
 > 审计日期：2026-11-12
 > 性质：只读审计 + 补充测试。本次不修改任何生产代码、不改数据格式、不动 15 分钟规则。
 
+> ## ⚠️ 本报告已被第二轮审查修订
+>
+> 第二轮独立审查（`docs/WORKLOG_1.0_AUDIT_ROUND2.md`）核实本报告后，发现 **1 个被完全遗漏的 P0 问题**、**2 处结论错误**、**1 处建议错误**、**测试质量结论过于乐观**。本文已在对应位置插入 `【第二轮修订】` 标注。
+>
+> **以第二轮报告为准的地方**：问题严重度分级、去重方案、安全结论、测试分类、开发路线图。
+>
+> 最重要的更正：**覆盖导入会永久删除全部原始自动采集记录**（`clearActivities()` → `unlinkSync`，无备份、不进回收站）。这是本报告完全漏掉的，现列为 P0-01。
+
 ---
 
 ## 零、结论摘要
@@ -13,11 +21,13 @@
 先说最重要的四条：
 
 1. **记录层只读是真的做到了。** `StorageManager.layerOf()` 以 `source` 字段判定层级，`updateDisplayRecord` 对记录层直接返回错误。已补 5 条测试锁定，全部通过。
-2. **15 分钟规则目前有 7 处独立实现，取整策略不一致。** 最直接的后果：用户填 09:14 补记，保存后变成 09:00；填 22 分钟，保存成 15 分钟。这是本次发现的最影响体验的问题。
-3. **安全基线偏弱。** 三个窗口全部 `nodeIntegration: true` + `contextIsolation: false`，没有 preload，73 个 IPC 通道无来源校验。当前不构成即时攻击面（只加载本地文件），但它是所有后续安全改造的前置阻塞项。
+2. **15 分钟规则目前有 7 处独立实现，取整策略不一致。** 最直接的后果：用户填 09:14 补记，保存后变成 09:00；填 22 分钟，保存成 15 分钟。
+3. **安全基线偏弱。** 三个窗口全部 `nodeIntegration: true` + `contextIsolation: false`，没有 preload，73 个 IPC 通道无来源校验。当前不构成即时攻击面（只加载本地文件），但它是所有后续安全改造的前置阻塞项。【第二轮修订】`enableRemoteModule` 在 Electron 28 已移除，是**无效选项**，安全影响为零，不应与风险并列。
 4. **数据层有两个真实的重复累计风险。** 旧版 JSON 导入无去重键（同一文件导两次就翻倍）；iCloud 冲突副本与主文件同存时会读成两条。
 
-测试基线：**109/109 通过**（原有 95 + 新增 14），lint 0 告警，构建成功。
+【第二轮新增】5. **覆盖导入会删除全部原始记录**（P0）。`clearActivities()` 用 `unlinkSync` 删除 `activities/` 下所有 `.json` 与 `.jsonl`，不分记录层/展示层，无备份、不进回收站。实测已确认。
+
+测试基线：**109/109 通过**（原有 95 + 新增 14），lint 0 告警，构建成功。【第二轮修订】其中**约 9 条不是契约测试**：`manualSnap.test.cjs` 5 条复刻了算法而非调用生产函数（假绿），`duplicateImport.test.cjs` 2 条锁定的是已知错误行为。真正有契约价值约 100 条。详见第二轮报告第二节。
 
 ---
 
@@ -176,6 +186,14 @@ webPreferences: {
   enableRemoteModule: true   // 主窗口额外开启
 }
 ```
+
+> **【第二轮修订】上一版此处结论有误。**
+>
+> `enableRemoteModule` 自 Electron 14 起随 `remote` 模块一并移除，在本项目使用的 **Electron 28.3.3 中是完全无效的选项**，不产生任何行为，**安全影响为零**。
+>
+> 准确表述应为：真实风险只有 `nodeIntegration: true` + `contextIsolation: false` 两项。`enableRemoteModule` 全仓库仅出现 1 次（`main.js:302`），删除它属于**代码清理**，不属于安全修复，可与任意改动合并，不构成独立任务。
+>
+> 另外补充实测数据：前端对 Node 的依赖面为 **0**（无任何 `fs`/`path`/`child_process` 引用），80 个 Electron 调用中 `invoke` 79 个、`on` 1 个、`send` 0 个。这让 preload 改造的实际工作量远小于上一版估计。
 
 **影响**：渲染进程拥有完整 Node 权限（`fs`、`child_process`、`require`）。任何能注入到渲染层的 XSS 都会升级为任意代码执行。
 
@@ -340,7 +358,15 @@ if (Array.isArray(data.activities)) {
 
 **影响**：用户重复点击导入，工时翻倍，且无法区分哪条是重复的（记录层不可编辑，只能手工删文件）。
 
-**建议**：导入前建立去重键 `timestamp + processName + windowTitle + durationMs`，跳过已存在记录，并在结果里报告「导入 N 条，跳过 M 条重复」。
+> **【第二轮修订】上一版建议有误，已推翻。**
+>
+> 上一版写的是「建立去重键 `timestamp + processName + windowTitle + durationMs`」。**这是错的。**
+>
+> 实测证据：同一天落盘 4 条记录，其中第 1 条与第 4 条字段完全相同（`t`、`app`、`dur`、`kind`、`title` 全同），但二者都是合法记录（checkpoint 重开同应用段时，两次采样可能落在同一毫秒）。按上一版的键去重，这 4 条会被合并成 1 条，**误删 3 条合法记录**。
+>
+> 更根本的问题：记录本身**没有稳定唯一标识**。`storageManager.js:120` 的 `id` 是 `${rec.t}#${index}`，`index` 是**读取时的数组下标**，删掉一行后面全部漂移，不能作持久标识。
+>
+> 正确方案（详见第二轮报告 P0-03）：先引入 `rid`（新记录生成 UUID，落盘保留），旧记录用「文件名+行号」推导稳定指纹；去重**只用于「已知是同一份数据」的场景**（同导入批次、同一主文件的冲突副本），绝不跨批次做内容去重。
 
 ### 4.4 D4 iCloud 冲突副本与主文件不去重
 
@@ -359,7 +385,7 @@ for (const name of fs.readdirSync(dir)) {
 
 **实测**（`tests/duplicateImport.test.cjs` 第 2 条）：同一条记录同时存在于主文件和副本，读成 **2 条**。
 
-**建议**：读取时按 `t + app + dur` 去重（保留首次出现）。注意：这与「保留原始数据」不冲突——去重发生在读取聚合层，磁盘文件不动。
+> **【第二轮修订】** 同 D3，不能用内容做去重键。修复方案为按 `rid` 识别，见第二轮报告 P0-03。
 
 ### 4.5 D5 跨午夜拆分——已验证正确
 
@@ -410,7 +436,13 @@ function splitRecordAtMidnight(record) {
 
 **建议**：超出上限时不要静默截断，而是把溢出部分写到一个 `pending/overflow-YYYYMMDD-HHmm.jsonl` 待恢复文件，并在 UI 上提示「有 N 条记录待写入」。这是数据安全项，优先级应高于新功能。
 
-### 4.7 D7 历史数据迁移无可回滚
+### 4.7 D7 历史数据迁移无可回滚，且不幂等
+
+> **【第二轮修订】严重度由 P1 升级为 P0，问题描述补充「不幂等」。**
+>
+> 上一版只说「没有 `.bak` 备份」，实际更严重：`_migrateIfNeeded`（`storageManager.js:232-241`）**逐日写入完成后才 `renameSync` 源文件**。若中途失败，源文件仍在，下次启动会把已写入的天再 `concat` 一次。**实测：`1 1 1` → 重启后 `2 2 2`。**
+>
+> 修复不能靠去重（会误删合法重复），要靠迁移状态凭证 `.migration-state.json` + `.pre-migrate.bak`。详见第二轮报告 P0-02。
 
 **位置**：`storageManager._migrateIfNeeded`（`storageManager.js:220`）、`fileMigration.js`（38 行）、`migrateDataTo`（`storageManager.js:928`）
 
@@ -418,9 +450,23 @@ function splitRecordAtMidnight(record) {
 
 **实测依据**：`tests/fileMigration.test.cjs` 覆盖了迁移成功路径，但没有覆盖「迁移到一半失败」的回滚。
 
-**建议**：迁移前把原文件复制为 `*.pre-migrate.bak`，迁移成功后再删除（或保留一个版本）。这是规范第 3 条 P0「数据安全与可靠性」的直接要求。
+### 4.8 D8【第二轮新增 P0】覆盖导入会删除全部原始记录
 
-### 4.8 D8 自定义数据目录缺少可用性预检（历史事故根因）
+**位置**：`main.js:1514-1516` → `storageManager.js:663-678`（`clearActivities`）
+
+```js
+if (mode === 'overwrite') {
+  storageManager.clearActivities();   // 删 activities/ 下所有 .json 与 .jsonl
+}
+```
+
+`clearActivities()` 内部是 `fs.unlinkSync(p)`，**不分记录层/展示层，不进回收站，无任何备份**。实测：清空后 `activities/` 为空，数据目录无备份残留。
+
+触发路径：设置页「覆盖」按钮（`SettingsView.vue:277`）→ `App.vue:1173` → `import-data`（`main.js:1453`），**无二次确认**。且提示文案写「『覆盖』仅对单文件导入生效」，未告知会删除原始记录。
+
+这直接违反规范第 3 条 P0-1、第 4 条「原始记录只读」、第 9 条「删除必须有依据」。详见第二轮报告 P0-01。
+
+### 4.9 D9 自定义数据目录缺少可用性预检（历史事故根因）
 
 **位置**：`main.js` `save-config` / `migrate-storage` / `select-storage-folder`
 
@@ -561,27 +607,32 @@ splitCrossMonth/跨日       // 按刻度切
 
 ## 七、需要修改的具体文件
 
-按改造优先级排列，标注改动性质与风险。
+> **【第二轮修订】** 本节顺序已按第二轮报告的严重度重排。P0 部分新增了覆盖导入与迁移幂等两项，原先排在最前的「activityRecorder 静默丢弃」降为 P1。
 
 ### P0 — 数据安全（必须先做）
 
-| 文件 | 改动 | 风险 |
-|---|---|---|
-| `electron/activityRecorder.js:290` | `slice(-200)` 静默丢弃 → 溢出写待恢复文件 + UI 提示 | 低，局部修改 |
-| `electron/main.js`（`save-config` / `migrate-storage`） | 切目录前做可用性预检（抽样读 + 超时 + `0x400000` 属性检测） | 中，需设计错误提示 |
-| `electron/storageManager.js` | 数据读取迁 `worker_threads`，超时 `terminate()` | **高**，涉及全部读路径，建议单独一版 |
-| `electron/main.js:1510-1524` | 导入去重键 `t+app+title+dur`，报告跳过条数 | 低 |
-| `electron/storageManager.js:167-182` | 跨文件读取去重（`t+app+dur`） | 低，只影响聚合层 |
-| `electron/storageManager.js:220` | 迁移前留 `*.pre-migrate.bak` | 低 |
+| 文件 | 改动 | 风险 | 对应问题 |
+|---|---|---|---|
+| `electron/storageManager.js:663` | 新增 `snapshotBeforeImport()`；`clearActivities` 加备份或直接废弃 | 低 | P0-01 |
+| `electron/main.js:1504-1520` | 覆盖导入改「staging → 校验 → 替换 → 失败回滚」 | 中 | P0-01 |
+| `src/views/SettingsView.vue:277-279` | 二次确认 + 修正「仅对单文件生效」的误导文案 | 低 | P0-01 |
+| `electron/storageManager.js:220-271` | 迁移加 `.migration-state.json` + `.pre-migrate.bak`，实现幂等 | 中 | P0-02 |
+| `electron/activityRecorder.js` + `storageManager.js:316` | 新增 `rid` 字段（只对新记录生效） | 低 | P0-03 |
+| `electron/storageManager.js:120` | 旧记录改「文件名+行号」稳定指纹，替代数组下标 id | 中 | P0-03 |
+| `electron/main.js:1510-1524` | 导入引入 `importBatchId`，仅同批次去重 | 低 | P1-01 |
+| `electron/storageManager.js:167-182` | 冲突副本按 `rid` 去重 | 低 | P1-01 |
 
-### P0 — 补录可靠性
+### P1 — 可靠性与体验
 
-| 文件 | 改动 | 风险 |
-|---|---|---|
-| 新增 `electron/slotRule.js` | 15 分钟规则唯一实现 | 低（新增文件） |
-| `main.js:1132-1173` | `manualRecordFromPayload` 迁出 `main.js`，改为引用 `slotRule`；修正错误提示文字 | 中，影响两个 IPC 入口 |
-| `storageManager.js:610-611`、`planManager.js:165/183/265`、`analytics.js:1212-1214`、`App.vue:541`、`TimelineView.vue:1116` | 改为调用 `slotRule` | 中，7 处需逐一对齐 |
-| `TimelineView.vue:1116` vs `main.js:1154` | 前后端吸附策略统一（**待你决策方向**） | 中 |
+| 文件 | 改动 | 风险 | 对应问题 |
+|---|---|---|---|
+| `electron/activityRecorder.js:290` | `slice(-200)` 静默丢弃 → 溢出写待恢复文件 + UI 提示 | 低 | P1-04 |
+| `electron/main.js`（`save-config` / `migrate-storage`） | 切目录前做可用性预检（抽样读 + 超时 + `0x400000` 属性检测） | 中 | P1-05 |
+| `electron/storageManager.js` | 数据读取迁 `worker_threads`，超时 `terminate()` | **高** | P1-05 |
+| 新增 `electron/slotRule.js` | 15 分钟规则唯一实现 | 低 | P1-03 |
+| `main.js:1132-1173` | `manualRecordFromPayload` 迁出，改为引用 `slotRule`；修正错误提示文字 | 中 | P1-03 |
+| `storageManager.js:610-611`、`planManager.js:165/183/265`、`analytics.js:1212-1214`、`App.vue:541`、`TimelineView.vue:1116` | 改为调用 `slotRule` | 中 | P1-03 |
+| `TimelineView.vue:1116` vs `main.js:1154` | 前后端吸附策略统一（**待决策 D-02**） | 中 | P1-03 |
 
 ### P1 — 安全基线（渐进，不一次到位）
 
@@ -615,35 +666,45 @@ splitCrossMonth/跨日       // 按刻度切
 
 严格一版一件事，每版独立提交 + 版本标记，通过独立审查后再进行下一版。
 
-### V0.10.2 — 15 分钟规则收敛（建议先做）
+> **【第二轮修订】整个路线图已重排。** 原则改为「数据安全 > 功能 > 架构」。原先把「15 分钟规则」放第一版，现在后移——因为丢数据比体验差严重得多。以下为修订后版本，完整任务拆解与验收标准见第二轮报告第五节。
 
-**为什么先做这个**：它是纯逻辑，测试好写，不碰数据格式，用户能直接感知改善。而且它能把 `manualRecordFromPayload` 从 `main.js` 里解放出来，为后续测试铺路。
+### V0.10.2 — 覆盖导入与迁移不丢数据（P0）
 
-范围：新增 `slotRule.js` → 迁出 `manualRecordFromPayload` → 7 处调用点对齐 → 前端预览与后端保存一致 → 修正错误提示文字。
+堵住两个不可恢复的数据丢失口子：覆盖导入删光原始记录（P0-01）、迁移中断后重复累计（P0-02）。
 
-**前置**：需要你确认起始吸附方向（向下 or 就近）。
+涉及：`storageManager.js`（快照 + 迁移状态）、`main.js`（导入流程改 staging）、`SettingsView.vue`（二次确认）。
 
-### V0.10.3 — 数据写入可靠性
+**待决策 D-01**：覆盖导入是直接取消，还是保留但加快照+回滚？
+**待决策 D-04**：是否拆成 0.10.2a（迁移）与 0.10.2b（导入）两次提交？我倾向拆。
 
-范围：`slice(-200)` 改溢出文件 + 迁移前后备份 + 导入去重 + 跨文件读取去重。
+### V0.10.3 — 记录唯一标识与去重治理（P0）
 
-理由：这四项都是「小改动、大收益」，改动集中在 `storageManager` 和一处导入逻辑，风险可控。
+引入 `rid`，让去重有正确工具而不是猜内容。冲突副本按 `rid` 去重，导入引入 `importBatchId`。
+**不迁移历史数据**，旧记录用「文件名+行号」推导指纹。
 
-### V0.10.4 — 存储目录可用性预检 + 异步化（P0 但改动大）
+**待决策 D-03**：是否接受「`rid` 只对新记录生效」。
 
-范围：切换目录前预检；数据读取迁 `worker_threads`。
+### V0.10.4 — 15 分钟规则统一（P1）
 
-这是 11-10 / 11-11 两次卡死事故的根治。因为涉及所有读路径，建议单独一版，并做好回退准备（可先只对 `analytics` 做 worker，`storageManager` 保持同步，分批推进）。
+新增 `electron/slotRule.js` 作为唯一实现，迁出 `manualRecordFromPayload`，7 处调用点对齐，前后端吸附策略统一。
 
-### V0.10.5 — 安全基线：preload + 上下文隔离
+**待决策 D-02**：起始吸附方向、时长取整方式。
 
-范围：先做 `focusWindow` 和 `floatWindow`（功能单纯），验证通过后再动 `mainWindow`。
+### V0.10.5 — 存储目录可靠性与主线程卡死（P1）
 
-这是最大的一次改动，必须单独一版，且不应与任何功能改动混在一起。
+切目录前预检（抽样读 + 超时 + 仅在线属性检测）；数据读取迁 `worker_threads`；`slice(-200)` 改溢出文件。
 
-### V0.10.6 — 密钥加密 + 外部链接校验 + CORS 收紧
+这是 11-10 / 11-11 两次卡死事故的根治。涉及全部读路径，**风险最高的一版**，建议先只对 `analytics` 做 worker，`storageManager` 保持同步，分两次提交。
 
-范围小，可以一次做完。
+### V0.10.6 — Electron 安全改造（P1，六步渐进）
+
+S1 新增 preload（不启用）→ S2 前端改用 `worklog` API（保留 require 降级）→ S3 两个小窗切换 → S4 主窗切换 → S5 移除前端 require → S6 IPC 来源校验。
+
+每步独立验收，任一功能失效立即回退该步。
+
+### V0.10.7 — 代码清理与诊断改进（P2）
+
+删除无效的 `enableRemoteModule`、`atomicFile` 错误链修正、密钥 `safeStorage` 加密、CORS 收紧、`openExternal` 协议校验、超大文件拆分。
 
 ### V0.11.0 — 打包发布
 
@@ -657,6 +718,8 @@ splitCrossMonth/跨日       // 按刻度切
 
 | 功能 | 位置 | 保留理由 |
 |---|---|---|
+| 合并导入 | `SettingsView.vue:276` → `main.js:1511` | 换机恢复的正当路径。但需加去重（按 `importBatchId`） |
+| **覆盖导入** | `SettingsView.vue:277` → `main.js:1514` | **【第二轮修订】本条从「保留」改为「待决策」。** 它当前会用 `clearActivities()` 删除全部原始记录且无备份。若保留必须先修 P0-01；若「切换数据目录」已能覆盖使用场景，建议直接取消（决策 D-01） |
 | 旧版 JSON 读取（`activities/YYYY-MM-DD.json`） | `storageManager._readActivityFile:148` | 历史数据兼容。删了会让早期数据「凭空消失」 |
 | iCloud 冲突副本合并 | `storageManager._activityFilesOfDay:167` | 用户数据目录可能在任何同步盘下。虽然当前不去重（D4），但删除会让数据丢失 |
 | `enableRemoteModule` | `main.js:302` | 已在 ES 中废弃，但**不能单独删**——必须与 preload 改造一起处理，否则前端 `require('electron')` 会断裂 |
@@ -702,12 +765,20 @@ splitCrossMonth/跨日       // 按刻度切
 
 1. ~~`deleteDisplayRecord`（`storageManager.js:638`）是否判断了 `layerOf`~~ —— 已复核，**有判断**（第 649 行），五处写路径全部守住记录层
 2. `planManager.js:265` 计划转事实产出非 15 倍数的 `durationMin`
-3. ~~`activityRecorder` 的 `checkpointMs` 与「跨午夜」交互：5 分钟封口点若恰好跨 0 点，是否会产出两天的记录？~~ —— 已实测（23:50 起 20 分钟、按 5 分钟封口切四段）：**行为正确**。23:50 / 23:55 落 `2026-11-08.jsonl`，00:00 / 00:05 落 `2026-11-09.jsonl`，`_toDateStr` 按本地时区分文件，无错位、无丢失
-4. ~~`analytics.js` 1212 行 `cv.setMinutes(Math.floor(...))` 是否处理了 `cv` 已过 23:45 的进位~~ —— 已复核，**无进位问题**。`setMinutes(floor(min/15)*15)` 只改分钟字段不跨小时（23:53 → 23:45），`getHours()` 不受影响
-5. `local v0.1.0` tag 与远程冲突（`would clobber existing tag`），仅影响本地 tag，不影响代码
+3. ~~`checkpointMs` 跨午夜交互~~ —— 已实测，**行为正确**，见第二轮报告 2.4
+4. ~~`analytics.js:1212` 进位问题~~ —— 已复核，**无进位问题**
+5. `local v0.1.0` tag 与远程冲突，仅影响本地 tag
 6. 前端三个超大文件（3173 / 1686 / 1624 行）的拆分
 7. AI 发送端无二次隐私过滤（S7）
 8. `?token=` 查询串鉴权会进浏览器历史
+
+**【第二轮新增待办】**
+
+9. `atomicFile.js:50` 抛出 `lastError` 而非 `directError`，错误码误导（P2-01）
+10. `recordImmutability.test.cjs` 缺 `delete require.cache`，4 个测试共用第一个临时目录（2.2）
+11. `manualSnap.test.cjs` 复刻算法，需在 `slotRule.js` 落地后改为直接调用生产函数（2.1）
+12. `duplicateImport.test.cjs` 第 1、2 条在修复后需改为断言正确行为（2.3）
+13. `enableRemoteModule` 无效选项，清理时删掉（P1-02）
 
 ---
 
@@ -715,10 +786,11 @@ splitCrossMonth/跨日       // 按刻度切
 
 | 类型 | 路径 | 说明 |
 |---|---|---|
-| 审计报告 | `docs/WORKLOG_1.0_AUDIT.md` | 本文件 |
-| 新增测试 | `tests/recordImmutability.test.cjs` | 5 条，原始记录只读 |
-| 新增测试 | `tests/manualSnap.test.cjs` | 5 条，15 分钟口径（含 KNOWN ISSUE） |
-| 新增测试 | `tests/duplicateImport.test.cjs` | 4 条，重复导入与副本去重、跨午夜封口归属 |
+| 审计报告 | `docs/WORKLOG_1.0_AUDIT.md` | 本文件（第一轮，已被第二轮修订） |
+| 审查报告 | `docs/WORKLOG_1.0_AUDIT_ROUND2.md` | **第二轮独立审查，以此为准** |
+| 新增测试 | `tests/recordImmutability.test.cjs` | 5 条，原始记录只读（⚠️ cache 缺陷待修） |
+| 新增测试 | `tests/manualSnap.test.cjs` | 5 条，15 分钟口径（⚠️ 行为快照，非契约测试） |
+| 新增测试 | `tests/duplicateImport.test.cjs` | 4 条，含 2 条已知缺陷回归 |
 | 分支 | `worklog-1.0-dev` | 从 `f1b612c` 创建 |
 
 **未做**：生产代码一行未改；数据格式未动；15 分钟规则未改；未开发任何新功能。
@@ -727,13 +799,17 @@ splitCrossMonth/跨日       // 按刻度切
 
 ## 十三、下一步建议
 
-**建议 V0.10.2 做「15 分钟规则收敛」**，理由见第八节。
+> **【第二轮修订】本节结论已变更。** 原建议「V0.10.2 做 15 分钟规则收敛」**不再成立**——覆盖导入删光原始记录（P0-01）与迁移不幂等（P0-02）优先级更高。
 
-开工前需要你决策两件事：
+**建议 V0.10.2 做「覆盖导入与迁移不丢数据」**，理由见第八节与第二轮报告第五节。
 
-1. **起始吸附方向**：向下（09:14 → 09:00，不侵占前块）还是就近（09:14 → 09:15，符合直觉且与前端预览一致）？我倾向于就近。
-2. **时长取整方式**：当前 `Math.round` 会让 22 分钟变成 15 分钟（少记）。是保持就近取整，还是改为向上取整（22 → 30，保证不低估）？
+开工前需要你确认四项决策（详见第二轮报告第六节）：
 
-这两条定了，0.10.2 的范围就能完全确定。
+- **D-01**：覆盖导入直接取消，还是保留但加快照+回滚？我倾向取消。
+- **D-02**：15 分钟起始吸附方向、时长取整方式（V0.10.4 才用，可稍后定）。
+- **D-03**：`rid` 是否接受「只对新记录生效，不迁移历史数据」？我倾向接受。
+- **D-04**：V0.10.2 是否拆成 0.10.2a（迁移）与 0.10.2b（导入）？我倾向拆。
 
-**本次到此停止，等待独立审查。** 未开始 V0.10.2，未推送分支。
+四项定了，0.10.2 的范围就能完全确定。
+
+**本次到此停止，等待独立审查。** 未开始 V0.10.2。
