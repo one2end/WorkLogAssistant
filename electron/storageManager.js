@@ -5,6 +5,7 @@ const { copyMissingData } = require('./fileMigration');
 const { writeFileAtomic } = require('./atomicFile');
 const { splitRecordAtMidnight } = require('./timeSplit');
 const writeGate = require('./writeGate');
+const { MigrationEngine } = require('./legacyMigration');
 
 class StorageManager {
   constructor(customBasePath) {
@@ -220,57 +221,66 @@ class StorageManager {
       });
   }
 
-  _migrateIfNeeded() {
-    // Migrate legacy activities.json → per-day files
-    if (fs.existsSync(this._legacyActivitiesFile)) {
+  _migrateIfNeeded(options) {
+    // 两套迁移完全独立：各自的 <sha8>、manifest、快照、staging、status。
+    // 任一套失败不影响另一套——活动数据迁不动时，摘要没必要跟着一起停。
+    //
+    // 这里的每一次写入都在 legacyMigration 的 withMigrationContext 里进行，
+    // 否则迁移自己会被自己刚拿到的写锁挡住。
+    this._migrationResults = {};
+
+    const jobs = [
+      {
+        kind: 'activities',
+        sourcePath: this._legacyActivitiesFile,
+        targetDir: this.activitiesDir
+      },
+      {
+        kind: 'summaries',
+        sourcePath: this._legacySummariesFile,
+        targetDir: this.summariesDir
+      }
+    ];
+
+    for (const job of jobs) {
       try {
-        const all = JSON.parse(fs.readFileSync(this._legacyActivitiesFile, 'utf8'));
-        if (Array.isArray(all) && all.length > 0) {
-          const grouped = {};
-          all.forEach(a => {
-            const dateStr = this._toDateStr(a.timestamp);
-            if (!grouped[dateStr]) grouped[dateStr] = [];
-            grouped[dateStr].push(a);
-          });
-          for (const [dateStr, items] of Object.entries(grouped)) {
-            const filePath = this._activityFile(dateStr);
-            const existing = this._readJsonFile(filePath);
-            this._writeJsonFile(filePath, existing.concat(items));
+        const engine = new MigrationEngine({
+          kind: job.kind,
+          sourcePath: job.sourcePath,
+          targetDir: job.targetDir,
+          dataDir: this.dataDir,
+          toDateStr: ts => this._toDateStr(ts),
+          onLog: (msg, level) => {
+            if (level === 'error') console.error(msg);
+            else console.log(msg);
           }
-          console.log(`已迁移 ${all.length} 条活动记录到按天存储`);
+        });
+        const result = engine.run(Object.assign({ auto: true }, options || {}));
+        this._migrationResults[job.kind] = result;
+
+        if (result && result.reason === 'terminal-workspace-requires-input') {
+          // 上次迁移停在 conflict/failed/rolledback。不自动重跑，也不静默——
+          // 用户需要知道有东西卡在那里等他处理。
+          console.warn(
+            `${job.kind} 迁移未完成（${result.workspaces.map(w => w.phase).join(', ')}），` +
+            `已停止自动处理，请人工确认：${this.dataDir}\\.migration`
+          );
+        } else if (result && result.ok === false && !result.skipped && result.reason !== 'another-migration-running') {
+          console.warn(`${job.kind} 迁移未完成：${result.reason}${result.message ? ' — ' + result.message : ''}`);
         }
-        // Rename legacy file as backup
-        fs.renameSync(this._legacyActivitiesFile,
-          this._legacyActivitiesFile + '.migrated');
       } catch (error) {
-        console.error('迁移活动数据失败:', error);
+        // 构造函数不能因为迁移失败而抛错，否则应用起不来
+        console.error(`${job.kind} 迁移异常:`, error);
+        this._migrationResults[job.kind] = { ok: false, reason: 'exception', error: error.message };
       }
     }
 
-    // Migrate legacy summaries.json → per-day files
-    if (fs.existsSync(this._legacySummariesFile)) {
-      try {
-        const all = JSON.parse(fs.readFileSync(this._legacySummariesFile, 'utf8'));
-        if (Array.isArray(all) && all.length > 0) {
-          const grouped = {};
-          all.forEach(s => {
-            const dateStr = this._toDateStr(s.timestamp);
-            if (!grouped[dateStr]) grouped[dateStr] = [];
-            grouped[dateStr].push(s);
-          });
-          for (const [dateStr, items] of Object.entries(grouped)) {
-            const filePath = this._summaryFile(dateStr);
-            const existing = this._readJsonFile(filePath);
-            this._writeJsonFile(filePath, existing.concat(items));
-          }
-          console.log(`已迁移 ${all.length} 条摘要记录到按天存储`);
-        }
-        fs.renameSync(this._legacySummariesFile,
-          this._legacySummariesFile + '.migrated');
-      } catch (error) {
-        console.error('迁移摘要数据失败:', error);
-      }
-    }
+    return this._migrationResults;
+  }
+
+  /** 最近一次启动迁移的结果，供设置页展示冲突明细。 */
+  getMigrationStatus() {
+    return this._migrationResults || {};
   }
 
   // --- Data Dir ---
