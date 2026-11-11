@@ -211,6 +211,12 @@
 
     <WeeklyReview v-if="cards.weeklyReview" :selected-date="selectedDate" />
 
+    <CompareCard
+      v-if="cards.compare"
+      :selected-date="selectedDate"
+      :theme="theme"
+    />
+
     <!-- 活跃度：跨度由设置页的热力图周数决定 -->
     <section v-if="cards.heatmap" class="card heat-card">
       <div class="card-head">
@@ -360,6 +366,7 @@ import PluginDock from '../components/PluginDock.vue';
 import ProductivityOverview from '../components/ProductivityOverview.vue';
 import ActivityThreads from '../components/ActivityThreads.vue';
 import WeeklyReview from '../components/WeeklyReview.vue';
+import CompareCard from '../components/CompareCard.vue';
 import PlanOverview from '../components/PlanOverview.vue';
 import { colorForCategory } from '../styles/palette.js';
 import { readPath } from '../plugins/registry.js';
@@ -380,7 +387,7 @@ function balanceFromSlots(report) {
 
 export default {
   name: 'TodayView',
-  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock, ProductivityOverview, ActivityThreads, WeeklyReview, PlanOverview },
+  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock, ProductivityOverview, ActivityThreads, WeeklyReview, CompareCard, PlanOverview },
   props: {
     config: { type: Object, default: () => ({}) },
     report: { type: Object, required: true },
@@ -413,7 +420,7 @@ export default {
     /** 首页卡片显隐：配置缺字段时默认全开，旧配置不用迁移 */
     cards() {
       const all = {};
-      ['heatmap', 'session', 'plan', 'threads', 'weeklyReview', 'composition', 'apps', 'dataNotes', 'focusNotes', 'aiInsights']
+      ['heatmap', 'session', 'plan', 'threads', 'weeklyReview', 'compare', 'composition', 'apps', 'dataNotes', 'focusNotes', 'aiInsights']
         .forEach(k => { all[k] = true; });
       return { ...all, ...((this.config && this.config.dashboard && this.config.dashboard.cards) || {}) };
     },

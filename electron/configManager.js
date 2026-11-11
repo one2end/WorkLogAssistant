@@ -177,7 +177,10 @@ class ConfigManager {
           plan: true,
           dataNotes: true,
           focusNotes: true,
-          aiInsights: true
+          aiInsights: true,
+          threads: true,
+          weeklyReview: true,
+          compare: true
         },
         heatmapWeeks: 12
       },

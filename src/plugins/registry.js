@@ -53,6 +53,7 @@ export const DASHBOARD_CARDS = [
   { key: 'plan', label: '今日计划' },
   { key: 'threads', label: '活动线程' },
   { key: 'weeklyReview', label: '周回顾草稿' },
+  { key: 'compare', label: '周期对比' },
   { key: 'composition', label: '时间构成' },
   { key: 'apps', label: '应用排行' },
   { key: 'focusNotes', label: '专注与随手记' }
