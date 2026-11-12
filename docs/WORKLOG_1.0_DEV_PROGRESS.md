@@ -765,3 +765,90 @@ findOverlaps(dateStr, start, end, records) // → [{ index, record, overlapMs, o
 | `17accb8` | Spill the buffer to a file instead of silently dropping the oldest records |
 | `be1dce6` | Check that a storage directory can actually be read before switching to it |
 | `91922d4` | Compute day reports off the main thread, and never report failure as emptiness |
+
+---
+
+# V0.10.6：规划完成（未开发）
+
+> 本轮只做规划，**未修改任何生产代码**。
+> 完整任务书：`docs/WORKLOG_1.0_V0106_TASK.md`
+
+## 版本范围调整
+
+原计划：
+- V0.10.6 = Electron 安全改造（S1-S6）
+- V0.10.7 = 代码清理（含密钥加密、CORS、openExternal）
+
+现合并为 **V0.10.6 = Electron 安全与本地数据边界加固**，含三组：
+- **A** Electron 运行环境（S1-S6 保持原样）
+- **B** 本地数据与访问（原 V0.10.7 安全项）
+- **C** AI 隐私与数据出口（本版新增）
+
+V0.10.7 缩减为 `atomicFile` 错误链 + 文件拆分 + 一般清理。
+
+## 实测现状（本次重新扫描，非引用旧报告）
+
+| 项 | 实测值 |
+|---|---|
+| 窗口数 | 3（main / focus / float） |
+| `nodeIntegration: true` | 3 处全部开启 |
+| `contextIsolation: false` | 3 处全部关闭 |
+| `enableRemoteModule: true` | 1 处（Electron 28 起无效） |
+| IPC 通道 | **74 个**（审计文档写 73，多的是 V0.10.4 新增的 `preview-snap`） |
+| 前端 `require('electron')` | 6 个文件 |
+| 小窗加载方式 | `loadFile(focus.html)` / `loadFile(float.html)`，非 Vue |
+| `safeStorage` | 未使用 |
+| 密钥 | 分文件（`config.local.json`）但明文 |
+| CORS `*` | 3 处 |
+| `openExternal` | 1 处，token 拼进 URL |
+| AI 发送 `windowTitle` | 是（3 处） |
+
+## 权限矩阵：静态扫描核实结果
+
+D-03 要求「必须经过完整静态调用扫描核实」。扫描结果：
+
+- **focus.html 实测调用**：`focus-add-note`、`focus-end`、`focus-hud-expand`、`focus-toggle-pause`、`show-main-window`
+- **float.html 实测调用**：`get-float-bounds`、`save-float-width`、`set-float-pos`、`set-float-width`、`show-main-window`、`toggle-monitoring`
+
+与 D-03 给定矩阵**完全一致**：64 主窗专用 + 1 三窗共享 + 1 双窗共享 + 4 专注专用 + 4 悬浮专用 = **74** ✅
+
+**额外发现（D-03 未列，但第 7 条要求纳入）**：事件订阅白名单
+- focus.html 订阅：`focus-hud`、`focus-theme`
+- float.html 订阅：`float-accent`、`float-theme`、`float-update`、`float-monitoring-status`
+
+## 已冻结的产品决策（来自 D-01 / D-02 / D-03 裁定）
+
+| 决策 | 值 |
+|---|---|
+| `ai.enabled` | false（不变） |
+| `ai.sendAppName` | true（仅 AI 开启后生效） |
+| `ai.sendWindowTitle` | **false**（必须用户主动开启） |
+| safeStorage 不可用 | 降级明文 + 持续提示，**不清空配置、不改 AI 状态** |
+| 密钥迁移 | 临时文件 + 原子替换 + 读回解密验证，成功后才清明文 |
+| 密文解不开 | 不解释为空、不覆盖原值 |
+| IPC 校验 | 三角色 + 默认拒绝 + 身份/mainFrame/URL/参数四重校验 |
+
+## 开发计划（10 阶段）
+
+| 组 | 阶段 | Commit 粒度 |
+|---|---|---|
+| A | A1 preload（不启用）/ A2 前端迁移 / A3 小窗隔离 / A4 主窗隔离 / A5 移除 require / A6 矩阵校验 | 6 |
+| B | B1 密钥加密 / B2 openExternal / B3 CORS / B4 删 enableRemoteModule | 4 |
+| C | C1 AI 出口过滤 + 标题开关 / C2 设置页展示 | 2 |
+
+## 回退方案
+
+- A 组每阶段独立 `git revert`，A4（主窗隔离）风险最高，失败不影响 A1-A3
+- B/C 同理
+- `safeStorage` 迁移保留明文备份 `.local.json.bak`
+
+## 本轮产出
+
+| 文件 | 变更 |
+|---|---|
+| `docs/WORKLOG_1.0_V0106_TASK.md` | **新增**，完整任务书 |
+| `docs/WORKLOG_1.0_AUDIT_ROUND2.md` | 更新 V0.10.6 / V0.10.7 范围 |
+| `docs/ROADMAP.md` | 新增「六·五 V0.10.x 工程治理」章节 |
+| `docs/WORKLOG_1.0_DEV_PROGRESS.md` | 本段 |
+
+**生产代码零改动**（`git status` 除上述文档外应为空）。

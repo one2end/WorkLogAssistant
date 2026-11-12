@@ -915,14 +915,53 @@ delete require.cache[key];
 **验收**：切到含「仅在线」文件的目录被拒绝并提示；人为制造阻塞文件，主进程不冻结。
 **可否回滚**：**风险较高**，涉及全部读路径。建议先只对 `analytics` 做 worker，`storageManager` 保持同步，分两次提交。
 
-### V0.10.6 — Electron 安全改造（P1，六步渐进）
+### V0.10.6 — Electron 安全与本地数据边界加固（P1，已扩范围）
 
-见 P1-02 的 S1-S6。每步独立提交、独立验收。
-**可否回滚**：每步都可独立回退。
+> **【范围调整】** 原计划将「安全改造（S1-S6）」与「代码清理（含密钥加密、CORS、openExternal）」拆成 V0.10.6 与 V0.10.7 两版。现合并为单一版本，理由：三者同属「本地应用安全边界」一个主题，拆开会让权限矩阵与密钥策略分两次落地，中间状态难以验收。
+>
+> 详细任务书：`docs/WORKLOG_1.0_V0106_TASK.md`
 
-### V0.10.7 — 代码清理与诊断改进（P2）
+**A 组 — Electron 运行环境（原 S1-S6，不变）**
 
-`enableRemoteModule` 删除、`atomicFile` 错误链、密钥 `safeStorage` 加密、CORS 收紧、`openExternal` 协议校验、超大文件拆分。
+| 阶段 | 内容 |
+|---|---|
+| A1 | 新增 preload，按角色暴露白名单 API，暂不启用 |
+| A2 | 6 个前端文件改走 `window.worklog`，require 保留为降级 |
+| A3 | focus + float 关 nodeIntegration、开 contextIsolation |
+| A4 | mainWindow 同上（**最高风险**） |
+| A5 | 移除前端全部 `require('electron')` |
+| A6 | 74 通道 + 事件订阅按角色矩阵校验 |
+
+**B 组 — 本地数据与访问（原 V0.10.7 主体）**
+
+| 阶段 | 内容 |
+|---|---|
+| B1 | `safeStorage` 加密 + 明文兼容 + 原子迁移 |
+| B2 | `openExternal` 协议白名单 |
+| B3 | CORS 收紧到 localhost |
+| B4 | 删除无效的 `enableRemoteModule` |
+
+**C 组 — AI 隐私出口（本版新增）**
+
+| 阶段 | 内容 |
+|---|---|
+| C1 | 发送前二次隐私过滤 + `ai.sendWindowTitle` 开关（默认 false） |
+| C2 | 设置页展示实际发送的数据类型 |
+
+**已冻结的产品决策**（见任务书 §五、§六）：
+- `ai.enabled` 默认 false（不变）；`ai.sendAppName` 默认 true；`ai.sendWindowTitle` **默认 false**
+- `safeStorage` 不可用时降级明文 + 持续提示，**不清空配置、不改变 AI 启用状态**
+- 74 通道按三角色矩阵校验，**未声明通道默认拒绝**
+
+**可否回滚**：A 组每阶段独立回退；B/C 同理。A4 失败不影响 A1-A3。
+
+**静态扫描核实结论**：实测 74 个通道与三角色调用关系，与 D-03 给定矩阵**完全一致**；额外发现事件订阅白名单（focus 2 个、float 4 个）需一并纳入 A6。
+
+### V0.10.7 — 代码清理与诊断改进（P2，范围已缩减）
+
+> **【范围调整】** 密钥加密、CORS、`openExternal` 校验、`enableRemoteModule` 删除已并入 V0.10.6，本版仅剩：
+
+`atomicFile` 错误链（P2-01）、超大文件拆分、一般代码清理。
 
 ### V0.11.0 — 正式打包发布
 
