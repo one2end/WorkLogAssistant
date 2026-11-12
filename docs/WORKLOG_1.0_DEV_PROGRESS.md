@@ -614,17 +614,17 @@ findOverlaps(dateStr, start, end, records) // → [{ index, record, overlapMs, o
 - 原 `KNOWN ISSUE` 用例改为断言**正确行为**（不是放宽）：`09:14 + 22min` 现在起点是 `09:15` 而非 `09:00`
 - 新增一条元测试：断言测试文件里**不得再出现** `snapCurrent` 或手写 `round(x/15)*15`
 
-## 测试与回归实测
+## 测试与回归实测（V0.10.4 收尾后）
 
 | 命令 | 退出码 | 结果 |
 |---|---|---|
 | `npm run lint` | **0** | 0 error / 0 warning |
 | `npm run build` | **0** | ✓ built |
-| `npm test` | **1** | **298 tests，297 pass，1 fail** |
+| `npm test` | **0** | **305 tests，305 pass，0 fail** |
 
-新增测试：`slotRule.test.cjs` 34 项 + `overlapDetection.test.cjs` 10 项；`manualSnap.test.cjs` 由 6 项改造为 9 项。
+新增测试：`slotRule.test.cjs` 34 项、`overlapDetection.test.cjs` 10 项、`slotRuleUi.test.cjs` 7 项；`manualSnap.test.cjs` 由 6 项改造为 9 项。
 
-唯一失败仍是 `focusEditing.test.cjs`（Electron 二进制未下载，DNS 受限），**与本版本无关，断言未放宽**。
+**`focusEditing.test.cjs` 已修复**——它只需要为 `electron.app.getPath` 提供桩，与后写的测试做法一致。这条从 V0.10.2a 之前就存在的失败至此消失，**整套测试首次全绿**。
 
 ## 独立审计
 
@@ -649,7 +649,28 @@ findOverlaps(dateStr, start, end, records) // → [{ index, record, overlapMs, o
 | `planManager` 起点向下取整 | B2，按裁定保留（计划语义） |
 | TimelineView 当前时刻取整 | UI 默认值（新建块的默认起点），非数据吸附 |
 | 历史记录 | **不做任何回填或迁移**，旧记录保持原有数值 |
-| `preview-snap` 的 UI 接入 | 后端已就绪，前端尚未接「保存前显示吸附结果」的界面 |
+| 滴答清单同步的计划起点 | 只用 `snapToStep` 统一时长吸附，起点沿用外部给的分钟数 |
+
+### 收尾阶段（同一版本内完成）
+
+按「版本以完整目标为单位」的原则，把 §5.3 的三条 UI 要求一并做完：
+
+| 方案要求 | 落地 |
+|---|---|
+| §5.3-1 保存前显示吸附结果 | `SegmentEditor` 显示「09:07—10:42 → 将保存为 09:00—10:45，共 105 分钟」 |
+| §5.3-2 失真必须明确告知 | 另起一行「输入 22 分钟，吸附后为 15 分钟」；对齐的输入不显示 |
+| §5.3-3 不足 15 分钟提示 | 显示「人工记录最短 15 分钟，当前 3 分钟，请调整时间」并禁用保存按钮 |
+
+**过程中发现的根因**：§5.3-3 这条提示此前**从来没有触发过**。`SegmentEditor.submit` 与
+`TimeRangePicker.setDuration` 都在提交前把时长下限夹到 15——用户填的 3 分钟到达主进程时
+已经是 15，后端校验永远看不到原始值。表面上只是「保证最小值」，实际把校验对象提前修正没了。
+现在两处下限都改为 1，真正的判定只在 `slotRule` 里做一次。
+
+**didaSync 的同类问题**：`didaSync.js:488` 只把毫秒换成整分钟，**从未吸附到 15**，
+于是 `1234567ms` 会得到 21 分钟——全项目只有这一处会产生非整格时长。已统一。
+
+**`focusEditing.test.cjs` 修复**：该测试只需为 `electron.app.getPath` 提供桩，与后写的测试
+完全同一做法。此前一直归因为「环境限制」，实际是测试本身的写法问题。修掉之后整套测试首次全绿。
 
 ## 提交记录（V0.10.4）
 
@@ -658,3 +679,5 @@ findOverlaps(dateStr, start, end, records) // → [{ index, record, overlapMs, o
 | `71ea96a` | Write the fifteen-minute rule down once |
 | `12316ea` | Route every snapping call site through the one rule |
 | `2e00003` | Stop testing a copy of the rule, and check overlap without touching samples |
+| `5b5bdd5` | Write down what V0.10.4 changes for the user, not just the code |
+| `afb30b7` | Show what will be saved before saving it, and stop lying about the minimum |
