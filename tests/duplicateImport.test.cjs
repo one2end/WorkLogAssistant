@@ -8,12 +8,15 @@ const Module = require('node:module');
 /**
  * 重复导入与重复读取。
  *
- * 规范第 4 条要求外部导入保留来源且不重复累计。
- * 这里锁定两类现状：
- *   1) iCloud 冲突副本会被一起读进来（有意设计），但同一条记录若同时存在
- *      于主文件和副本中，会**按文件各算一次**——当前没有跨文件去重。
- *   2) 旧版 JSON 导入走 saveActivity()，没有任何去重键，重复导入会翻倍。
- * 两者都写进审计报告的风险清单，测试用于防止行为被无意改变。
+ * 这两个用例原先锁定的是「已知问题」，V0.10.3 之后行为已经修正，
+ * 因此断言同步改为断言**正确行为**（不是放宽，而是改对了）。
+ *
+ * 需要分清的两件事：
+ *   1) 同一条记录出现在主文件与副本里 → 应当合并成一条（靠 rid 识别）
+ *   2) 导入同一份文件两次 → 应当被指纹拦下，不会翻倍
+ *
+ * 第二条由 importSafety 的指纹机制保证；这里验证的是底层 saveActivity
+ * 本身仍然没有内容去重——那是对的，因为内容相同的两条记录完全可能都是真的。
  */
 
 function withStorage(t) {
@@ -35,34 +38,78 @@ function withStorage(t) {
 
 const at = time => new Date(`2026-11-08T${time}:00`).toISOString();
 
-test('importing the same JSON payload twice doubles the stored rows', t => {
+test('saveActivity itself has no content dedupe, and must not gain one', t => {
   const { storage } = withStorage(t);
   const payload = [
     { timestamp: at('09:00'), processName: 'chrome', windowTitle: 'A', durationMs: 600000 },
     { timestamp: at('09:10'), processName: 'code', windowTitle: 'B', durationMs: 600000 }
   ];
 
-  // 与 main.js import-data 的 overwrite=false 分支同样的写法
   payload.forEach(a => storage.saveActivity(a));
-  const first = storage.getActivities('2026-11-08').length;
-  payload.forEach(a => storage.saveActivity(a));
-  const second = storage.getActivities('2026-11-08').length;
+  assert.equal(storage.getActivities('2026-11-08').length, 2);
 
-  assert.equal(first, 2);
-  assert.equal(second, 4, 'KNOWN ISSUE: 无去重键，重复导入会翻倍累计');
+  // 再写一遍同样的内容：确实会变成 4 条。这是**正确**的——
+  // 内容相同的两条记录可能都是真的（同一分钟两个窗口各记一次），
+  // 靠内容判断重复就是在删用户数据。
+  // 防止重复导入是 importSafety 的指纹与 imp 批次的职责，不是这里的。
+  payload.forEach(a => storage.saveActivity(a));
+  assert.equal(storage.getActivities('2026-11-08').length, 4,
+    '底层不做内容去重；重复导入由指纹层拦截');
 });
 
-test('conflict copies are read alongside the main file and are not merged', t => {
+test('importing the same payload twice is refused by the fingerprint layer', t => {
+  const { storage, root } = withStorage(t);
+  const importSafety = require('../electron/importSafety');
+
+  const sourceJson = {
+    activities: [
+      { timestamp: at('09:00'), processName: 'chrome', windowTitle: 'A', durationMs: 600000 }
+    ],
+    summaries: []
+  };
+
+  const plan = importSafety.planImport({
+    dataDir: storage.getDataDir(), sourceJson, sourceName: 'export.json'
+  });
+  importSafety.executeImport({ dataDir: storage.getDataDir(), storage, sourceJson, plan });
+  assert.equal(storage.getActivities('2026-11-08').length, 1);
+
+  // 第二次导入同一份文件：应被识别为「已导入」，而不是再写一遍
+  const again = importSafety.planImport({
+    dataDir: storage.getDataDir(), sourceJson, sourceName: 'export.json'
+  });
+  assert.equal(again.action, 'already-completed', '同一份文件不应重复导入');
+  assert.equal(storage.getActivities('2026-11-08').length, 1, '记录数必须保持不变');
+  assert.ok(fs.existsSync(root));
+});
+
+test('conflict copies are read alongside the main file, merged only by rid', t => {
   const { storage } = withStorage(t);
   const dir = path.join(storage.getDataDir(), 'activities');
   fs.mkdirSync(dir, { recursive: true });
 
-  const row = { t: at('09:00'), dur: 3600000, app: 'chrome', title: 'Same' };
+  // 同一条记录被同步到副本：带同一个 rid，应当合并成一条
+  const row = { t: at('09:00'), dur: 3600000, app: 'chrome', title: 'Same', rid: 'rid-shared' };
   fs.writeFileSync(path.join(dir, '2026-11-08.jsonl'), JSON.stringify(row) + '\n', 'utf8');
   fs.writeFileSync(path.join(dir, '2026-11-08 2.jsonl'), JSON.stringify(row) + '\n', 'utf8');
 
   const items = storage.getActivities('2026-11-08');
-  assert.equal(items.length, 2, 'KNOWN ISSUE: 同一条记录存在于主文件与副本时会被读成两条');
+  assert.equal(items.length, 1, '同一条记录（同 rid）不应被读成两条');
+});
+
+test('a copy holding a different record is still read as a second record', t => {
+  const { storage } = withStorage(t);
+  const dir = path.join(storage.getDataDir(), 'activities');
+  fs.mkdirSync(dir, { recursive: true });
+
+  // 两条内容相同但 rid 不同：并发写入产生的两条真实记录，都要留
+  const a = { t: at('09:00'), dur: 3600000, app: 'chrome', title: 'Same', rid: 'rid-a' };
+  const b = { t: at('09:00'), dur: 3600000, app: 'chrome', title: 'Same', rid: 'rid-b' };
+  fs.writeFileSync(path.join(dir, '2026-11-08.jsonl'), JSON.stringify(a) + '\n', 'utf8');
+  fs.writeFileSync(path.join(dir, '2026-11-08 2.jsonl'), JSON.stringify(b) + '\n', 'utf8');
+
+  const items = storage.getActivities('2026-11-08');
+  assert.equal(items.length, 2, '不同 rid 是两条记录，即使内容一模一样');
 });
 
 test('records on a corrupted line do not break the rest of the file', t => {
