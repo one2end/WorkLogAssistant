@@ -12,6 +12,7 @@
 
 <script>
 import { parseClock, clockOf, durationFromClocks } from '../utils/timeRange.mjs';
+import slotRule from '@slot-rule';
 export default {
   name: 'TimeRangePicker',
   props: {
@@ -44,7 +45,12 @@ export default {
     setDuration(value) {
       const numeric = Number(value);
       if (!Number.isFinite(numeric)) { this.syncEnd(); return; }
-      const next = Math.min(this.maxDuration, Math.max(15, Math.round(numeric / 15) * 15));
+      // 吸附统一走 slotRule（与主进程同一份实现）。
+      // 但下限只夹到 1 而不是 15：夹到 15 会让「不足 15 分钟」这个输入
+      // 在进入表单时就被抹平，用户永远看不到 §5.3 第 3 条那条提示，
+      // 也就永远不知道自己填的 3 分钟会被拒绝。
+      const snapped = Math.max(1, slotRule.snapToStep(numeric));
+      const next = Math.min(this.maxDuration, snapped);
       this.$emit('update:duration', next);
     },
     changeEnd() {

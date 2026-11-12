@@ -18,6 +18,25 @@
           </button>
         </div>
 
+        <!-- 吸附预览：保存前把「会存成什么」说清楚，而不是保存后再解释 -->
+        <div v-if="snapPreview" class="seg-snap" :class="{ warn: snapPreview.rejected || snapPreview.distorted }">
+          <template v-if="snapPreview.rejected">
+            <span class="seg-snap-icon" aria-hidden="true">!</span>
+            <span>{{ snapPreview.message }}</span>
+          </template>
+          <template v-else>
+            <span class="seg-snap-range">
+              <template v-if="snapPreview.distorted && snapPreview.rawEnd">
+                {{ form.startTime }}—{{ snapPreview.rawEnd }} →
+              </template>
+              将保存为 {{ snapPreview.start }}—{{ snapPreview.end }}，共 {{ snapPreview.durationMin }} 分钟
+            </span>
+            <span v-if="snapPreview.distorted" class="seg-snap-note">
+              输入 {{ snapPreview.rawDurationMin }} 分钟，吸附后为 {{ snapPreview.durationMin }} 分钟
+            </span>
+          </template>
+        </div>
+
         <div class="seg-body">
           <div class="seg-field">
             <span>分类</span>
@@ -73,7 +92,10 @@
           <button v-if="deletable" class="seg-del" @click="$emit('delete')">删除这一段</button>
           <span class="seg-hint">保存后覆盖展示</span>
           <button class="seg-btn" @click="$emit('close')">取消</button>
-          <button class="seg-btn primary" :disabled="saving" @click="submit">
+          <button class="seg-btn primary"
+            :disabled="saving || (snapPreview && snapPreview.rejected)"
+            :title="snapPreview && snapPreview.rejected ? snapPreview.message : ''"
+            @click="submit">
             {{ saving ? '保存中' : '保存' }}
           </button>
         </div>
@@ -83,6 +105,8 @@
 
 <script>
 import TimeRangePicker from './TimeRangePicker.vue';
+// 与主进程共用同一份吸附规则：预览结果就是落盘结果，不会各算各的
+import slotRule from '@slot-rule';
 const PANEL_WIDTH = 332;
 const MARGIN = 12;
 const GAP = 8;
@@ -121,6 +145,39 @@ export default {
     };
   },
   computed: {
+    /**
+     * 吸附预览（方案 §5.3 第 1、2、3 条）。
+     *
+     * 三件事必须在用户点保存之前说清楚：
+     *   1. 会存成什么时间（"09:07—10:42 → 将保存为 09:00—10:45，共 105 分钟"）
+     *   2. 如果吸附改变了时长，差了多少（"输入 22 分钟 → 将保存为 15 分钟"）
+     *   3. 如果不足 15 分钟，直接告诉他不行（而不是偷偷放大成 15 分钟）
+     *
+     * 之所以放在 computed 而不是让用户点一下「预览」：这三条信息在
+     * "点了保存才发现被改了" 时已经太晚——那时记录已经写进去了。
+     */
+    snapPreview() {
+      if (!this.open) return null;
+      const dateStr = this.initial && this.initial.date
+        ? String(this.initial.date)
+        : new Date().toISOString().slice(0, 10);
+      const raw = Math.max(1, Math.round(Number(this.form.durationMin) || 15));
+      const r = slotRule.snapRange(dateStr, this.form.startTime, raw);
+      if (r.rejected) {
+        return { rejected: true, reason: r.reason, message: r.message, rawDurationMin: raw };
+      }
+      // 原始终点：让用户看见 "10:42" 是怎么变成 "10:45" 的
+      const startRaw = slotRule.parseHHMM(this.form.startTime);
+      return {
+        rejected: false,
+        start: r.start,
+        end: r.end,
+        durationMin: r.durationMin,
+        rawDurationMin: raw,
+        distorted: r.distorted,
+        rawEnd: startRaw === null ? null : slotRule.formatHHMM(startRaw + raw)
+      };
+    },
     matchingNotes() {
       const query = String(this.form.note || '').trim().toLowerCase();
       return query ? this.noteHints.filter(h => String(h.text || '').toLowerCase().includes(query) && h.text !== this.form.note) : [];
@@ -160,7 +217,10 @@ export default {
   methods: {
     resetToInitial() {
       this.form = { ...this.form, ...this.initial };
-      this.form.durationMin = Math.min(this.maxDuration, Math.max(15, Number(this.form.durationMin) || 15));
+      // 这里不再把时长夹到 15：夹了就等于在用户看到之前先把「3 分钟」
+      // 改写成「15 分钟」，后面的最短时长校验永远收不到原始值。
+      // 下限只保留 1，真正的 15 分钟判定交给主进程的 slotRule。
+      this.form.durationMin = Math.min(this.maxDuration, Math.max(1, Number(this.form.durationMin) || 15));
       this.applyToAllDay = false;
       this.$nextTick(() => this.place());
     },
@@ -196,6 +256,10 @@ export default {
     },
     submit() {
       if (this.saving) return;
+      // 传原始时长，不在这里夹到 15：吸附与最短时长校验都由主进程的
+      // slotRule 统一完成，前端夹一次会让「不足 15 分钟」这条永远触发不到，
+      // 也会让预览与落盘算的不是同一个数。
+      const rawDurationMin = Math.max(1, Math.round(Number(this.form.durationMin) || 15));
       this.$emit('save', {
         // 保留原应用名：写死「手工标注」会让这段时间在应用统计里凭空多出一个应用
         app: (this.form.app || '').trim() || '手工标注',
@@ -203,7 +267,7 @@ export default {
         project: (this.form.project || '').trim(),
         note: (this.form.note || '').trim(),
         startTime: this.form.startTime,
-        durationMin: Math.min(this.maxDuration, Math.max(15, Number(this.form.durationMin) || 15)),
+        durationMin: Math.min(this.maxDuration, rawDurationMin),
         applyToAllDay: this.applyToAllDay
       });
     },
@@ -275,6 +339,39 @@ export default {
   background: var(--bg-inset);
 }
 .seg-head .time-range { flex: 1; min-width: 0; }
+
+/* 吸附预览：默认低调（多数输入本来就对齐），有偏差时才醒目 */
+.seg-snap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 14px 7px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary, #6b7280);
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.seg-snap.warn {
+  color: #b45309;
+  background: rgba(180, 83, 9, 0.08);
+}
+.seg-snap-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+.seg-snap-range { font-variant-numeric: tabular-nums; }
+.seg-snap-note { opacity: 0.85; }
 
 .seg-range {
   font-size: var(--fs-13);

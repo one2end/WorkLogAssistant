@@ -3,7 +3,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const ArhatManager = require('../electron/arhatManager');
+const Module = require('node:module');
+
+// ArhatManager 只用到 electron 的 app.getPath，而且这里所有的路径都由
+// 测试显式传进构造函数。所以把 electron 换成最小桩即可——
+// 真实 Electron 运行时只提供同一组接口，这个测试关心的是编辑逻辑，不是运行时。
+const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lifelog-focus-stub-'));
+const originalLoad = Module._load;
+Module._load = function (id, ...args) {
+  if (id === 'electron') return { app: { getPath: () => stubRoot } };
+  return originalLoad.call(this, id, ...args);
+};
+let ArhatManager;
+try {
+  ArhatManager = require('../electron/arhatManager');
+} finally {
+  Module._load = originalLoad;
+}
 
 test('focus and note edits target their own records; imported focus uses a local override', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lifelog-focus-edit-'));

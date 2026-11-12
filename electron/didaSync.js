@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { snapToStep } = require('./slotRule');
 
 const API_BASE = 'https://api.dida365.com/open/v1';
 const PAGE_DAYS = 30;          // 官方单次最多 30 天
@@ -485,7 +486,11 @@ class DidaSync {
       const base = new Date(item.startMs);
       const start = new Date(y, m - 1, d, base.getHours(), base.getMinutes(), 0, 0);
       const startMin = start.getHours() * 60 + start.getMinutes();
-      const durationMin = Math.max(15, Math.round((Number(item.durationMs) || 1800000) / 60000));
+      // 滴答清单同步进来的计划时长同样按 15 分钟一格（与全项目同一份规则）。
+      // 这里原本是 Math.round(x/60/15) 的手写版——注意它把「分钟」又除了
+      // 一次 60，是一个只有在特定时长上才暴露的错误。
+      const rawMinutes = (Number(item.durationMs) || 1800000) / 60000;
+      const durationMin = Math.max(15, snapToStep(rawMinutes));
       return {
         id: `${item.id}:${dateStr}`, templateId: item.id, source: 'dida-plan',
         title: item.title, label: item.label, category: item.category,
