@@ -180,3 +180,37 @@ test('an empty keyword with no project returns nothing instead of everything', t
   const r = analytics.searchActivities(root, '', '2026-11-12', '2026-11-12', {});
   assert.equal(r.hitCount, 0);
 });
+
+// --- worker 降级 ---
+
+const reportRunner = require('../electron/reportRunner');
+
+test('a worker failure falls back to local computation, not to empty results', async t => {
+  const root = makeData(t, {
+    '2026-11-12': [{ t: at('2026-11-12', 9), dur: 3600000, app: 'code', project: 'P' }]
+  });
+  // 注入一个必然失败的 runner
+  const failing = async () => ({ ok: false, error: 'worker 起不来', code: 'worker-start-failed' });
+
+  const proj = await reportRunner.buildProjectReportSafe(root, '2026-11-12', '2026-11-12', {}, { runner: failing });
+  assert.equal(proj.degraded, true);
+  assert.equal(proj.report.projects.length, 1, '降级后数字必须仍然正确');
+
+  const search = await reportRunner.searchSafe(root, 'code', '2026-11-12', '2026-11-12', {}, { runner: failing });
+  assert.equal(search.degraded, true);
+  assert.equal(search.result.hitCount, 1);
+});
+
+test('the worker path returns the same numbers as the local path', async t => {
+  const root = makeData(t, {
+    '2026-11-12': [
+      { t: at('2026-11-12', 9), dur: 3600000, app: 'code', project: 'P' },
+      { t: at('2026-11-12', 11), dur: 1800000, app: 'chrome' }
+    ]
+  });
+  const viaWorker = await reportRunner.buildProjectReportSafe(root, '2026-11-12', '2026-11-12', {});
+  const local = analytics.buildProjectReport(root, '2026-11-12', '2026-11-12', {});
+  assert.equal(viaWorker.degraded, false, '本用例应真的走 worker');
+  assert.deepEqual(viaWorker.report.projects.map(p => [p.name, p.durationMs]),
+    local.projects.map(p => [p.name, p.durationMs]));
+});

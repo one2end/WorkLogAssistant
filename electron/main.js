@@ -1163,14 +1163,17 @@ ipcMain.handle('suggest-next-action', async (event, payload) => {
   }
 });
 
-ipcMain.handle('get-project-report', (event, payload) => {
+ipcMain.handle('get-project-report', async (event, payload) => {
   try {
     const { from, to } = payload || {};
     if (!from || !to) return { ok: false, error: '需要指定日期范围' };
-    const report = analytics.buildProjectReport(
-      storageManager.getDataDir(), from, to, configManager.getConfig().analysis
+    // 月度统计在真实规模下约 200ms，放主进程会让切页有可感知停顿。
+    // 失败会回退到同步计算，数字不会因此变空。
+    const { report, degraded } = await reportRunner.buildProjectReportSafe(
+      storageManager.getDataDir(), from, to, configManager.getConfig().analysis,
+      { onLog: (msg, level) => logManager.addLog(msg, level) }
     );
-    return { ok: true, report };
+    return { ok: true, report, degraded };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -1182,7 +1185,7 @@ ipcMain.handle('get-project-report', (event, payload) => {
  * 跨日期搜索是「找不到上个月做过什么」这个问题的直接解法。
  * 结果带精确时间与时长，前端可以直接跳到那一段。
  */
-ipcMain.handle('search-activities', (event, payload) => {
+ipcMain.handle('search-activities', async (event, payload) => {
   try {
     const p = payload || {};
     const to = p.to || analytics.toDateStr(new Date());
@@ -1190,12 +1193,13 @@ ipcMain.handle('search-activities', (event, payload) => {
     if (!p.keyword && !p.project) {
       return { ok: false, error: '请输入关键词或选择一个项目' };
     }
-    const result = analytics.searchActivities(
+    const { result, degraded } = await reportRunner.searchSafe(
       storageManager.getDataDir(), p.keyword || '', from, to,
       { ...(configManager.getConfig().analysis || {}),
-        fields: p.fields, project: p.project }
+        fields: p.fields, project: p.project },
+      { onLog: (msg, level) => logManager.addLog(msg, level) }
     );
-    return { ok: true, result };
+    return { ok: true, result, degraded };
   } catch (error) {
     return { ok: false, error: error.message };
   }

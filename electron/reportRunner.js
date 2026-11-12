@@ -115,8 +115,51 @@ async function buildDayReportSafe(dataDir, dateStr, options, runOptions) {
   };
 }
 
+/**
+ * 项目统计。失败或超时回退到主进程同步计算——与报表同一套理由：
+ * 慢一点但数字对，好过快一点但返回空结果。
+ */
+async function buildProjectReportSafe(dataDir, from, to, options, runOptions) {
+  const ro = runOptions || {};
+  const analytics = require('./analytics');
+  const runner = typeof ro.runner === 'function' ? ro.runner : runInWorker;
+
+  const r = await runner('projectReport', { dataDir, from, to, options }, ro);
+  if (r && r.ok) return { report: r.result, degraded: false };
+
+  if (typeof ro.onLog === 'function') {
+    ro.onLog(`项目统计在后台线程失败（${r && r.error}），已改为本地计算`, 'error');
+  }
+  return {
+    report: analytics.buildProjectReport(dataDir, from, to, options),
+    degraded: true,
+    reason: r && r.code ? r.code : 'worker-failed'
+  };
+}
+
+/** 历史检索。同样的降级策略。 */
+async function searchSafe(dataDir, keyword, from, to, options, runOptions) {
+  const ro = runOptions || {};
+  const analytics = require('./analytics');
+  const runner = typeof ro.runner === 'function' ? ro.runner : runInWorker;
+
+  const r = await runner('search', { dataDir, keyword, from, to, options }, ro);
+  if (r && r.ok) return { result: r.result, degraded: false };
+
+  if (typeof ro.onLog === 'function') {
+    ro.onLog(`检索在后台线程失败（${r && r.error}），已改为本地计算`, 'error');
+  }
+  return {
+    result: analytics.searchActivities(dataDir, keyword, from, to, options),
+    degraded: true,
+    reason: r && r.code ? r.code : 'worker-failed'
+  };
+}
+
 module.exports = {
   runInWorker,
   buildDayReportSafe,
+  buildProjectReportSafe,
+  searchSafe,
   DEFAULT_TIMEOUT_MS
 };

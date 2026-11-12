@@ -28,7 +28,14 @@ const JOBS = {
   rangeReport: (analytics, payload) =>
     analytics.buildRangeReport(payload.dataDir, payload.from, payload.to, payload.options),
   listApps: (analytics, payload) =>
-    analytics.listRecordedApps ? analytics.listRecordedApps(payload.dataDir, payload.options) : []
+    analytics.listRecordedApps ? analytics.listRecordedApps(payload.dataDir, payload.options) : [],
+  // V0.11.0：项目统计与跨日期检索。
+  // 月度项目统计在 28800 条记录上约 200ms，检索同量级——
+  // 放在主进程里做，切到项目页的那一下会有可感知的停顿。
+  projectReport: (analytics, payload) =>
+    analytics.buildProjectReport(payload.dataDir, payload.from, payload.to, payload.options),
+  search: (analytics, payload) =>
+    analytics.searchActivities(payload.dataDir, payload.keyword, payload.from, payload.to, payload.options)
 };
 
 function run() {
