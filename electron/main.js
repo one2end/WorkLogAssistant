@@ -22,6 +22,7 @@ const StorageManager = require('./storageManager');
 const LogManager = require('./logManager');
 const importSafety = require('./importSafety');
 const slotRule = require('./slotRule');
+const storagePrecheck = require('./storagePrecheck');
 const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
 const { ApiServer, generateToken } = require('./apiServer');
@@ -840,12 +841,29 @@ ipcMain.handle('dida-sync-now', async (event, payload) => {
   return didaSync.push({ manual: true });
 });
 
-ipcMain.handle('save-config', (event, config) => {
+ipcMain.handle('save-config', async (event, config) => {
   const prev = configManager.getConfig();
   const prevPath = prev.storage?.customPath || '';
   const didaJustEnabled = !prev.dida?.enabled && !!config.dida?.enabled;
   const nextPath = config.storage?.customPath || '';
   const storageChanged = nextPath !== prevPath;
+
+  // 改数据目录前同样要预检（与 migrate-storage 同一套判断）。
+  // 这条路径更隐蔽：用户可能只是改了个开关，顺手把路径也换了，
+  // 若新目录是云端占位文件，接下来每次读都会卡住界面。
+  if (storageChanged && nextPath) {
+    const precheck = await storagePrecheck.checkStorageDirAsync(nextPath);
+    if (!precheck.ok) {
+      return {
+        success: false,
+        // 明确说明是拒绝切换，而不是笼统的「保存失败」——
+        // 后者会让用户反复重试同一个目录
+        error: `数据目录不可用：${precheck.message}`,
+        code: precheck.reason
+      };
+    }
+  }
+
   // 先把录制器的当前片段写回旧目录，再切换路径。
   if (isMonitoring) stopMonitoring();
   if (storageChanged) {
@@ -1735,6 +1753,26 @@ ipcMain.handle('select-storage-folder', async () => {
 
 ipcMain.handle('migrate-storage', async (event, newPath) => {
   try {
+    // 切换前预检（V0.10.5 任务 1）。
+    //
+    // 为什么必须先查：数据目录指向 iCloud / OneDrive 的「仅在线」文件时，
+    // 目录看起来完全正常（列得出文件、大小也对），但每次读内容都会触发云端召回。
+    // 数据读取在主进程里同步进行，读一个文件就能让整个界面卡住，
+    // 用户看到的是「软件无响应」——然后以为是软件坏了。
+    //
+    // 预检放在子进程里做，超时直接 kill：如果预检本身卡在云端召回上，
+    // 在主进程里做就等于把要防的问题自己做了一遍。
+    const precheck = await storagePrecheck.checkStorageDirAsync(newPath);
+    if (!precheck.ok) {
+      logManager.addLog(`拒绝切换到 ${newPath}：${precheck.message}`, 'error');
+      return {
+        success: false,
+        error: precheck.message,
+        code: precheck.reason,
+        timedOut: !!precheck.timedOut
+      };
+    }
+
     const result = storageManager.migrateDataTo(newPath);
     if (result.success) {
       logManager.addLog(`数据已迁移到 ${newPath}，共 ${result.fileCount} 个文件`, 'info');
