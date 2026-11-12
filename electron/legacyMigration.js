@@ -167,42 +167,6 @@ const realIo = {
 
 // --- 引擎 ---
 
-function readJsonSafe(file, fallback) {
-  try {
-    if (!fs.existsSync(file)) return fallback;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (_) {
-    return fallback;
-  }
-}
-
-function writeJsonSafe(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeFileAtomic(file, JSON.stringify(data, null, 2));
-}
-
-function ensureDir(dir) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function stamp() {
-  const d = new Date();
-  const p = (n, w = 2) => String(n).padStart(w, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
-    `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${p(d.getMilliseconds(), 3)}`;
-}
-
-function stripInternalKeys(detail) {
-  const out = {};
-  for (const k of Object.keys(detail)) out[k] = detail[k];
-  return out;
-}
-
 class MigrationEngine {
   /**
    * @param {object} options

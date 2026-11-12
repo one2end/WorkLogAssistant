@@ -83,6 +83,33 @@ const logManager = new LogManager(customPath);
 const arhatManager = new ArhatManager(customPath);
 const planManager = new PlanManager(() => storageManager.getDataDir());
 
+/**
+ * 迁移期间写操作会抛 WriteBlockedError。IPC handler 若直接把它放出去，
+ * 渲染层只会看到一条没有上下文的异常；这里统一换成「有错误码、能读懂」的结果，
+ * 前端据此提示「迁移中，请稍候」，而不是误报成「保存失败」。
+ */
+function writeFailure(error) {
+  if (error && error.code === 'MIGRATION_IN_PROGRESS') {
+    return { ok: false, code: 'MIGRATION_IN_PROGRESS', error: error.message, retryable: true };
+  }
+  return { ok: false, code: 'WRITE_FAILED', error: error ? error.message : '写入失败' };
+}
+
+/**
+ * 包一层写调用：迁移被锁时返回结构化错误，其余异常也不让它冒泡到 IPC 层。
+ * 各 handler 的返回形状不完全一样（有的用 success，有的用 ok），所以这里
+ * 只负责把异常转成同一份「失败形状」，由调用方决定字段名。
+ */
+function callStorage(fn, fallback) {
+  try {
+    return fn();
+  } catch (error) {
+    const failure = writeFailure(error);
+    if (fallback === 'success') return { success: false, code: failure.code, error: failure.error };
+    return failure;
+  }
+}
+
 /** 推给渲染层的统一出口；窗口可能还没创建或正在销毁 */
 function broadcast(channel, payload) {
   try {
@@ -889,7 +916,7 @@ function notifyDataChanged() {
 ipcMain.handle('update-display-record', (event, payload) => {
   const { date, t, patch } = payload || {};
   if (!date || !t) return { success: false, error: '参数不完整' };
-  const res = storageManager.updateDisplayRecord(date, t, patch || {});
+  const res = callStorage(() => storageManager.updateDisplayRecord(date, t, patch || {}), 'success');
   if (res.success) notifyDataChanged();
   return res;
 });
@@ -897,7 +924,7 @@ ipcMain.handle('update-display-record', (event, payload) => {
 ipcMain.handle('delete-display-record', (event, payload) => {
   const { date, t } = payload || {};
   if (!date || !t) return { success: false, error: '参数不完整' };
-  const res = storageManager.deleteDisplayRecord(date, t);
+  const res = callStorage(() => storageManager.deleteDisplayRecord(date, t), 'success');
   if (res.success) notifyDataChanged();
   return res;
 });
@@ -905,7 +932,7 @@ ipcMain.handle('delete-display-record', (event, payload) => {
 ipcMain.handle('delete-display-range', (event, payload) => {
   const { date, start, end } = payload || {};
   if (!date || !start || !end) return { success: false, error: '参数不完整' };
-  const res = storageManager.deleteDisplayRange(date, start, end);
+  const res = callStorage(() => storageManager.deleteDisplayRange(date, start, end), 'success');
   if (res.success) notifyDataChanged();
   return res;
 });
@@ -1023,7 +1050,12 @@ ipcMain.handle('convert-plan-to-fact', (event, payload) => {
     parsed.record.origin = 'plan';
     parsed.record.groupId = crypto.randomUUID();
     parsed.record.planKey = planManager.keyOf(plan, date);
-    const ok = storageManager.appendActivityRecords(splitRecordAtMidnight(parsed.record));
+    let ok;
+    try {
+      ok = storageManager.appendActivityRecords(splitRecordAtMidnight(parsed.record));
+    } catch (error) {
+      return writeFailure(error);
+    }
     if (!ok) return { ok: false, error: '计划转为事实时写入失败' };
     const marked = planManager.markActual(plan, date, {
       source: 'plan', label: plan.label || plan.title, category: plan.category,
@@ -1178,7 +1210,12 @@ ipcMain.handle('add-manual-record', (event, payload) => {
   if (parsed.error) return { ok: false, error: parsed.error };
   const { dateStr, durationMin, record } = parsed;
   record.groupId = crypto.randomUUID();
-  const ok = storageManager.appendActivityRecords(splitRecordAtMidnight(record));
+  let ok;
+  try {
+    ok = storageManager.appendActivityRecords(splitRecordAtMidnight(record));
+  } catch (error) {
+    return writeFailure(error);
+  }
 
   if (ok) {
     logManager.addLog(`手工补记 ${dateStr} ${payload.startTime} · ${durationMin} 分钟`, 'info');
@@ -1195,9 +1232,10 @@ ipcMain.handle('replace-display-ranges', (event, payload) => {
   if (!Array.isArray(ranges) || ranges.length > 200 ||
       payload?.record?.date !== parsed.dateStr) return { ok: false, error: '日期或区间无效' };
   parsed.record.groupId = crypto.randomUUID();
-  const result = storageManager.replaceDisplayRanges(parsed.dateStr, ranges, parsed.record);
+  const result = callStorage(
+    () => storageManager.replaceDisplayRanges(parsed.dateStr, ranges, parsed.record), 'success');
   if (result.success) notifyDataChanged();
-  return { ok: result.success, error: result.error };
+  return { ok: result.success, code: result.code, error: result.error };
 });
 
 /**
@@ -1213,7 +1251,8 @@ ipcMain.handle('recategorize-app-for-day', (event, payload) => {
   if (!app || !category) return { ok: false, error: '缺少应用或分类' };
   const spans = Array.isArray(p.spans) ? p.spans : [];
   if (!spans.length) return { ok: false, error: '当天没有找到该应用的其它时段' };
-  const result = storageManager.recategorizeAppForDay(dateStr, app, category, spans, String(p.note || ''));
+  const result = callStorage(
+    () => storageManager.recategorizeAppForDay(dateStr, app, category, spans, String(p.note || '')), 'success');
   if (result.success) notifyDataChanged();
   return { ok: result.success, error: result.error, ...result };
 });
