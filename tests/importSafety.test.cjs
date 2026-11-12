@@ -461,6 +461,54 @@ test('an abort request stops before writing anything', t => {
   assert.equal(countAll(path.join(dataDir, 'activities')), before, '取消不得写入任何数据');
 });
 
+test('every new summary write honours the migration gate', t => {
+  const { storage, dataDir } = setup(t);
+  const writeGate = require('../electron/writeGate');
+
+  const summary = { timestamp: iso(5, 21), summary: '锁测试', activityCount: 1 };
+
+  writeGate.tryAcquire('audit', 'locking');
+  try {
+    for (const [name, fn] of [
+      ['saveSummaryDetailed', () => storage.saveSummaryDetailed(summary)],
+      ['rebuildSummaryMarkdown', () => storage.rebuildSummaryMarkdown(summary)],
+      ['snapshotBeforeImport', () => storage.snapshotBeforeImport('audit')]
+    ]) {
+      let code = null;
+      try { fn(); } catch (e) { code = e.code; }
+      assert.equal(code, 'MIGRATION_IN_PROGRESS', `${name} 必须在迁移期间被拒绝`);
+    }
+  } finally {
+    writeGate.release('audit');
+  }
+
+  // 锁释放后应恢复正常
+  const r = storage.saveSummaryDetailed(summary);
+  assert.equal(r.jsonOk, true);
+  assert.ok(fs.existsSync(path.join(dataDir, 'summaries_md')));
+});
+
+test('the import task state machine only ever holds two values', t => {
+  const { storage, dataDir } = setup(t);
+  const src = source(3);
+  runImport({ dataDir, storage, sourceJson: src, sourceName: 'x.json' });
+
+  const fp16 = fingerprintId(computeFingerprint(src).fingerprint);
+  const task = readTask(dataDir, fp16);
+  assert.ok(['in_progress', 'completed'].includes(task.status),
+    `任务状态只能是 in_progress 或 completed，实际：${task.status}`);
+  assert.equal(task.status, 'completed');
+  assert.ok(Array.isArray(task.doneIdx.activities));
+});
+
+test('importSafety never deletes user data', () => {
+  const text = fs.readFileSync(path.resolve(__dirname, '../electron/importSafety.js'), 'utf8');
+  for (const forbidden of ['unlinkSync', 'rmSync', 'clearActivities', 'truncate']) {
+    assert.equal(text.includes(forbidden), false,
+      `importSafety 不应出现 ${forbidden}——导入是只增操作`);
+  }
+});
+
 test('collectDoneIdx reads imp markers across multiple day files', t => {
   const { storage, dataDir } = setup(t);
   const src = source(5);

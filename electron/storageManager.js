@@ -785,6 +785,9 @@ class StorageManager {
    * 不写 JSON，因此不会产生重复记录。
    */
   rebuildSummaryMarkdown(summary) {
+    // 与 saveSummary 写的是同一个 summaries_md/，必须同样受写锁约束：
+    // 否则迁移期间仍能改写该目录，快照与重建结果会与迁移后的状态脱节。
+    writeGate.assertWritable('重建摘要文字版');
     const mdDir = path.join(this.dataDir, 'summaries_md');
     if (!fs.existsSync(mdDir)) fs.mkdirSync(mdDir, { recursive: true });
     const mdFilename = `summary_${new Date(summary.timestamp).toISOString().replace(/[:.]/g, '-')}.md`;
