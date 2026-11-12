@@ -17,6 +17,8 @@
 
 const MAX_IDLE_SEGMENT_MS = 2 * 60 * 60 * 1000; // 单段空闲最多记 2 小时
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { isExcludedSample } = require('./privacyRules');
 
 const DEFAULTS = {
@@ -48,6 +50,8 @@ class ActivityRecorder {
     this.getConfig = opts.getConfig || (() => ({}));
     this.onSegment = opts.onSegment || (() => {});
     this.onLog = opts.onLog || (() => {});
+    // 写盘持续失败、片段被迫落到溢出文件时回调，供 UI 提示用户
+    this.onOverflow = opts.onOverflow || null;
 
     this.running = false;
     this.startedAt = null;
@@ -332,9 +336,76 @@ class ActivityRecorder {
 
       this._gateNoticeShown = false;
       this.onLog('写入活动记录失败: ' + error.message, 'error');
-      // 放回去，下次再试（避免丢数据），但要防止无限增长
-      this._buffer = batch.concat(this._buffer).slice(-200);
+
+      // 写盘持续失败（磁盘满、目录被同步软件锁住、权限问题）时，不能把
+      // 缓冲无限增长，也不能像以前那样 slice(-200) 直接丢掉最早的部分——
+      // 那等于在用户毫无察觉的情况下删掉一整段工作记录。
+      //
+      // 改成：超出的部分落到溢出文件。缓冲保持在上限内，数据一条不丢，
+      // 并且通过 onOverflow 告诉调用方「有东西没进主文件」，由 UI 提示用户。
+      const MAX_BUFFER = 200;
+      this._buffer = batch.concat(this._buffer);
+      if (this._buffer.length > MAX_BUFFER) {
+        const overflow = this._buffer.slice(0, this._buffer.length - MAX_BUFFER);
+        this._buffer = this._buffer.slice(-MAX_BUFFER);
+        const spilled = this._spillOverflow(overflow, error);
+        if (!spilled) {
+          // 溢出也写不进去：此时只能保缓冲，但必须让调用方知道有数据处于危险中
+          this.onLog(
+            `缓冲已达 ${this._buffer.length} 条且溢出文件不可写，数据仅存于内存。` +
+            '请尽快释放磁盘空间或检查数据目录权限。', 'error');
+        }
+      }
       return 0;
+    }
+  }
+
+  /**
+   * 把主文件写不进去的片段落到 overflow 文件。
+   *
+   * 为什么是追加而不是覆盖：这些片段本身就是按时间顺序产生的，
+   * 追加能保持顺序，也避免了「先读旧文件再合并」这种在磁盘满时必然失败的写法。
+   *
+   * 文件名带日期，便于用户和后续工具直接看懂它属于哪一天。
+   */
+  _spillOverflow(records, cause) {
+    if (!records || !records.length) return true;
+    try {
+      const base = this.storage && typeof this.storage.getDataDir === 'function'
+        ? this.storage.getDataDir()
+        : null;
+      if (!base) return false;
+
+      const dir = path.join(base, 'activities');
+      fs.mkdirSync(dir, { recursive: true });
+      // 用本地日期命名，与 activities/<YYYY-MM-DD>.jsonl 保持一致。
+      // 不调用 storageManager._toDateStr：那是另一个类的私有方法，
+      // 在这里依赖它会把两个模块的边界搅在一起。
+      const d = new Date(records[0].t);
+      const p2 = n => String(n).padStart(2, '0');
+      const day = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+      const file = path.join(dir, `${day}.overflow.jsonl`);
+
+      // 每次溢出都记一行原因，便于事后判断是磁盘满还是权限问题
+      const header = JSON.stringify({
+        at: new Date().toISOString(),
+        kind: 'overflow',
+        reason: cause && cause.message ? cause.message : 'write-failed',
+        count: records.length
+      });
+      const lines = records.map(r => JSON.stringify(r));
+      fs.appendFileSync(file, lines.join('\n') + '\n', 'utf8');
+
+      if (typeof this.onOverflow === 'function') {
+        this.onOverflow({ count: records.length, file, day });
+      }
+      this.onLog(
+        `${records.length} 条录制片段未能写入主文件，已暂存到 ${path.basename(file)}` +
+        '（不会出现在报表里，需要恢复请联系维护者或等待下一次成功写入后手工合并）', 'error');
+      return true;
+    } catch (error) {
+      this.onLog('写入溢出文件失败: ' + error.message, 'error');
+      return false;
     }
   }
 
