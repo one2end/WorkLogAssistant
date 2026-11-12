@@ -515,3 +515,146 @@ v3 草案全局排除 `id`，会把 `summaries[].slots[].id` 这类**嵌套合�
 | `352ae8e` | Merge duplicates across copies, never within a file |
 | `57fa0bc` | Backfill a rid for the edited record, and only that one |
 | `3761f62` | Rewrite the two duplicate tests that had been pinning the bug |
+
+---
+
+# V0.10.4：15 分钟规则统一
+
+## 阶段零：开发前核查结论
+
+**V0.10.3 远端状态**：六个提交全部存在且已推送，本地 HEAD `8d960da` 与远端 `workbuddy/worklog-1-0-dev-2a79589a` 完全一致，工作区干净。
+
+`master` 仍是 `f1b612c` **不是同步失败**——全部 V0.10.2a/2b/3 工作都在独立开发分支上，按约束从未向 master 推送。经核验 `1de413e`（冻结方案提交）并不在 master 历史上。
+
+**方案与实际代码的 3 处不一致**（已如实报告并处理）：
+1. 方案 §5.2 标题写「7 处」，正文只列了 6 项 —— 实际按盘点结果处理
+2. 全部行号因前两版改动而偏移（`main.js` +35、`storageManager.js` +82）
+3. 全项目实际有 28 处 15 分钟计算，远多于方案列的 6 处
+
+## 阶段一：规则差异量化
+
+用脚本对比当前规则与方案规则，14 个代表性输入中 **6 个结果不同**：
+
+| 输入 | 旧规则 | 新规则 | 性质 |
+|---|---|---|---|
+| `09:07 + 95min` | 09:00–10:30 (90分) | 09:00–10:45 (**105分**) | 少记 15 分 |
+| `09:07 + 35min` | 09:00–09:30 (30分) | 09:00–09:45 (**45分**) | 少记 15 分 |
+| `09:14 + 15min` | **09:00**–09:15 | **09:15**–09:30 | 起点前移 |
+| `09:07 + 3min` | 存成 15 分 | **拒绝** | 虚假工时 |
+| `09:07 + 8min` | 存成 15 分 | **拒绝** | 虚假工时 |
+| `23:53 + 15min` | 23:45–24:00 | **拒绝** | 起点跨日 |
+
+## 阶段二：`slotRule.js` 接口
+
+严格按方案 §5.1，未扩展：
+
+```js
+snapStart(dateStr, startHHMM)              // → { startMin, crossDay }
+deriveEnd(startRaw, durationMin)           // → { endRaw, crossMidnight }
+snapEnd(endRaw)                            // → { endMin }  允许 1440
+snapRange(dateStr, startHHMM, durationMin) // → { startMin, endMin, durationMin, crossMidnight, distorted, rejected?, reason? }
+findOverlaps(dateStr, start, end, records) // → [{ index, record, overlapMs, overlapMin, kind, source }]
+```
+
+另有 `snapToStep` / `formatHHMM` / `parseHHMM` 供内部与调用点复用，避免任何地方再写一遍 `round(x/15)*15`。
+
+**核心不变量**：时长 = `snapEnd - snapStart`，**绝不对时长二次取整**。有专门用例逐一核对 `durationMin === endMin - startMin`。
+
+## 阶段三：调用点替换
+
+### A 类：真正的时间吸附（8 处已替换）
+
+| 位置 | 改动 |
+|---|---|
+| `main.js` 人工补记 | 整段吸附改为 `snapRange`，最短时长用原始值判定 |
+| `storageManager.js` 覆盖标注 | 起点/时长改为 `snapRange` |
+| `App.vue` 活动线程确认 | 不再自行取整，传原始时长由主进程吸附 |
+| `TimelineView.vue` `minuteAt` | 像素换算保留，吸附改调 `snapToStep` |
+| `planManager.js` upsert | 仅统一吸附用 `snapToStep`（**B1**） |
+
+### D 类：TimelineView 逐处判定（按裁定有条件修改）
+
+| # | 职责 | 处理 |
+|---|---|---|
+| D1 `L1264` | 拖计划块改时长 | 吸附改 `snapToStep`，夹取 `[15,1440]` 保留 |
+| D2 `L1300/1838` | 像素→分钟换算 | **不替换**（纯 UI 坐标） |
+| D3 `L1362` | 拖动前算块高 | 吸附改 `snapToStep` |
+| D4 `L1377` | 拖动位移格数 | 格差吸附改 `snapToStep`，夹取保留 |
+| D5 `L1830` | 缩放前算块高 | 吸附改 `snapToStep` |
+| D6 `L1843/2186` | 缩放终点 + 快捷补记默认时长 | 吸附改 `snapToStep`，夹取保留 |
+| A7 `L1128` | `minuteAt` 夹取 | **`Math.max(0, Math.min(1440, ...))` 一行未动** |
+
+### 未替换（按裁定与性质）
+
+| 位置 | 原因 |
+|---|---|
+| `planManager.js:188/189` | **B2/B3，裁定明确不改**（计划语义，非事实补记） |
+| `analytics.js:1212/1214` | 统计聚合，非吸附 |
+| `TimeRangePicker.vue:47` | 滑块步长 |
+| `TimelineView:2027/2043` | 当前时刻取整，UI 默认值 |
+
+### 渲染层如何共享同一份实现
+
+通过 `vite.config.js` 别名 `@slot-rule` 指向 `electron/slotRule.js`，并在 `build.commonjsOptions` 中允许 CJS 转换。**没有复制到 `src/`** —— 复制会编译通过、测试通过，然后在某个时刻悄悄漂开，第一个症状是「预览说 105 分、实际存了 90 分」。
+
+## 阶段四：重叠检测与失真提示
+
+**§5.4 规则落地**：
+- 与**自动记录**重叠 → 提示但允许（补记的正当用途）
+- 与**另一条人工记录**重叠 → 默认阻断，返回 `OVERLAP_MANUAL`
+- 任何情况下**不动记录层**
+
+**失真标记**：`snapRange` 返回 `distorted`（吸附是否改变了时长）与 `rawDurationMin`，UI 据此提示「输入 22 分钟 → 将保存为 15 分钟」。本来就对齐的输入不会误报。
+
+**新增只读 IPC `preview-snap`**：渲染层无法 require 主进程模块，但预览结果必须与落盘一致，所以让渲染层问主进程要结果——同一份代码、同一次计算。
+
+## 阶段五：测试改造
+
+`manualSnap.test.cjs` 删除 `snapCurrent()` 复刻函数，改为直接调用 `slotRule`。
+- 原 `KNOWN ISSUE` 用例改为断言**正确行为**（不是放宽）：`09:14 + 22min` 现在起点是 `09:15` 而非 `09:00`
+- 新增一条元测试：断言测试文件里**不得再出现** `snapCurrent` 或手写 `round(x/15)*15`
+
+## 测试与回归实测
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npm run lint` | **0** | 0 error / 0 warning |
+| `npm run build` | **0** | ✓ built |
+| `npm test` | **1** | **298 tests，297 pass，1 fail** |
+
+新增测试：`slotRule.test.cjs` 34 项 + `overlapDetection.test.cjs` 10 项；`manualSnap.test.cjs` 由 6 项改造为 9 项。
+
+唯一失败仍是 `focusEditing.test.cjs`（Electron 二进制未下载，DNS 受限），**与本版本无关，断言未放宽**。
+
+## 独立审计
+
+| 审计项 | 结果 |
+|---|---|
+| 迁移引擎 / 写入锁 / 导入指纹 / imp 机制 / timeSplit / didaSync | ✅ `git diff 8d960da..HEAD` **无输出**，完全未动 |
+| 记录层毫秒级时长 | ✅ `slotRule` 只读 `durationMs` 计算重叠，从不写回；有文件哈希对比测试 |
+| A7 夹取 `Math.max(0, Math.min(1440, ...))` | ✅ 原样保留（`L1128`） |
+| D 类夹取 | ✅ `Math.max(15, Math.min(1440, ...))` 全部保留 |
+| 原始 JSONL 数据结构 | ✅ 仅 `main.js` 新增返回字段，写入结构未变 |
+| 与版本无关的 UI | ✅ 仅 `TimelineView` 吸附算法与 `App.vue` 时长传递，无布局改动 |
+
+## 开发过程中发现并修复的实现缺陷
+
+`snapToStep` 最初用 `Math.round(minutes / 15) * 15`，被测试当场抓住：**`22.5 / 15` 在浮点下等于 `1.4999999999999998`**，`Math.round` 得 1，于是 22.5 被吸附到 15 而不是 30——与「中间值向后取」的约定相反，且只在特定数值上出错。改为整数运算 `Math.floor((2x + 15) / 30) * 15`，并有用例固定 `snapToStep(22.5) === 30`。
+
+## V0.10.4 未做 / 已知边界
+
+| 项 | 说明 |
+|---|---|
+| `analytics.js` 专注聚合取整 | 属统计展示，非落盘吸附，未纳入 |
+| `planManager` 起点向下取整 | B2，按裁定保留（计划语义） |
+| TimelineView 当前时刻取整 | UI 默认值（新建块的默认起点），非数据吸附 |
+| 历史记录 | **不做任何回填或迁移**，旧记录保持原有数值 |
+| `preview-snap` 的 UI 接入 | 后端已就绪，前端尚未接「保存前显示吸附结果」的界面 |
+
+## 提交记录（V0.10.4）
+
+| Commit | 内容 |
+|---|---|
+| `71ea96a` | Write the fifteen-minute rule down once |
+| `12316ea` | Route every snapping call site through the one rule |
+| `2e00003` | Stop testing a copy of the rule, and check overlap without touching samples |
