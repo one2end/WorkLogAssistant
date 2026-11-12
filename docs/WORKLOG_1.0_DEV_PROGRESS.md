@@ -376,3 +376,142 @@ v3 草案全局排除 `id`，会把 `summaries[].slots[].id` 这类**嵌套合�
 | `0e9ad91` | Fingerprint what gets imported, not what gets exported |
 | `efd4b7e` | Snapshot all three directories an import can touch |
 | `2602ebe` | Remove the overwrite import and make merges resumable |
+
+---
+
+# V0.10.3：记录唯一标识与去重治理
+
+## 阶段一：副本文件名严格正则 ✅ `ec3e142`
+
+### 已完成
+`storageManager._activityFilesOfDay` 改用 `^<date>(?: (?:\(\d+\)|\d+))?\.jsonl$`。
+
+### 实测确认的原始缺陷
+| 文件名 | 旧规则 | 新规则 |
+|---|---|---|
+| `2026-11-08.jsonl` | 读取 | 读取 |
+| `2026-11-08 2.jsonl` | 读取 | 读取 |
+| `2026-11-08 (1).jsonl` | 读取 | 读取 |
+| `2026-11-08-backup.jsonl` | **读取（错）** | 忽略 |
+| `2026-11-08.old.jsonl` | **读取（错）** | 忽略 |
+| `2026-11-080.jsonl` | **读取（错）** | 忽略 |
+
+用户表现：某天记录数莫名翻倍，界面上没有任何东西指向一个叫 `-backup` 的文件。
+
+### 测试
+6 个用例，双向断言（该读的读、不该读的六个变体都不读，含下划线与连字符变体）。
+
+---
+
+## 阶段二：rid 生成、落盘与读取 ✅ `6705f42`
+
+### 已完成
+| 位置 | 改动 |
+|---|---|
+| `activityRecorder._emit()` | 统一生成 `crypto.randomUUID()`，active 与 idle 两个调用点都覆盖 |
+| `storageManager.appendActivityRecords` | 落盘 `...(r.rid ? { rid: r.rid } : {})`，无 rid 不凭空写 |
+| `storageManager._fromSegment` | 读回 `rid: rec.rid \|\| null`，**不重算** |
+| `main.js` 3 处人工记录 | `groupId` 之外补 `rid`（两者语义不同层） |
+| `timeSplit.splitRecordAtMidnight` | **拆分后半段生成独立 rid** |
+
+### 测试逼出的缺陷
+`splitRecordAtMidnight` 用 `{...record}` 复制，跨午夜两段**共享同一 rid**。去重会把后半段当重复删掉——用户 23:50 那小时的后半截消失。已修：前半段沿用原 rid，后半段新生成。
+
+### 测试
+14 个用例（T-R01 及补充），含「内部 id 会变但 rid 不变」「无 rid 读成 null 而非空串」等。
+
+---
+
+## 阶段三：冲突副本按 rid 去重 ✅ `352ae8e`
+
+### 规则
+| 场景 | 处理 |
+|---|---|
+| 双方同 rid | 合并成一条 |
+| 双方不同 rid | 两条都留 |
+| 一方无 rid | 两条都留 |
+| 双方都无 rid | 两条都留 |
+| **同一文件内重复** | **永不去重** |
+
+### 测试逼出的缺陷
+第一版用全局 `seenAcrossFiles` 集合，把**同一文件内**的第二个相同 rid 也跳过了。被「四条 t+app+dur 相同的记录必须读回四条」用例当场抓住（先返回 5，修一版后返回 3）。
+
+### 测试
+12 个用例（T-R02 五种组合 + 三副本收敛 + 主文件优先等）。
+
+---
+
+## 阶段四：编辑时只补被编辑那条的 rid ✅ `57fa0bc`
+
+### 已完成
+`updateDisplayRecord` 中 `if (!next.rid) next.rid = crypto.randomUUID()`，**仅此一行**。
+其他行继续以**原始字符串**写回（不是 `JSON.parse`→`JSON.stringify` 往返），字段顺序与损坏行都原样保留。
+
+### 测试
+9 个用例（T-R03 / 验收第 4 条），逐字节比对未被编辑的行。
+
+---
+
+## 阶段五：修正旧断言 ✅ `3761f62`
+
+`tests/duplicateImport.test.cjs` 有两个用例原本用 `KNOWN ISSUE` 锁定**错误行为**。行为已修正，断言同步改为断言正确行为（**不是放宽**）：
+- 底层 `saveActivity` 仍无内容去重 → 断言它「不应有」，并新增用例证明重复导入由指纹层拦截
+- 同一 rid 主文件+副本 → 断言 1 条（原断言 2 条）
+- 新增反向用例：不同 rid 时 2 条都要留
+
+---
+
+## 独立审计（V0.10.3）
+
+| 审计项 | 结果 |
+|---|---|
+| 是否批量改写历史 rid | ✅ 6 处生成点**全部**带 `if (!x.rid)` 守卫，只作用于新记录 |
+| 读取路径是否凭空生成 rid | ✅ `_fromSegment` 只透传 `rec.rid \|\| null` |
+| 迁移引擎是否受影响 | ✅ `git diff 4bf954f..HEAD -- electron/legacyMigration.js` **为空** |
+| 导入记录是否被强加 rid | ✅ 导入只带 `imp`，不带 rid（有测试锁住） |
+| 内容去重是否被引入 | ✅ 无任何按内容判重的代码；`saveActivity` 明确不加 |
+
+### 审计发现的既有边界（非本版本引入，如实记录）
+`updateDisplayRecord` 只处理 `activities/<date>.jsonl`，而导入写的是 `activities/<date>.json`（JSON 数组）。因此**导入的记录目前无法通过编辑通道补 rid**。这是既有架构分裂，不在 V0.10.3 范围内改动，已写进测试注释与风险清单。
+
+---
+
+## V0.10.3 回归实测
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npm run lint` | **0** | 0 error / 0 warning |
+| `npm run build` | **0** | built successfully |
+| `npm test` | **1** | **250 tests，249 pass，1 fail** |
+
+唯一失败仍为 `tests/focusEditing.test.cjs` → `Electron failed to install correctly`（二进制未下载，DNS 受限）。V0.10.3 **未触碰该文件**，断言未放宽。
+
+## V0.10.3 验收标准核对
+
+| # | 标准 | 结果 |
+|---|---|---|
+| 1 | 新录制片段带 rid，重启后不变 | ✅ `T-R01 the rid survives a write and a read` |
+| 2 | `t+app+dur` 相同的 4 条仍读回 4 条 | ✅ `the four records with identical t/app/dur all survive` |
+| 3 | 同 rid → 1；不同 rid → 2；无 rid → 2 | ✅ `conflictDedupe` 前四个用例 |
+| 4 | 编辑 1 条后其他记录逐字节不变 | ✅ `T-R03 the other records come back byte for byte identical` |
+| 5 | `-backup`、`.old` 不再被读为当天数据 | ✅ `dayFilePattern` |
+
+## V0.10.3 未做 / 已知风险
+
+| 项 | 说明 |
+|---|---|
+| 导入记录无 rid | 符合设计（导入靠 `imp` + 指纹去重）。但导入记录无法经编辑通道补 rid，属既有架构分裂 |
+| 跨午夜拆分的两段 | 各自独立 rid，但 `groupId` 相同，展示层仍可按 group 合并 |
+| 内容去重 | **永不做**（方案 §3.5 / §4.4 明确） |
+| 旧数据批量补 rid | **永不做**（§4.6） |
+| 摘要 rid | 本版本只覆盖活动记录；摘要的 `id` 仍由调用方生成 |
+
+## 提交记录（V0.10.3）
+
+| Commit | 内容 |
+|---|---|
+| `ec3e142` | Only read the two file names a sync client actually creates |
+| `6705f42` | Give every record a rid that survives a restart |
+| `352ae8e` | Merge duplicates across copies, never within a file |
+| `57fa0bc` | Backfill a rid for the edited record, and only that one |
+| `3761f62` | Rewrite the two duplicate tests that had been pinning the bug |

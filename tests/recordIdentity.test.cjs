@@ -212,3 +212,66 @@ test('the onSegment callback sees the same rid that gets written', t => {
   assert.equal(seen[0], recorder._buffer.length ? recorder._buffer[0].rid : seen[0]);
   assert.match(seen[0], UUID);
 });
+
+test('imported records carry imp but not rid, by design', t => {
+  const { storage, dataDir } = setup(t);
+  const { planImport, executeImport } = require('../electron/importSafety');
+
+  const sourceJson = {
+    activities: [{ timestamp: iso(9), processName: 'imported', windowTitle: 'x' }],
+    summaries: []
+  };
+  const plan = planImport({ dataDir, sourceJson, sourceName: 'export.json' });
+  executeImport({ dataDir, storage, sourceJson, plan });
+
+  const rows = JSON.parse(fs.readFileSync(path.join(dataDir, 'activities', '2026-11-08.json'), 'utf8'));
+  assert.equal(rows.length, 1);
+
+  // imp 是导入身份，用于「这份文件导到第几条」的续传判定
+  assert.ok(rows[0].imp, '导入记录必须带 imp');
+  assert.equal(typeof rows[0].imp.idx, 'number');
+
+  // rid 是录制身份。导入不生成，因为导入的是别人的文件，
+  // 凭空发一个 rid 会让它在后续读取中参与去重，而它与本机录制毫无关系。
+  // 重复导入由指纹 + imp 拦截，不依赖 rid。
+  assert.equal('rid' in rows[0], false, '导入不应凭空生成 rid');
+});
+
+test('a rid is backfilled when the edited record lives in the jsonl path', t => {
+  const { storage, dataDir } = setup(t);
+  const { planImport, executeImport } = require('../electron/importSafety');
+
+  // 导入落的是 activities/<date>.json（JSON 数组）。
+  // updateDisplayRecord 只处理 .jsonl 编辑路径，两者目前不是同一条通道——
+  // 这是既有架构边界，不在 V0.10.3 范围内改动，此处如实记录。
+  const sourceJson = {
+    activities: [{ timestamp: iso(9), processName: 'imported', windowTitle: 'x', source: 'manual' }],
+    summaries: []
+  };
+  const plan = planImport({ dataDir, sourceJson, sourceName: 'export.json' });
+  executeImport({ dataDir, storage, sourceJson, plan });
+
+  const jsonFile = path.join(dataDir, 'activities', '2026-11-08.json');
+  const jsonRows = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+  assert.equal('rid' in jsonRows[0], false, '导入记录没有 rid');
+
+  // 已知边界：jsonl 编辑路径看不到 JSON 数组里的记录
+  const missing = storage.updateDisplayRecord('2026-11-08', iso(9), { title: '改过了' });
+  assert.equal(missing.success, false, '编辑通道目前只覆盖 jsonl，这是既有行为');
+  assert.equal(JSON.parse(fs.readFileSync(jsonFile, 'utf8'))[0].windowTitle, 'x',
+    '被拒绝的编辑不得改动 JSON 文件');
+
+  // jsonl 路径下，补 rid 的行为本身是成立的
+  const jsonlFile = path.join(dataDir, 'activities', '2026-11-09.jsonl');
+  fs.writeFileSync(jsonlFile, JSON.stringify({
+    t: new Date(2026, 10, 9, 9).toISOString(), dur: 60000, app: 'manual', title: 'y', source: 'manual'
+  }) + '\n', 'utf8');
+
+  const ok = storage.updateDisplayRecord('2026-11-09',
+    new Date(2026, 10, 9, 9).toISOString(), { title: '改过了' });
+  assert.equal(ok.success, true);
+
+  const rows = fs.readFileSync(jsonlFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.match(rows[0].rid, UUID, '编辑后应当获得 rid');
+  assert.equal(rows[0].title, '改过了');
+});
