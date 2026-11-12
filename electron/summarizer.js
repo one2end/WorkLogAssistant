@@ -4,6 +4,7 @@ const path = require('path');
 const { app } = require('electron');
 const { writeFileAtomic } = require('./atomicFile');
 const { estimateTokens, overlapClues } = require('./aiReview');
+const aiEgress = require('./aiEgress');
 
 // Provider presets: each defines default baseUrl, model, and request format
 const PROVIDER_PRESETS = {
@@ -172,6 +173,34 @@ class Summarizer {
     }
   }
 
+  /**
+   * 把记录处理成可以外发的形状。
+   *
+   * 两步，顺序不能反：
+   *   1. 先按隐私规则剔除（剔除依据是应用名与标题，所以必须在这两个字段
+   *      被抹掉之前做——反过来的话，规则就永远匹配不上）
+   *   2. 再按开关决定哪些字段出现
+   *
+   * 关闭的字段**根本不出现在对象里**，不是空串占位。
+   */
+  _prepareForEgress(activities) {
+    const monitoring = (this.config && this.config.monitoring) || {};
+    const ai = (this.config && this.config.ai) || {};
+
+    const { kept, dropped } = aiEgress.filterForEgress(activities, monitoring);
+    if (dropped > 0) {
+      // 记下来但只记条数：日志里写具体应用名，等于把过滤掉的东西又写了一遍
+      console.log(`AI 出口过滤：剔除 ${dropped} 条`);
+    }
+
+    const projected = kept.map(a => aiEgress.projectForEgress(a, {
+      sendAppName: ai.sendAppName !== false,
+      sendWindowTitle: ai.sendWindowTitle === true
+    }));
+
+    return { activities: projected, dropped };
+  }
+
   getRecentActivities() {
     const storage = this._createStorage();
     const lookbackMinutes = this.config.summary.lookbackMinutes;
@@ -181,6 +210,23 @@ class Summarizer {
   }
   buildPrompt(activities) {
     const customPrompt = this.config.summary.prompt || '';
+
+    // --- 出口过滤：每一次发送之前都过一遍 ---
+    //
+    // 录制侧已经过滤过一次，但那管的是「什么被记下来」。
+    // 这里管的是「什么被发出去」，是另一个问题：
+    //   · 排除规则可能是后加的，历史数据仍在磁盘上
+    //   · 导入的数据没经过录制侧过滤
+    //   · 配置可能在读取与发送之间被改过
+    const egress = this._prepareForEgress(activities);
+    if (egress.activities.length === 0) {
+      // 全部被过滤掉时不要发一个空请求：那既浪费一次调用，
+      // 也让「今天没有可发送的内容」变得难以解释。
+      const err = new Error('没有可发送的活动内容（全部被隐私规则过滤）');
+      err.code = 'NO_EGRESS_CONTENT';
+      throw err;
+    }
+    activities = egress.activities;
 
     // 用真实会话时间线作为输入：每段自带时长，模型才能算出时间分配
     let activityText;

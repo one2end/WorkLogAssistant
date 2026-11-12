@@ -191,7 +191,19 @@ class ConfigManager {
       // AI 是能力开关，不是一个独立页面：关闭时应用只做本地记录与统计，
       // 数据不出本机；开启后才会自动归类、生成回顾、主动提示。
       ai: {
-        enabled: false
+        // 总开关默认关闭，本版本不改这个决策
+        enabled: false,
+        // 发给模型的数据范围。两个开关只在 AI 开启后才生效。
+        //
+        // sendAppName 默认 true：应用名是「这段时间在做什么」的主要线索，
+        // 而它本身通常不含具体内容（"chrome" 不泄露你在看什么）。
+        //
+        // sendWindowTitle 默认 **false**：窗口标题几乎总是包含具体内容
+        // （文件名、邮件主题、网页标题、聊天对象），是隐私暴露的主要来源。
+        // 它会明显降低摘要质量，所以这是一个明确的取舍，交给用户自己选，
+        // 而不是由默认值替他决定。
+        sendAppName: true,
+        sendWindowTitle: false
       },
       advice: { dismissed: [] },
 

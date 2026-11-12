@@ -376,7 +376,23 @@
         </button>
       </div>
       <div v-if="aiOn && !folded.ai" class="sec-body">
-        <p class="sec-desc">开启自动回顾后，后台按时间段增量评估记录。模型会看到相关应用名、窗口标题，以及人工解释与窗口重叠的线索；结果显示在首页 AI 回顾中。</p>
+        <p class="sec-desc">开启后，后台按时间段增量评估记录，结果显示在首页 AI 回顾中。下面两项决定具体发出去什么。</p>
+
+        <div class="row">
+          <span class="row-label">发送应用名<span class="row-desc">例如「chrome」「code」。通常不含具体内容</span></span>
+          <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.ai?.sendAppName !== false" @change="set('ai.sendAppName', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
+        </div>
+        <div class="row">
+          <span class="row-label">发送窗口标题<span class="row-desc">标题常包含文件名、邮件主题、聊天对象。关闭会明显降低摘要质量</span></span>
+          <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.ai?.sendWindowTitle === true" @change="set('ai.sendWindowTitle', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
+        </div>
+
+        <p class="egress-note">
+          本次将发送：<strong>{{ egressSummary }}</strong>。
+          每次发送前都会按「隐私」中的排除规则重新过滤一遍，
+          <template v-if="config.ai?.sendWindowTitle !== true">窗口标题不会包含在内。</template>
+          <template v-else>窗口标题会一并发送，请确认排除规则已覆盖敏感应用。</template>
+        </p>
         <div class="row">
           <span class="row-label">自动评估与回顾<span class="row-desc">开启后才会定期发送记录；空时段不会调用模型</span></span>
           <div class="row-control"><label class="switch"><input type="checkbox" :checked="config.summary?.autoGenerate === true" @change="set('summary.autoGenerate', $event.target.checked)"><span class="switch-track"><span class="switch-thumb"></span></span></label></div>
@@ -720,6 +736,13 @@ export default {
     didaStat() { return this.didaStatus || {}; },
     didaOn() { return !!this.dida.enabled; },
     aiOn() { return !!(this.config.ai && this.config.ai.enabled); },
+    /** 一句话说清这次会发什么——比百分比或「部分数据」诚实得多 */
+    egressSummary() {
+      const parts = ['时间段', '时长', '分类'];
+      if (this.config.ai?.sendAppName !== false) parts.push('应用名');
+      if (this.config.ai?.sendWindowTitle === true) parts.push('窗口标题');
+      return parts.join('、');
+    },
     pomodoroOn() {
       const v = this.config.focus && this.config.focus.enabled;
       return v === undefined ? true : !!v;
@@ -1685,4 +1708,15 @@ export default {
   .stat-item { padding: 8px; }
   .stat-item b { font-size: var(--fs-16); }
 }
+.egress-note {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  background: rgba(120, 160, 255, 0.08);
+  border: 1px solid rgba(120, 160, 255, 0.18);
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2, #aab);
+}
+.egress-note strong { color: var(--text-1, #e6e6e6); font-weight: 600; }
 </style>
