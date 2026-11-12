@@ -537,14 +537,17 @@ export default {
       const end = new Date(thread.end);
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return;
       const pad = n => String(n).padStart(2, '0');
-      const durationMin = Math.max(15, Math.round((end - start) / 60000 / 15) * 15);
+      // 这里不再自己取整：传原始起点与原始时长，由主进程的 slotRule 吸附。
+      // 之前这里先算了一遍 durationMin 再传给后端，后端又吸附一次——
+      // 同一段时间被取整两次，结果取决于两次取整是否会叠加。
+      const rawDurationMin = Math.max(1, Math.round((end - start) / 60000));
       try {
         const result = await ipcRenderer.invoke('replace-display-ranges', {
           ranges: [{ start: thread.start, end: thread.end }],
           record: {
             date: this.selectedDate,
             startTime: `${pad(start.getHours())}:${pad(start.getMinutes())}`,
-            durationMin,
+            durationMin: rawDurationMin,
             app: thread.label,
             note: thread.label,
             category: thread.category || thread.group || '其他',

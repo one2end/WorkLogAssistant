@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { writeFileAtomic } = require('./atomicFile');
 const { REPEATS, matchesRepeat } = require('./holidays');
+const { snapToStep } = require('./slotRule');
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
@@ -162,7 +163,11 @@ class PlanManager {
   upsert(payload) {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.date || '')) ? payload.date : '';
     const startMin = payload?.startMin === undefined ? timeToMin(payload?.startTime) : Number(payload.startMin);
-    const durationMin = Math.max(15, Math.round((Number(payload?.durationMin) || 30) / 15) * 15);
+    // 计划时长同样以 15 分钟为一格（B1）。这里用 snapToStep 而不是 snapRange：
+    // 计划允许跨日安排（下面会把时长上限放宽到 2880 - start），而 snapRange
+    // 的拒绝规则是为「人工补记」写的，套到计划上会误拒合法的跨日计划。
+    // 只统一吸附这一步，不改变计划的业务语义。
+    const durationMin = Math.max(15, snapToStep(Number(payload?.durationMin) || 30));
     const label = String(payload?.label || payload?.title || '').trim().slice(0, 100);
     if (!date || !Number.isFinite(startMin) || startMin < 0 || startMin >= 1440) {
       return { ok: false, error: '计划日期或开始时间无效' };

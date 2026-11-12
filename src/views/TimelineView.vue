@@ -405,6 +405,11 @@ import EmptyIllustration from '../components/EmptyIllustration.vue';
 import SegmentEditor from '../components/SegmentEditor.vue';
 import PlanEditor from '../components/PlanEditor.vue';
 import { colorForCategory } from '../styles/palette.js';
+// slotRule 是 CommonJS 模块，Rollup 无法静态分析其命名导出，
+// 所以走默认导入再取属性——两个环境下都能拿到同一个函数。
+import slotRule from '@slot-rule';
+
+const { snapToStep } = slotRule;
 
 const { ipcRenderer } = require('electron');
 
@@ -1110,10 +1115,16 @@ export default {
       return remark ? `${label}-${remark}` : label;
     },
 
-    /** 把鼠标位置换算成 15 分钟刻度 */
+    /**
+     * 把鼠标位置换算成 15 分钟刻度。
+     *
+     * 像素→分钟的换算是 UI 坐标问题（96px = 1 小时），只有最后的
+     * 「吸附到 15 分钟」是数据规则，交给 slotRule。夹取范围保持不变。
+     */
     minuteAt(trackEl, clientY) {
       const rect = trackEl.getBoundingClientRect();
-      const minute = Math.round(((clientY - rect.top) / 96 * 60) / 15) * 15;
+      const rawMinute = (clientY - rect.top) / 96 * 60;
+      const minute = snapToStep(rawMinute);
       return Math.max(0, Math.min(1440, minute));
     },
     /** 预览块的几何信息（top/height 用百分比，和真实块同一套坐标） */
@@ -1250,7 +1261,7 @@ export default {
       const onMove = ev => {
         if (Math.abs(ev.clientY - startY) < 4) return;
         moved = true;
-        duration = Math.max(15, Math.min(1440, Math.round((base.durationMin + (ev.clientY - startY) / 96 * 60) / 15) * 15));
+        duration = Math.max(15, Math.min(1440, snapToStep(base.durationMin + (ev.clientY - startY) / 96 * 60)));
         this.dragState = { plan: item, moved: true };
         const visibleEnd = item.source === 'carryover-plan'
           ? Math.max(15, base.startMin + duration - 1440)
@@ -1348,7 +1359,7 @@ export default {
       const track = el.parentElement;
       const grabY = e.clientY;
       const originStart = b.startMin;
-      const dur = Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15);
+      const dur = Math.max(15, snapToStep(b.endMin - b.startMin));
       let moved = false;
       let targetStart = originStart;
       this.closeCtx();
@@ -1363,7 +1374,7 @@ export default {
         if (!moved && Math.abs(ev.clientY - grabY) < 4) return;
         moved = true;
         const minute = this.minuteAt(track, ev.clientY);
-        const delta = Math.round((minute - originStart) / 15) * 15;
+        const delta = snapToStep(minute - originStart);
         targetStart = Math.max(0, Math.min(1440 - dur, originStart + delta));
         this.dragState = { block: b, moved: true };
         this.ghost = this.ghostOf(date, targetStart, targetStart + dur, false);
@@ -1613,7 +1624,7 @@ export default {
         key: b.key || `${b.date || this.selectedDate}-${b.startMin}`,
         range: `${this.clock(b.startMin)} – ${this.clock(b.endMin)}`,
         startTime: this.clock(b.startMin),
-        durationMin: Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15),
+        durationMin: Math.max(15, snapToStep(b.endMin - b.startMin)),
         // 保留原应用名：写死「手工标注」会让这段时间在应用统计里凭空多出一个应用
         app: b.app || '手工标注',
         category: b.category || '其他',
@@ -1816,7 +1827,7 @@ export default {
       const track = el.parentElement;
       const trackRect = track.getBoundingClientRect();
       const grabY = e.clientY;
-      const baseDur = Math.max(15, Math.round((b.endMin - b.startMin) / 15) * 15);
+      const baseDur = Math.max(15, snapToStep(b.endMin - b.startMin));
       let newDur = baseDur;
       let moved = false;
       this.closeCtx();
@@ -1829,7 +1840,7 @@ export default {
         const minute = hovered?.dataset.date === nextDay
           ? 1440 + this.minuteAt(hovered, ev.clientY)
           : Math.round(((ev.clientY - trackRect.top) / 96 * 60) / 15) * 15;
-        newDur = Math.max(15, Math.min(1440, Math.round((minute - b.startMin) / 15) * 15));
+        newDur = Math.max(15, Math.min(1440, snapToStep(minute - b.startMin)));
         this.dragState = { block: b, moved: true };
         const end = b.startMin + newDur;
         this.ghost = { ...this.ghostOf(date, b.startMin, Math.min(1440, end), false),
@@ -2172,7 +2183,7 @@ export default {
     openManualFor(b, ev) {
       if (this.editorOpen) { this.closeSegment(); return; }
       const duration = Math.min(this.mode === 'calendar' ? 1440 : 300,
-        Math.max(15, Math.round((b.durationMin || 15) / 15) * 15));
+        Math.max(15, snapToStep(b.durationMin || 15)));
       this.openSegment(this.newManualBlock(this.selectedDate, b.startMin, duration), ev);
     },
     async submitManual() {

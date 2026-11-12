@@ -21,6 +21,7 @@ const ConfigManager = require('./configManager');
 const StorageManager = require('./storageManager');
 const LogManager = require('./logManager');
 const importSafety = require('./importSafety');
+const slotRule = require('./slotRule');
 const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
 const { ApiServer, generateToken } = require('./apiServer');
@@ -1170,31 +1171,32 @@ function manualRecordFromPayload(payload) {
   const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(p.date || '')
     ? p.date
     : analytics.toDateStr(new Date());
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(p.startTime || '').trim());
-  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
-    return { error: '开始时间格式应为 HH:mm' };
-  }
 
   const rawDuration = parseInt(p.durationMin, 10);
-  if (!Number.isFinite(rawDuration) || rawDuration < 1 || rawDuration > 24 * 60) {
-    return { error: '时长需在 15–1440 分钟之间' };
+
+  // 吸附规则只在 slotRule 里实现一次。这里不再自己算 round/floor——
+  // 之前正是因为起点向下、时长就近两套策略并存，同一个输入在不同入口
+  // 会得到不同结果。
+  //
+  // snapRange 用**原始**时长判定最短 15 分钟：先吸附再判定的话，
+  // 3 分钟会被吸附成 15 分钟，判定就再也拦不住了。
+  const snapped = slotRule.snapRange(dateStr, p.startTime, rawDuration);
+  if (snapped.rejected) {
+    return { error: snapped.message, reason: snapped.reason };
   }
 
-  // 全系统统一以 15 分钟为一个块：不足 15 分钟按 15 分钟算，
-  // 超过则向上取整到 15 的倍数，避免出现「3 分钟」「7 分钟」这种块。
-  const durationMin = Math.max(15, Math.round(rawDuration / 15) * 15);
-
   const pad = (n) => String(n).padStart(2, '0');
-  // 开始时间也对齐到 15 分钟格（10:07 → 10:00），让块边界始终落在刻度上
-  const snappedMinute = Math.floor(parseInt(m[2], 10) / 15) * 15;
-  const start = new Date(`${dateStr}T${pad(m[1])}:${pad(snappedMinute)}:00`);
+  const start = new Date(
+    `${dateStr}T${pad(Math.floor(snapped.startMin / 60))}:${pad(snapped.startMin % 60)}:00`
+  );
   if (Number.isNaN(start.getTime())) {
     return { error: '时间无法解析' };
   }
+  const durationMin = snapped.durationMin;
   const appName = String(p.app || '手工标注').trim() || '手工标注';
   const remark = String(p.note ?? p.title ?? '').trim() ||
     (!['手工标注', '手工记录'].includes(appName) ? appName : '');
-  return { dateStr, durationMin, record: {
+  return { dateStr, durationMin, snapped, record: {
     t: start.toISOString(),
     dur: durationMin * 60000,
     kind: 'active',
@@ -1225,6 +1227,36 @@ ipcMain.handle('add-manual-record', (event, payload) => {
     logManager.addLog(`手工补记 ${dateStr} ${payload.startTime} · ${durationMin} 分钟`, 'info');
   }
   return { ok, error: ok ? null : '写入失败' };
+});
+
+/**
+ * 吸附预览。只读，不写任何数据。
+ *
+ * 渲染层不能 require electron/slotRule（那是主进程模块），但显示「将保存为
+ * 09:00—10:45，共 105 分钟」又必须与真正落盘的结果完全一致。所以让渲染层
+ * 问主进程要结果——同一份代码、同一次计算，前端拿到的就是最终会写进去的。
+ *
+ * 若让前端自己复刻一份四舍五入，迟早会与后端飘开，而那种偏差只会在
+ * 「预览说 105 分，实际存了 90 分」时才被发现，且没有任何报错。
+ */
+ipcMain.handle('preview-snap', (event, payload) => {
+  const p = payload || {};
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(p.date || '') ? p.date : analytics.toDateStr(new Date());
+  const rawDuration = parseInt(p.durationMin, 10);
+  const result = slotRule.snapRange(dateStr, p.startTime, rawDuration);
+  // 重叠检测也一并在主进程做，避免前端再实现一遍区间相交
+  if (!result.rejected && Array.isArray(p.records)) {
+    result.overlaps = slotRule.findOverlaps(dateStr, result.startMin, result.endMin, p.records)
+      .map(o => ({
+        index: o.index,
+        overlapMin: o.overlapMin,
+        kind: o.kind,
+        source: o.source,
+        app: o.record && o.record.processName,
+        title: o.record && o.record.windowTitle
+      }));
+  }
+  return result;
 });
 
 ipcMain.handle('replace-display-ranges', (event, payload) => {

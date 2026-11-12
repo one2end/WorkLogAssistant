@@ -7,6 +7,7 @@ const { writeFileAtomic } = require('./atomicFile');
 const { splitRecordAtMidnight } = require('./timeSplit');
 const writeGate = require('./writeGate');
 const { MigrationEngine } = require('./legacyMigration');
+const slotRule = require('./slotRule');
 
 class StorageManager {
   constructor(customBasePath) {
@@ -689,8 +690,15 @@ class StorageManager {
       const pad = (n) => String(n).padStart(2, '0');
       let added = 0;
       for (const span of (spans || [])) {
-        const startMin = Math.max(0, Math.min(1440 - 15, Math.floor((Number(span.startMin) || 0) / 15) * 15));
-        const durMin = Math.max(15, Math.round((Number(span.durationMin) || 15) / 15) * 15);
+        // 吸附统一走 slotRule：起点就近、终点由起点+时长推导后再就近。
+        // 这些 span 来自「当天同应用全部同步」，时长本身就是 15 的倍数，
+        // 走统一规则后结果与旧的 floor+round 一致，但不再有第二套实现。
+        const startHHMM = `${pad(Math.floor((Number(span.startMin) || 0) / 60))}:` +
+          `${pad((Number(span.startMin) || 0) % 60)}`;
+        const snapped = slotRule.snapRange(dateStr, startHHMM, Math.max(15, Number(span.durationMin) || 15));
+        if (snapped.rejected) continue;   // 无法吸附的 span 跳过，不写半截数据
+        const startMin = snapped.startMin;
+        const durMin = snapped.durationMin;
         const start = new Date(`${dateStr}T00:00:00`);
         start.setMinutes(startMin);
         const end = new Date(start.getTime() + durMin * 60000);
