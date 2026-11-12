@@ -20,6 +20,7 @@ const Summarizer = require('./summarizer');
 const ConfigManager = require('./configManager');
 const StorageManager = require('./storageManager');
 const LogManager = require('./logManager');
+const importSafety = require('./importSafety');
 const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
 const { ApiServer, generateToken } = require('./apiServer');
@@ -1547,37 +1548,93 @@ ipcMain.handle('import-data', async (event, mode) => {
       return { success: false, error: '无效的数据文件格式' };
     }
 
-    let importedCount = 0;
-
+    // 覆盖模式已删除。它会先清空 activities/ 再导入，一旦导入文件有问题，
+    // 用户的历史就只剩快照可救；而多数人是想「把这份备份并进来」，
+    // 不是「用这份备份替换掉现在」。合并导入本来就能达到目的。
     if (mode === 'overwrite') {
-      // Clear existing data first
-      storageManager.clearActivities();
+      return {
+        success: false,
+        error: '覆盖导入已移除，请使用「合并」。合并不会删除任何现有记录。'
+      };
     }
 
-    // Import activities
-    if (Array.isArray(data.activities)) {
-      data.activities.forEach(a => {
-        if (a.timestamp && a.processName) {
-          storageManager.saveActivity(a);
-          importedCount++;
-        }
+    const plan = importSafety.planImport({
+      dataDir: storageManager.getDataDir(),
+      sourceJson: data,
+      sourceName: path.basename(selected),
+      sourceSha256: crypto.createHash('sha256').update(fs.readFileSync(selected)).digest('hex')
+    });
+
+    // 已完整导入过：默认不做任何事，把决定权交给用户
+    if (plan.action === 'already-completed') {
+      const prev = plan.previousTask;
+      return {
+        success: false,
+        alreadyImported: true,
+        fingerprint: plan.fingerprint,
+        previousAt: prev ? prev.updatedAt : null,
+        message: `该文件已于 ${prev ? new Date(prev.updatedAt).toLocaleString('zh-CN') : '此前'} 导入过，未重复导入。`
+      };
+    }
+
+    // 导入前快照。快照失败就中止——没有快照就没有退路
+    const snap = storageManager.snapshotBeforeImport('import-merge');
+    if (!snap.ok) {
+      return {
+        success: false,
+        error: `导入前快照失败，已中止导入以避免无法回退：${snap.error}`
+      };
+    }
+
+    let outcome;
+    try {
+      outcome = importSafety.executeImport({
+        dataDir: storageManager.getDataDir(),
+        storage: storageManager,
+        sourceJson: data,
+        plan,
+        sourceName: path.basename(selected),
+        sourceSha256: crypto.createHash('sha256').update(fs.readFileSync(selected)).digest('hex')
       });
+    } catch (error) {
+      // 中断（崩溃/关窗）时任务文件已留下 imp 痕迹，下次可以「继续」
+      return {
+        success: false,
+        interrupted: true,
+        error: `导入中断：${error.message}`,
+        snapshotPath: snap.snapshotPath,
+        message: '已写入的记录带有批次标记，重新导入时会从断点继续，不会重复。'
+      };
     }
 
-    // Import summaries
-    if (Array.isArray(data.summaries)) {
-      data.summaries.forEach(s => {
-        if (s.timestamp && s.summary) {
-          storageManager.saveSummary(s);
-        }
-      });
-    }
+    const a = outcome.activities;
+    const s = outcome.summaries;
+    const parts = [`活动 ${a.succeeded} 条`];
+    if (a.skipped) parts.push(`跳过 ${a.skipped} 条（此前已导入）`);
+    if (a.failed) parts.push(`失败 ${a.failed} 条`);
+    if (s.succeeded) parts.push(`摘要 ${s.succeeded} 条`);
+    if (s.skipped) parts.push(`摘要跳过 ${s.skipped} 条`);
+    if (s.failed) parts.push(`摘要失败 ${s.failed} 条`);
+    if (s.mdFailed) parts.push(`其中 ${s.mdFailed} 条文字版未生成`);
 
-    logManager.addLog(`数据导入完成 (${mode})，导入 ${importedCount} 条活动`, 'info');
-    if (mainWindow) {
+    logManager.addLog(`数据导入完成：${parts.join('，')}`, a.failed || s.failed ? 'warn' : 'info');
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('summary-generated');
+      mainWindow.webContents.send('data-changed');
     }
-    return { success: true, importedCount };
+
+    return {
+      success: true,
+      // 只有全部成功才算真成功。任一失败都要如实告诉用户。
+      ok: a.failed === 0 && s.failed === 0,
+      importedCount: a.succeeded,
+      activities: a,
+      summaries: s,
+      snapshotPath: snap.snapshotPath,
+      warning: outcome.warning,
+      mdIncomplete: outcome.mdIncomplete,
+      message: parts.join('，')
+    };
   } catch (error) {
     return { success: false, error: error.message };
   }

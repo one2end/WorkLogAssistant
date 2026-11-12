@@ -274,9 +274,8 @@
           <span class="row-label">导入</span>
           <div class="btn-row">
             <button class="btn btn-secondary btn-sm" @click="$emit('import-merge')"><Icon name="upload" :size="12" /> 合并</button>
-            <button class="btn btn-danger btn-sm" @click="$emit('import-overwrite')"><Icon name="upload" :size="12" /> 覆盖</button>
           </div>
-          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」。选目录会直接切换过去并立即生效，不覆盖已有数据；「覆盖」仅对单文件导入生效。</p>
+          <p class="hint">可选「完整导出 JSON 文件」或「数据目录」。选目录会直接切换过去并立即生效，不覆盖已有数据；合并导入会保留现有全部记录，导入前自动生成快照。</p>
         </div>
       </div>
       <div v-else class="sec-collapsed">已折叠</div>
@@ -629,7 +628,7 @@ export default {
   emits: [
     'save', 'category-change', 'category-meta-change', 'category-merge-change', 'app-map-change', 'window-rule-change', 'project-rule-change', 'productivity-change', 'suggest-categories', 'provider-change', 'toggle-auto-launch', 'theme-change', 'surface-change',
     'select-storage', 'reset-storage',
-    'export-day', 'export-full-json', 'export-csv', 'import-merge', 'import-overwrite',
+    'export-day', 'export-full-json', 'export-csv', 'import-merge',
     'bridge-toggle', 'bridge-apply-port', 'bridge-regen', 'bridge-test', 'bridge-copy', 'bridge-open',
     'update:bridgePortInput', 'add-schedule', 'remove-schedule',
     'check-update', 'open-download', 'clear-logs', 'open-logs', 'dida-sync'

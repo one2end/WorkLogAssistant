@@ -170,7 +170,6 @@
           @export-full-json="exportFullJSON"
           @export-csv="exportCSV"
           @import-merge="importData('merge')"
-          @import-overwrite="importData('overwrite')"
           @bridge-toggle="toggleBridge"
           @bridge-apply-port="applyBridgePort"
           @bridge-regen="regenerateBridgeToken"
@@ -1180,11 +1179,17 @@ export default {
             this.showToast(`已切换到数据目录，立即生效（发现 ${res.importedCount} 个日期数据文件）`, 'success');
             this.storagePath = await ipcRenderer.invoke('get-storage-path');
           } else {
-            this.showToast(`已导入 ${res.importedCount} 条记录`, 'success');
+            // 逐条结果如实展示：只有全部写成功才算「成功」，有失败要说清失败几条
+            const level = res.ok ? 'success' : 'error';
+            this.showToast(res.message || `已导入 ${res.importedCount} 条记录`, level);
+            if (res.warning) this.showToast(res.warning, 'error');
           }
           await this.reloadDate();
           await this.loadDailyTracked(true);
           await this.loadSummaries();
+        } else if (res && res.alreadyImported) {
+          // 同一份文件重复导入：默认不动，把决定权留给用户
+          this.showToast(res.message, 'info');
         } else if (res && !res.canceled) {
           this.showToast('导入失败: ' + res.error, 'error');
         }
