@@ -207,10 +207,24 @@ class ConfigManager {
           localConfig = JSON.parse(fs.readFileSync(this.localConfigPath, 'utf8')) || {};
         } catch (_) { /* 损坏则重建 */ }
       }
+
+      // 密钥按「字段是否存在」判定，不按「值是否为空」。
+      // 前端拿到的是脱敏投影（apiKey 恒为空串），它回传时若原样带着空串，
+      // 用 || '' 的写法就会把用户已存的密钥抹掉——只是改了个主题，
+      // 密钥就没了，而日志里什么都不会留下。
+      const nextApiKey = this._resolveSecret(
+        config.api ? config.api.apiKey : undefined,
+        localConfig.api && localConfig.api.apiKey
+      );
+      const nextDidaToken = this._resolveSecret(
+        config.dida ? config.dida.token : undefined,
+        localConfig.dida && localConfig.dida.token
+      );
+
       // 敏感信息只进 config.local.json，不写进 config.json（后者可能被同步/备份）
       localConfig = this.mergeDeep(localConfig, {
-        api: { apiKey: config.api?.apiKey || '' },
-        dida: { token: config.dida?.token || '' }
+        api: { apiKey: nextApiKey },
+        dida: { token: nextDidaToken }
       });
       fs.writeFileSync(this.localConfigPath, JSON.stringify(localConfig, null, 2), 'utf8');
 
@@ -224,7 +238,12 @@ class ConfigManager {
       }
       fs.writeFileSync(this.configPath, JSON.stringify(safeConfig, null, 2), 'utf8');
 
-      this.config = config;
+      // 内存里也同步成真实值：后续调用拿到的 config 必须是完整的，
+      // 否则保存完一次设置，AI 就再也读不到 key 了。
+      this.config = this.mergeDeep(config, {
+        api: { apiKey: nextApiKey },
+        dida: { token: nextDidaToken }
+      });
       return true;
     } catch (error) {
       console.error('保存配置失败:', error);
@@ -234,6 +253,93 @@ class ConfigManager {
 
   getConfig() {
     return this.config;
+  }
+
+  /**
+   * 给渲染层看的配置投影。
+   *
+   * 为什么不能直接返回 getConfig()：
+   *   那是活的配置对象，api.apiKey 与 dida.token 是明文。
+   *   渲染层任何脚本（含将来引入的第三方代码、或页面被注入时）
+   *   读一次 get-config 就拿到了密钥。
+   *
+   *   注意 saveConfig 里把 apiKey 置空的那一段**不解决这个问题**——
+   *   它置空的是写进 config.json 的那份副本，与返回给渲染层的对象无关。
+   *   这个混淆很容易发生，所以这里单独有一个方法而不是就地改写。
+   *
+   * 用布尔值而不是空串：空串会让前端无法区分「没设过」和「设了但被隐藏」，
+   * 于是在保存设置时把已有密钥覆盖成空。
+   */
+  getSafeConfig() {
+    const safe = JSON.parse(JSON.stringify(this.config || {}));
+    const hasApiKey = !!(safe.api && safe.api.apiKey);
+    const hasDidaToken = !!(safe.dida && safe.dida.token);
+
+    if (safe.api) safe.api.apiKey = '';
+    if (safe.dida) safe.dida.token = '';
+
+    // 布尔位放在各自的对象里，前端拿到的结构不变，只是密钥换成了状态
+    safe.api = { ...(safe.api || {}), hasApiKey };
+    safe.dida = { ...(safe.dida || {}), hasDidaToken };
+    return safe;
+  }
+
+  /**
+   * 单个密钥的写入语义。
+   *
+   * 这里有个绕不开的矛盾：前端拿到的是脱敏投影，apiKey 恒为空串。
+   * 它回传时带着空串，主进程无法区分「用户没动过这个字段」和
+   * 「用户点了清除」——两者长得一模一样。
+   *
+   * 所以约定是：**空串一律视为「未修改」**，清除必须走显式入口
+   * （clearApiKey / clearDidaToken，或带 clear: true 标记）。
+   *
+   * 为什么把空串当作「未修改」而不是「清除」：
+   *   猜错的方向是有代价的。把「未修改」误判成「清除」，用户只是改了个
+   *   主题就发现密钥没了，而且没有任何提示；把「清除」误判成「未修改」，
+   *   用户点了清除但没生效，再点一次或换个入口即可——后者可恢复，前者不可。
+   *
+   * 判定依据是「字段是否存在」，不是「值是否为空」：
+   *   · 字段不存在 / undefined → 保留现有值
+   *   · 非空字符串            → 替换
+   *   · 空字符串              → 视为未修改，保留（清除请用显式入口）
+   */
+  _resolveSecret(incoming, current) {
+    if (typeof incoming !== 'string' || incoming === '') return current || '';
+    return incoming;
+  }
+
+  /**
+   * 主动清除密钥。有独立入口，不必依赖「传空串」这种隐晦约定。
+   *
+   * 注意这里不能只是把值设成空串再走 saveConfig——saveConfig 会把空串
+   * 当作「未修改」保留旧值（见 _resolveSecret）。清除必须显式落盘。
+   */
+  clearApiKey() {
+    return this._clearSecret('api', 'apiKey');
+  }
+
+  clearDidaToken() {
+    return this._clearSecret('dida', 'token');
+  }
+
+  _clearSecret(section, field) {
+    try {
+      let localConfig = {};
+      if (fs.existsSync(this.localConfigPath)) {
+        try {
+          localConfig = JSON.parse(fs.readFileSync(this.localConfigPath, 'utf8')) || {};
+        } catch (_) { /* 损坏则重建 */ }
+      }
+      localConfig[section] = { ...(localConfig[section] || {}), [field]: '' };
+      fs.writeFileSync(this.localConfigPath, JSON.stringify(localConfig, null, 2), 'utf8');
+
+      this.config[section] = { ...(this.config[section] || {}), [field]: '' };
+      return true;
+    } catch (error) {
+      console.error('清除密钥失败:', error);
+      return false;
+    }
   }
 
   updateConfig(updates) {

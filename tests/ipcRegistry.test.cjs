@@ -44,11 +44,12 @@ test('the registry covers every channel main.js actually registers', () => {
   assert.equal(declared.length, actual.length);
 });
 
-test('the channel count matches what the plan documents: 75', () => {
-  // 74 是 V0.10.6 规划时的实测值。A2 为渲染层新增了 open-external ——
-  // 渲染层需要打开链接，但不能直接把 shell 交出去，所以加一个由主进程
-  // 做白名单校验的通道。总数因此是 75，任务书与矩阵同步更新。
-  assert.equal(Object.keys(reg.allChannels()).length, 75,
+test('the channel count matches what the plan documents: 76', () => {
+  // 74 是 V0.10.6 规划时的实测值。此后 A2 加了 open-external
+  // （渲染层要开链接，但不能把 shell 直接交出去），A6 加了 clear-secret
+  // （密钥不下发到渲染层后，清除无法再用「传空串」表达）。总数因此是 76。
+  // 任务书与矩阵同步更新。
+  assert.equal(Object.keys(reg.allChannels()).length, 76,
     '通道总数变化时必须同步更新任务书与矩阵，否则文档会悄悄过期');
 });
 

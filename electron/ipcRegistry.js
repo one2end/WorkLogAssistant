@@ -94,6 +94,9 @@ const MAIN_ONLY_CHANNELS = [
   'add-log', 'add-manual-record',
   'arhat-add-note', 'arhat-get-notes', 'arhat-get-sessions', 'arhat-get-stats',
   'check-for-updates', 'clear-logs',
+  // 主动清除密钥。渲染层拿到的是脱敏投影，传空串无法表达「我要清除」，
+  // 所以给一个显式动作，语义清楚、日志可审计。
+  'clear-secret',
   'convert-plan-to-fact',
   'delete-display-range', 'delete-display-record', 'delete-focus-session', 'delete-local-plan',
   'dida-projects', 'dida-status', 'dida-sync-now',

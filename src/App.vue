@@ -361,7 +361,9 @@ export default {
       return !!(this.config.ai && this.config.ai.enabled);
     },
     aiReady() {
-      return this.aiEnabled && !!(this.config.api && this.config.api.apiKey);
+      // 密钥不再下发到渲染层（get-config 返回的是脱敏投影），
+      // 所以判断「有没有配」要看 hasApiKey 这个布尔位，而不是 key 本身。
+      return this.aiEnabled && !!(this.config.api && this.config.api.hasApiKey);
     },
     /** 热力图周数来自设置页，改了就要真正改变天数跨度 */
     heatWeeks() {

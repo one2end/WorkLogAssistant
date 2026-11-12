@@ -307,7 +307,7 @@
         <div class="row">
           <span class="row-label">API 口令<span class="row-desc">网页版滴答 → 设置 → 账户与安全 → API 口令；只保存在本机</span></span>
           <div class="row-control wide">
-            <input type="password" :value="dida.token" placeholder="未填写" autocomplete="off" @change="set('dida.token', $event.target.value)">
+            <input type="password" :value="dida.token" :placeholder="dida.hasDidaToken ? '已设置（留空则不修改）' : '未填写'" autocomplete="off" @change="set('dida.token', $event.target.value)">
           </div>
         </div>
 
@@ -401,7 +401,7 @@
         <div class="row">
           <span class="row-label">API Key</span>
           <div class="row-control wide">
-            <input :value="api.apiKey" type="password" placeholder="sk-..." autocomplete="off" @change="set('api.apiKey', $event.target.value)">
+            <input :value="api.apiKey" type="password" :placeholder="api.hasApiKey ? '已设置（留空则不修改）' : 'sk-...'" autocomplete="off" @change="set('api.apiKey', $event.target.value)">
           </div>
         </div>
         <div class="row-block">
@@ -932,7 +932,10 @@ export default {
     /** 读取滴答清单列表。force=true 时忽略主进程的 10 分钟缓存 */
     async loadProjects(force) {
       if (this.loadingProjects) return;
-      if (!this.dida.token) { this.projectError = '先填写 API 口令才能读取清单'; return; }
+      // 口令不再下发到渲染层，判断「有没有配」要看 hasDidaToken
+      if (!this.dida.token && !this.dida.hasDidaToken) {
+        this.projectError = '先填写 API 口令才能读取清单'; return;
+      }
       this.loadingProjects = true;
       this.projectError = '';
       try {

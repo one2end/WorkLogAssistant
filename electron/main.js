@@ -23,6 +23,7 @@ const LogManager = require('./logManager');
 const importSafety = require('./importSafety');
 const slotRule = require('./slotRule');
 const storagePrecheck = require('./storagePrecheck');
+const ipcGuard = require('./ipcGuard');
 const reportRunner = require('./reportRunner');
 const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
@@ -839,8 +840,19 @@ app.on('before-quit', () => {
   } catch (_) { /* 退出路径上不再抛错 */ }
 });
 
+// --- IPC 来源校验 ---
+// 必须在任何 ipcMain.handle 之前装上：它包住的是 ipcMain.handle 本身。
+// 窗口引用每次现取，因为窗口会被销毁重建。
+ipcGuard.install(ipcMain, () => ({ main: mainWindow, focus: focusWindow, float: floatWindow }), {
+  onDenied: ({ channel, role, reason }) => {
+    logManager.addLog(`拒绝 IPC 调用 ${channel}（来源 ${role || '未知'}，原因 ${reason}）`, 'error');
+  }
+});
+
 ipcMain.handle('get-config', () => {
-  return configManager.getConfig();
+  // 只返回脱敏投影：明文密钥不出主进程。
+  // 旧实现返回 getConfig()，渲染层读一次就拿到了 apiKey 与滴答 token。
+  return configManager.getSafeConfig();
 });
 
 ipcMain.handle('get-provider-presets', () => {
@@ -858,6 +870,28 @@ ipcMain.handle('dida-projects', async (event, payload) => {
 ipcMain.handle('dida-sync-now', async (event, payload) => {
   if (payload?.direction && payload.direction !== 'push') return { ok: false, reason: '滴答仅支持单向推送' };
   return didaSync.push({ manual: true });
+});
+
+/**
+ * 主动清除密钥。
+ *
+ * 为什么需要独立通道：渲染层拿到的是脱敏投影，密钥字段恒为空串，
+ * 传空串无法表达「我要清除」。给一个显式动作，语义清楚也可审计——
+ * 日志里能看出「用户点了清除」，而不是「保存了一次配置」。
+ */
+ipcMain.handle('clear-secret', (event, payload) => {
+  const which = payload && payload.which;
+  if (which === 'apiKey') {
+    const ok = configManager.clearApiKey();
+    if (ok) logManager.addLog('已清除 API Key', 'info');
+    return { ok };
+  }
+  if (which === 'didaToken') {
+    const ok = configManager.clearDidaToken();
+    if (ok) logManager.addLog('已清除滴答 API 口令', 'info');
+    return { ok };
+  }
+  return { ok: false, error: '未知的密钥类型' };
 });
 
 ipcMain.handle('save-config', async (event, config) => {

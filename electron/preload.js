@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('worklog', {
   arhatGetStats: (...args) => invoke('arhat-get-stats', ...args),
   checkForUpdates: (...args) => invoke('check-for-updates', ...args),
   clearLogs: (...args) => invoke('clear-logs', ...args),
+  clearSecret: (...args) => invoke('clear-secret', ...args),
   convertPlanToFact: (...args) => invoke('convert-plan-to-fact', ...args),
   deleteDisplayRange: (...args) => invoke('delete-display-range', ...args),
   deleteDisplayRecord: (...args) => invoke('delete-display-record', ...args),

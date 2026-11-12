@@ -100,7 +100,8 @@ export default {
       }
       if (p.id === 'ai') {
         if (!this.on(p)) return '未启用 · 数据不出本机';
-        if (!(c.api && c.api.apiKey)) return '待填写 API Key';
+        // 密钥不下发到渲染层，看 hasApiKey 而不是 key 本身
+        if (!(c.api && c.api.hasApiKey)) return '待填写 API Key';
         return (c.api && c.api.modelName) || '模型待配置';
       }
       if (p.id === 'mcp') {
