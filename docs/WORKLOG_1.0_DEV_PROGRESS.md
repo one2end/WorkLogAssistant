@@ -681,3 +681,87 @@ findOverlaps(dateStr, start, end, records) // → [{ index, record, overlapMs, o
 | `2e00003` | Stop testing a copy of the rule, and check overlap without touching samples |
 | `5b5bdd5` | Write down what V0.10.4 changes for the user, not just the code |
 | `afb30b7` | Show what will be saved before saving it, and stop lying about the minimum |
+
+---
+
+# V0.10.5：存储目录可靠性与主线程卡死
+
+依据：`docs/WORKLOG_1.0_AUDIT_ROUND2.md`「V0.10.5 — 存储目录可靠性与主线程卡死（P1）」
+
+## 任务一：切目录前预检 ✅ `be1dce6`
+
+新增 `electron/storagePrecheck.js` + `storagePrecheckWorker.js`。
+
+检查两项：
+1. **真的写一个探针文件再删掉**——只查权限位不够，同步盘、只读挂载、权限继承异常的目录常常通过权限检查但写不进去
+2. **抽样读真实数据文件并计时**——这是唯一能发现「仅在线文件」的办法
+
+**预检本身跑在子进程里**：如果读云端占位文件会阻塞，在主进程做预检就等于把要防的问题自己做一遍。父进程到点 kill，结果按「拒绝」处理而不是「通过」。
+
+覆盖两个入口：`migrate-storage` 与 `save-config`（后者更隐蔽——用户改个开关可能顺手把路径也换了）。
+
+**偏离方案的一处，已说明理由**：方案要求检测 `0x400000` 属性位。Node 的 `fs.stat` 拿不到 Windows 文件属性位，要实现就得引 native 模块。**与其写一个永远返回 false 的 `isCloudOnly()` 让人误以为检查过了，不如用「实际读一次并计时」**——它测的正是真正会让界面卡住的那个操作，且跨平台成立。实现时先写了 `isCloudOnly` 的空壳，随即删掉，因为留着比没有更糟。
+
+## 任务二：报表计算迁 worker ✅ `91922d4`
+
+新增 `electron/reportWorker.js` + `reportRunner.js`。
+
+- 只开放只读作业（`dayReport` / `rangeReport` / `listApps`）；任何写操作都不进 worker——会让写锁与迁移的时序无法推理
+- 超时 `terminate()`，默认 15s
+
+**最关键的设计决定是失败时的行为**：超时、崩溃、线程起不来，**一律回退到主进程同步计算**，绝不返回空报告。空报告在界面上表现为「今天没有记录」，用户会以为数据丢了。慢而正确，好过快而错——尤其在「你到底有没有记录」这个问题上。
+
+回退会写日志，超时的情况还会指出可能的云端目录问题，让降级路径有机会被发现并修掉，而不是悄悄变成常态。
+
+## 任务三：缓冲溢出不再丢数据 ✅ `17accb8`
+
+`activityRecorder.flush()` 的 `slice(-200)` 改为溢出到 `activities/<日期>.overflow.jsonl`。
+
+- 缓冲仍维持 200 条上限（无限增长只是把问题搬到内存）
+- 溢出**追加**而非覆盖，重复失败会累积
+- 落在独立文件，**不自动合并回主文件**——那会让报表在没人知道原因的情况下变化。文件留给人工处理
+- `onOverflow` 回调把条数与路径交给上层，UI 才有机会提示
+
+迁移期间被写锁拒绝的路径**保持原样**（全部留在内存不截断）——迁移是有界事件，在那里丢数据和这里犯的是同一个错。
+
+## 测试与回归实测
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npm run lint` | **0** | 0 error / 0 warning |
+| `npm run build` | **0** | ✓ built |
+| `npm test` | **0** | **332 tests，332 pass，0 fail** |
+
+新增：`storagePrecheck.test.cjs` 12 项、`reportWorker.test.cjs` 9 项、`recorderOverflow.test.cjs` 6 项（共 27 项）。
+
+## 独立审计
+
+| 审计项 | 结果 |
+|---|---|
+| 迁移引擎 / 写入锁 / 导入安全 / 指纹 / slotRule / timeSplit | ✅ `git diff b9cd041..HEAD` **无输出** |
+| worker 是否含写操作 | ✅ 无 `writeFileSync` / `appendFileSync` / `saveActivity` |
+| 预检是否碰数据文件 | ✅ 只写一个探针文件并立即删除 |
+| 失败是否伪装成空数据 | ✅ 三个降级分支全部回退同步计算，有测试断言 `recordedMs > 0` |
+| 溢出数据是否回流主文件 | ✅ 不回流，独立文件留待人工 |
+
+## 过程中修复的两个自身问题
+
+1. **`isCloudOnly` 空壳**：先写了一个永远返回 false 的实现。这种代码比没有更糟——它让「已检查云占位」这句话变成假的。已删除并说明替代方案。
+2. **worker 注入点**：`buildDayReportSafe` 内部直接调用 `runInWorker`，从外部替换导出属性不生效。改为支持 `ro.runner` 注入，测试才能真正走降级分支而不是假装走。
+
+## V0.10.5 未做 / 已知边界
+
+| 项 | 说明 |
+|---|---|
+| `storageManager` 读路径仍在主进程 | 按方案建议分两次提交，本次只做 `analytics`。`storageManager.getActivities` 同步调用点多，改造面大，留待后续 |
+| `rangeReport` / `listApps` | worker 已支持，但调用点尚未接入（`buildDayReportSafe` 只覆盖日报） |
+| 溢出文件的手工合并 | 未提供工具，文件格式与主文件一致，可直接人工处理 |
+| `0x400000` 属性检测 | 明确不做，理由见上 |
+
+## 提交记录（V0.10.5）
+
+| Commit | 内容 |
+|---|---|
+| `17accb8` | Spill the buffer to a file instead of silently dropping the oldest records |
+| `be1dce6` | Check that a storage directory can actually be read before switching to it |
+| `91922d4` | Compute day reports off the main thread, and never report failure as emptiness |
