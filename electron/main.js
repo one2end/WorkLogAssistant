@@ -24,6 +24,7 @@ const importSafety = require('./importSafety');
 const slotRule = require('./slotRule');
 const storagePrecheck = require('./storagePrecheck');
 const ipcGuard = require('./ipcGuard');
+const dailyReview = require('./dailyReview');
 const externalLink = require('./externalLink');
 
 // 桥接页的一次性票据。放在模块级：进程存活期间有效，
@@ -1089,6 +1090,112 @@ ipcMain.handle('get-day-analytics', async (event, date) => {
       degraded,
       degradedReason: degraded ? reason : undefined
     };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+/**
+ * 每日复盘草稿。
+ *
+ * 复用 get-day-analytics 的报告，不重新扫描——同一份数据算两遍会让
+ * 复盘里的数字和首页对不上，而这种不一致最难解释。
+ */
+ipcMain.handle('get-daily-review', async (event, payload) => {
+  try {
+    const dateStr = (payload && payload.date) || analytics.toDateStr(new Date());
+    const { report } = await reportRunner.buildDayReportSafe(
+      storageManager.getDataDir(),
+      dateStr,
+      configManager.getConfig().analysis,
+      { onLog: (msg, level) => logManager.addLog(msg, level) }
+    );
+
+    // 计划也要带上：复盘里「计划与实际」这一段没有计划就只是一句「没有安排」
+    const plans = planManager.listForDate(dateStr) || [];
+
+    const review = dailyReview.buildDailyReview({ report, plans, date: dateStr });
+    return { ok: true, ...review };
+  } catch (error) {
+    // 失败必须说清楚，不能返回空草稿——用户会以为今天真的什么都没做
+    return { ok: false, error: error.message };
+  }
+});
+
+/**
+ * 项目维度的投入统计。
+ *
+ * 支持按天/周/月查看：前端传日期范围，这里不猜「周」的定义，
+ * 避免前后端对「本周从周几开始」有不同理解。
+ */
+/**
+ * AI 补充「明天最重要的一件事」。
+ *
+ * 只把复盘草稿发给模型，**不发原始活动记录**。
+ * 草稿已经是用户看过、可能改过的内容——它的信息密度更高，
+ * 也更容易判断哪些不该外发。发原始记录等于绕开用户在复盘里的编辑意图。
+ *
+ * AI 关闭时直接报错，不静默返回空字符串。
+ */
+ipcMain.handle('suggest-next-action', async (event, payload) => {
+  const cfg = configManager.getConfig();
+  if (!cfg.ai || cfg.ai.enabled !== true) {
+    return { ok: false, error: 'AI 能力未启用' };
+  }
+  const draft = String((payload && payload.draft) || '').trim();
+  if (!draft) return { ok: false, error: '草稿为空，先生成复盘' };
+
+  try {
+    const prompt = [
+      '下面是一个人今天的时间记录复盘草稿。请只基于草稿里出现的事实，',
+      '给出「明天最重要的一件事」——一条具体、可执行、能在一天内完成的建议。',
+      '不要复述草稿，不要编造草稿里没有的活动，不要用「建议你」这类空话开头。',
+      '如果草稿里的信息不足以判断，就直说信息不足，不要猜。',
+      '两句话以内。',
+      '',
+      draft
+    ].join('\n');
+
+    const text = await summarizer.callAI(prompt);
+    return { ok: true, text: String(text || '').trim() };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-project-report', (event, payload) => {
+  try {
+    const { from, to } = payload || {};
+    if (!from || !to) return { ok: false, error: '需要指定日期范围' };
+    const report = analytics.buildProjectReport(
+      storageManager.getDataDir(), from, to, configManager.getConfig().analysis
+    );
+    return { ok: true, report };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+/**
+ * 历史检索。
+ *
+ * 跨日期搜索是「找不到上个月做过什么」这个问题的直接解法。
+ * 结果带精确时间与时长，前端可以直接跳到那一段。
+ */
+ipcMain.handle('search-activities', (event, payload) => {
+  try {
+    const p = payload || {};
+    const to = p.to || analytics.toDateStr(new Date());
+    const from = p.from || '1970-01-01';
+    if (!p.keyword && !p.project) {
+      return { ok: false, error: '请输入关键词或选择一个项目' };
+    }
+    const result = analytics.searchActivities(
+      storageManager.getDataDir(), p.keyword || '', from, to,
+      { ...(configManager.getConfig().analysis || {}),
+        fields: p.fields, project: p.project }
+    );
+    return { ok: true, result };
   } catch (error) {
     return { ok: false, error: error.message };
   }

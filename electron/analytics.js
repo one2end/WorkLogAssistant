@@ -338,7 +338,11 @@ function readDayRaw(dataDir, dateStr, includePreviousSpill = true) {
               : 'auto',
             category: rec.cat || undefined,
             project: Object.prototype.hasOwnProperty.call(rec, 'project')
-              ? String(rec.project || '') : undefined
+              ? String(rec.project || '') : undefined,
+            // 人工备注也必须读出来。它是用户亲手写的一句话，
+            // 只在 slot 聚合里用过、没进这条通路，结果就是「备注写了但搜不到」——
+            // 用户会以为备注没保存上。
+            note: rec.note ? String(rec.note) : undefined
           });
         } catch (e) { /* 单行损坏跳过 */ }
       }
@@ -576,7 +580,10 @@ function normalizeRaw(rawItems, classify, ignoreSet, mappedApps = new Set(), win
       source,
       // 录制器写入的片段自带精确时长；旧数据这里为 undefined，走时间差推断
       durationMs: hasExplicitDur ? item.durationMs : undefined,
-      durationExact: hasExplicitDur
+      durationExact: hasExplicitDur,
+      // 人工备注要留在原子上：它是用户亲手写的，不能只在 slot 聚合时用到。
+      // 不带这个字段，搜索「上次记的那句话」就永远搜不到。
+      note: String(item.note || '').trim()
     });
   }
   atoms.sort((a, b) => a.ms - b.ms);
@@ -1583,34 +1590,71 @@ function buildDailyTrackedMs(dataDir, from, to, options) {
 // 对外：搜索
 // ---------------------------------------------------------------------------
 
+/**
+ * 历史检索。
+ *
+ * 早期版本只匹配应用名与窗口标题。实际用起来最先被搜的是
+ * 「我上个月做 X 项目那阵子」和「那天记的那句备注」，
+ * 所以现在也匹配项目与备注，并且每条结果都带上这两个字段——
+ * 否则搜到了也看不出为什么命中。
+ *
+ * fields 可以限定搜索范围：['app'] 只搜应用名。缺省搜全部四类。
+ */
 function searchActivities(dataDir, keyword, from, to, options) {
   const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
   const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
   const kw = String(keyword || '').toLowerCase();
-  if (!kw) return { keyword, hits: [], totalDurationMs: 0 };
+  const fields = Array.isArray(options && options.fields) && options.fields.length
+    ? new Set(options.fields)
+    : new Set(['app', 'title', 'project', 'note']);
+  const projectFilter = String((options && options.project) || '').trim().toLowerCase();
+
+  // 提前返回也要给全字段：前端拿到 undefined 的 hitCount 会显示成
+  // 「找到 undefined 条」，比空白更让人困惑。
+  if (!kw && !projectFilter) {
+    return { keyword, from, to, hitCount: 0, totalDurationMs: 0, hits: [] };
+  }
 
   const raw = readRangeRaw(dataDir, from, to);
   const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
     new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))), opts.windowCategoryRules || [], opts.categoryMerges || {}, opts.projectRules || []);
   inferDurations(atoms, opts);
 
-  const hits = atoms.filter(a =>
-    a.app.toLowerCase().includes(kw) || a.title.toLowerCase().includes(kw)
-  );
+  const matchField = (a) => {
+    if (fields.has('app') && String(a.app || '').toLowerCase().includes(kw)) return 'app';
+    if (fields.has('title') && String(a.title || '').toLowerCase().includes(kw)) return 'title';
+    if (fields.has('project') && String(a.project || '').toLowerCase().includes(kw)) return 'project';
+    if (fields.has('note') && String(a.note || '').toLowerCase().includes(kw)) return 'note';
+    return null;
+  };
+
+  const hits = [];
+  for (const a of atoms) {
+    // 按项目筛选是独立条件：搜「WorkLog 项目下所有记录」时关键词可能为空
+    if (projectFilter && String(a.project || '').toLowerCase() !== projectFilter) continue;
+    const matchedOn = kw ? matchField(a) : 'project';
+    if (kw && !matchedOn) continue;
+    hits.push({ atom: a, matchedOn });
+  }
 
   return {
     keyword,
     from,
     to,
     hitCount: hits.length,
-    totalDurationMs: hits.reduce((s, h) => s + h.durationMs, 0),
+    totalDurationMs: hits.reduce((s, h) => s + h.atom.durationMs, 0),
+    // 搜索结果要能定位到原始时段，所以带上精确的开始时间与时长
     hits: hits.slice(0, 200).map(h => ({
-      time: new Date(h.ms).toISOString(),
-      date: toDateStr(h.ms),
-      app: h.app,
-      title: h.title,
-      category: h.category,
-      durationMs: h.durationMs
+      time: new Date(h.atom.ms).toISOString(),
+      date: toDateStr(h.atom.ms),
+      app: h.atom.app,
+      title: h.atom.title,
+      category: h.atom.category,
+      project: h.atom.project || '',
+      note: h.atom.note || '',
+      source: h.atom.source || '',
+      durationMs: h.atom.durationMs,
+      matchedOn: h.matchedOn
     }))
   };
 }
@@ -1909,6 +1953,94 @@ function renderPromptContext(rawItems, options) {
   };
 }
 
+/**
+ * 项目维度的投入统计。
+ *
+ * 关键约束：**同一段时间只能算给一个项目一次**。
+ *
+ * 常用的错误做法是把「每个项目的所有应用时长加起来」，然后在推进口
+ * 发现所有项目总和超过了当天的记录时长——因为同一段时间里可以开着
+ * 三个应用，它们被三个项目规则各匹配一次。
+ *
+ * 这里的做法是：原子（atom）自带时长，按 atom 逐个归属，每个 atom
+ * 只落进一个项目桶，没有项目就不计入任何桶。因此各项目之和
+ * 恒定不超过总记录时长，可以放心显示。
+ *
+ * @returns {{ totalMs, unassignedMs, projects: Array }}
+ */
+function buildProjectReport(dataDir, from, to, options) {
+  const opts = { ...DEFAULT_OPTIONS, ...(options || {}) };
+  const classify = buildClassifier(opts.categoryRules, opts.appCategoryMap, opts.windowCategoryRules, opts.customCategories);
+
+  const raw = readRangeRaw(dataDir, from, to);
+  const atoms = normalizeRaw(raw, classify, buildIgnoreSet(opts.ignoredApps),
+    new Set(Object.keys(opts.appCategoryMap || {}).map(k => k.toLowerCase().replace(/\.exe$/, ''))),
+    opts.windowCategoryRules || [], opts.categoryMerges || {}, opts.projectRules || []);
+  inferDurations(atoms, opts);
+
+  const buckets = new Map();
+  let totalMs = 0;
+  let unassignedMs = 0;
+
+  // 每天的项目时长，用于「按天/周/月」切换时直接切片，不必重新扫描
+  const byDate = new Map();
+
+  for (const a of atoms) {
+    if (a.kind === 'idle') continue;
+    const dur = Number(a.durationMs) || 0;
+    if (dur <= 0) continue;
+
+    totalMs += dur;
+
+    const name = String(a.project || '').trim();
+    if (!name) { unassignedMs += dur; continue; }
+
+    if (!buckets.has(name)) {
+      buckets.set(name, {
+        name, durationMs: 0, dates: new Set(), apps: new Map(), categories: new Map()
+      });
+    }
+    const bucket = buckets.get(name);
+    bucket.durationMs += dur;
+
+    const dateStr = toDateStr(a.ms);
+    bucket.dates.add(dateStr);
+    byDate.set(`${name}#${dateStr}`, (byDate.get(`${name}#${dateStr}`) || 0) + dur);
+
+    bucket.apps.set(a.app, (bucket.apps.get(a.app) || 0) + dur);
+    bucket.categories.set(a.category, (bucket.categories.get(a.category) || 0) + dur);
+  }
+
+  const projects = [...buckets.values()]
+    .map(b => ({
+      name: b.name,
+      durationMs: b.durationMs,
+      dayCount: b.dates.size,
+      percent: totalMs > 0 ? b.durationMs / totalMs : 0,
+      apps: [...b.apps.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .map(([app, ms]) => ({ app, durationMs: ms })),
+      categories: [...b.categories.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .map(([category, ms]) => ({ category, durationMs: ms })),
+      byDate: Object.fromEntries(
+        [...byDate.entries()]
+          .filter(([k]) => k.startsWith(`${b.name}#`))
+          .map(([k, ms]) => [k.slice(b.name.length + 1), ms])
+      )
+    }))
+    .sort((a, b) => b.durationMs - a.durationMs);
+
+  return {
+    from,
+    to,
+    totalMs,
+    unassignedMs,
+    projectTotalMs: projects.reduce((s, p) => s + p.durationMs, 0),
+    projects
+  };
+}
+
 module.exports = {
   simpleCategory,
   SIMPLE_GROUP_NAMES,
@@ -1931,6 +2063,7 @@ module.exports = {
   buildRangeReport,
   buildDailyTrackedMs,
   searchActivities,
+  buildProjectReport,
   findNoteHints,
   renderDayMarkdown,
   renderRangeMarkdown,

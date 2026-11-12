@@ -110,6 +110,8 @@ const MAIN_ONLY_CHANNELS = [
   'get-dates-with-data', 'get-day-analytics', 'get-known-apps', 'get-logs',
   'get-monitoring-status', 'get-provider-presets', 'get-range-analytics',
   'get-recorder-status', 'get-storage-path', 'get-summaries',
+  // V0.11.0：日复盘、项目统计、历史检索
+  'get-daily-review', 'get-project-report', 'search-activities', 'suggest-next-action',
   // 实测：App.vue 调用（专注状态查询 + 主窗贴边切换），两小窗均未使用
   'focus-state', 'toggle-snap',
   'import-data',

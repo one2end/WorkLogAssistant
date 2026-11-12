@@ -44,12 +44,11 @@ test('the registry covers every channel main.js actually registers', () => {
   assert.equal(declared.length, actual.length);
 });
 
-test('the channel count matches what the plan documents: 76', () => {
-  // 74 是 V0.10.6 规划时的实测值。此后 A2 加了 open-external
-  // （渲染层要开链接，但不能把 shell 直接交出去），A6 加了 clear-secret
-  // （密钥不下发到渲染层后，清除无法再用「传空串」表达）。总数因此是 76。
-  // 任务书与矩阵同步更新。
-  assert.equal(Object.keys(reg.allChannels()).length, 76,
+test('the channel count matches what the plan documents: 80', () => {
+  // 76 是 V0.10.6 结束时的数量。V0.11.0 为体验闭环加了 4 个只读通道：
+  // get-daily-review / get-project-report / search-activities / suggest-next-action。
+  // 它们都只读，且都登记在权限矩阵里——加通道时忘登记会让下面的断言先失败。
+  assert.equal(Object.keys(reg.allChannels()).length, 80,
     '通道总数变化时必须同步更新任务书与矩阵，否则文档会悄悄过期');
 });
 
