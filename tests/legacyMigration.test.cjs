@@ -30,7 +30,7 @@ function fixtureWith(t, existingByDate) {
   return h.makeFixture(t, { kind: 'activities', sourceRecords: ACT, existingByDate });
 }
 
-test('F1 crash right after the manifest is written resumes and matches the clean run', t => {
+test('T-M01 F1 crash right after the manifest is written resumes and matches the clean run', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -43,7 +43,7 @@ test('F1 crash right after the manifest is written resumes and matches the clean
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected, '结果必须与一次成功逐字节相同');
 });
 
-test('F2 crash while building the second staging file keeps the first and regenerates the rest', t => {
+test('T-M01 F2 crash while building the second staging file keeps the first and regenerates the rest', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -60,7 +60,7 @@ test('F2 crash while building the second staging file keeps the first and regene
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('F3 crash after all staging is built goes straight to replacing', t => {
+test('T-M01 F3 crash after all staging is built goes straight to replacing', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -75,7 +75,7 @@ test('F3 crash after all staging is built goes straight to replacing', t => {
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('F4 crash on the second rename does not repeat the first one', t => {
+test('T-M01 F4 crash on the second rename does not repeat the first one', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -91,7 +91,7 @@ test('F4 crash on the second rename does not repeat the first one', t => {
   assert.equal(h.totalRecords(fx.targetDir), 4, '总共 4 条，不是 6 条');
 });
 
-test('F4a crash after a rename but before status is written is detected by expectedSha256', t => {
+test('T-M01 F4a crash after a rename but before status is written is detected by expectedSha256', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -118,7 +118,7 @@ test('F4a crash after a rename but before status is written is detected by expec
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('F5 a source rename that fails leaves targets placed and finishes on the next start', t => {
+test('T-M01 F5 a source rename that fails leaves targets placed and finishes on the next start', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -153,7 +153,7 @@ test('F5 a source rename that fails leaves targets placed and finishes on the ne
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('F5a crash after the source was archived but before status is written is recognised as done', t => {
+test('T-M01 F5a crash after the source was archived but before status is written is recognised as done', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -189,7 +189,7 @@ test('F5a crash after the source was archived but before status is written is re
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('F6 two consecutive crashes still end byte-identical to a single clean run', t => {
+test('T-M01 F6 two consecutive crashes still end byte-identical to a single clean run', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -218,7 +218,7 @@ test('F6 two consecutive crashes still end byte-identical to a single clean run'
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected, '两次中断后仍需逐字节等同');
 });
 
-test('F7 a source changed while the workspace is incomplete stops with conflict and no new workspace', t => {
+test('T-M06 F7 a source changed while the workspace is incomplete stops with conflict and no new workspace', t => {
   const fx = fixtureWith(t);
 
   const first = h.runCatching(h.makeEngine(fx, { F3: () => h.crash() }));
@@ -243,7 +243,7 @@ test('F7 a source changed while the workspace is incomplete stops with conflict 
   assert.ok(fs.existsSync(fx.sourcePath), '源文件必须原样保留');
 });
 
-test('F8 existing data in the target directory is merged, not replaced', t => {
+test('T-M03 F8 existing data in the target directory is merged, not replaced', t => {
   const existing = {
     '2026-11-05': [
       { id: 'old1', timestamp: h.isoLocal(2026, 11, 5, 8), processName: 'slack' },
@@ -263,7 +263,7 @@ test('F8 existing data in the target directory is merged, not replaced', t => {
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('F8 conservation holds: after == sum(preReplaceRecordCount) + source count', t => {
+test('T-M03 F8 conservation holds: after == sum(preReplaceRecordCount) + source count', t => {
   const existing = {
     '2026-11-05': [{ id: 'old1', timestamp: h.isoLocal(2026, 11, 5, 8), processName: 'slack' }],
     '2026-11-06': [
@@ -289,7 +289,7 @@ test('F8 conservation holds: after == sum(preReplaceRecordCount) + source count'
   assert.equal(h.totalRecords(fx.targetDir), sumExpected, '落盘总数必须等于预期');
 });
 
-test('F9 a volume that reports EXDEV refuses the migration and writes nothing', t => {
+test('T-M05 F9 a volume that reports EXDEV refuses the migration and writes nothing', t => {
   const fx = fixtureWith(t);
 
   const fs = require('node:fs');
@@ -314,7 +314,7 @@ test('F9 a volume that reports EXDEV refuses the migration and writes nothing', 
   assert.ok(fs.existsSync(fx.sourcePath), '源文件不得被动过');
 });
 
-test('the probe cleans up its temporary file whether it succeeds or not', t => {
+test('T-M05 the probe cleans up its temporary file whether it succeeds or not', t => {
   const { probeSameVolume } = require('../electron/legacyMigration');
   const fs = require('node:fs');
   const path = require('node:path');

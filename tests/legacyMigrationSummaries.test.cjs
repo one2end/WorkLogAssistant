@@ -30,7 +30,7 @@ function reference(t, existingByDate) {
   return h.snapshotDir(fx.targetDir);
 }
 
-test('S1 crash after the summaries manifest is written reuses the workspace', t => {
+test('T-M02 S1 crash after the summaries manifest is written reuses the workspace', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -47,7 +47,7 @@ test('S1 crash after the summaries manifest is written reuses the workspace', t 
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S2 crash on the second summaries staging keeps the first and rebuilds the rest', t => {
+test('T-M02 S2 crash on the second summaries staging keeps the first and rebuilds the rest', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -62,7 +62,7 @@ test('S2 crash on the second summaries staging keeps the first and rebuilds the 
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S3 crash after every summaries staging file exists goes straight to replacing', t => {
+test('T-M02 S3 crash after every summaries staging file exists goes straight to replacing', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -74,7 +74,7 @@ test('S3 crash after every summaries staging file exists goes straight to replac
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S4 crash on the second summaries rename does not rewrite the first', t => {
+test('T-M02 S4 crash on the second summaries rename does not rewrite the first', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -87,7 +87,7 @@ test('S4 crash on the second summaries rename does not rewrite the first', t => 
   assert.equal(h.totalRecords(fx.targetDir), 4, '总计 4 条，不是 6 条');
 });
 
-test('S4a crash after a summaries rename but before status is detected by expectedSha256', t => {
+test('T-M02 S4a crash after a summaries rename but before status is detected by expectedSha256', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -104,7 +104,7 @@ test('S4a crash after a summaries rename but before status is detected by expect
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S5 a blocked summaries source rename finishes on the next start', t => {
+test('T-M02 S5 a blocked summaries source rename finishes on the next start', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -140,7 +140,7 @@ test('S5 a blocked summaries source rename finishes on the next start', t => {
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S5a crash after the summaries source was archived is recognised by the four-way check', t => {
+test('T-M02 S5a crash after the summaries source was archived is recognised by the four-way check', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -169,7 +169,7 @@ test('S5a crash after the summaries source was archived is recognised by the fou
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S6 two crashes in the summaries run still equal one clean run', t => {
+test('T-M02 S6 two crashes in the summaries run still equal one clean run', t => {
   const expected = reference(t);
   const fx = fixtureWith(t);
 
@@ -187,7 +187,7 @@ test('S6 two crashes in the summaries run still equal one clean run', t => {
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S7 a summaries source changed mid-migration stops with conflict and no second workspace', t => {
+test('T-M06 S7 a summaries source changed mid-migration stops with conflict and no second workspace', t => {
   const fx = fixtureWith(t);
 
   h.runCatching(h.makeEngine(fx, { F3: () => h.crash() }));
@@ -207,7 +207,7 @@ test('S7 a summaries source changed mid-migration stops with conflict and no sec
   assert.ok(fs.existsSync(fx.sourcePath));
 });
 
-test('S8 existing summaries are merged and conservation holds', t => {
+test('T-M04 S8 existing summaries are merged and conservation holds', t => {
   const existing = {
     '2026-11-05': [{ id: 'olds', timestamp: h.isoLocal(2026, 11, 5, 20), summary: '早就有了' }],
     '2026-11-06': [
@@ -233,7 +233,7 @@ test('S8 existing summaries are merged and conservation holds', t => {
   assert.deepEqual(h.snapshotDir(fx.targetDir), expected);
 });
 
-test('S9 cross-volume is refused for summaries too', t => {
+test('T-M05 S9 cross-volume is refused for summaries too', t => {
   const fx = fixtureWith(t);
 
   const originalRename = fs.renameSync;
