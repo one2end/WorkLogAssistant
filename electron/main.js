@@ -24,6 +24,12 @@ const importSafety = require('./importSafety');
 const slotRule = require('./slotRule');
 const storagePrecheck = require('./storagePrecheck');
 const ipcGuard = require('./ipcGuard');
+const externalLink = require('./externalLink');
+
+// 桥接页的一次性票据。放在模块级：进程存活期间有效，
+// 重启即清空——这正是我们想要的（旧票据不能跨会话使用）。
+// 必须在 apiServer 之前声明：它要把这个库注入进去做兑换。
+const bridgeTickets = new externalLink.TicketStore();
 const reportRunner = require('./reportRunner');
 const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
@@ -284,7 +290,9 @@ const apiServer = new ApiServer({
   getDataDir: () => storageManager.getDataDir(),
   getConfig: () => ({ ...configManager.getConfig(), version: app.getVersion() }),
   port: configManager.getConfig().bridge?.port || 47821,
-  token: ensureBridgeToken()
+  token: ensureBridgeToken(),
+  // 兑换端点要用它把一次性码换成 Token
+  ticketStore: bridgeTickets
 });
 
 async function startBridge() {
@@ -1622,19 +1630,26 @@ ipcMain.handle('open-logs-folder', () => {
  * 在 B2 实现。这里先把能力从渲染层收到主进程——
  * 一旦渲染层还能直接调 shell.openExternal，B2 的白名单就形同虚设。
  */
+/**
+ * 渲染层请求打开外部链接。
+ *
+ * A2 时只做了「不收任意协议」的最小校验；这里补上完整白名单：
+ *   · 本机桥接地址：http + 回环主机 + **当前实际端口**，精确匹配
+ *   · 其他链接：只允许 https
+ *
+ * 端口从 apiServer 现取，不从渲染层传。前端传端口等于让渲染层
+ * 自己决定白名单，那这道校验就只剩装饰作用了。
+ */
 ipcMain.handle('open-external', (event, url) => {
-  const { shell } = require('electron');
-  if (typeof url !== 'string' || !url.trim()) return false;
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch (_) {
-    return false;
+  const status = apiServer.getStatus();
+  const verdict = externalLink.check(url, { localPort: status.running ? status.port : null });
+  if (!verdict.ok) {
+    logManager.addLog(`拒绝打开外部链接（${verdict.reason}）`, 'info');
+    return { ok: false, reason: verdict.reason };
   }
-  // 只放行 http/https；file: / javascript: / data: 等一律拒绝
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const { shell } = require('electron');
   shell.openExternal(url);
-  return true;
+  return { ok: true };
 });
 
 ipcMain.handle('export-data', async (event, { filename, content }) => {
@@ -2060,12 +2075,25 @@ ipcMain.handle('test-bridge', async () => {
   }
 });
 
+/**
+ * 打开桥接页。
+ *
+ * 以前直接把长期 Token 拼进查询串：`${url}/?token=${token}`。
+ * 那个 URL 会进浏览器历史、Referer、用户截图和扩展的视野，
+ * 而它带上的是一个长期有效的凭据。
+ *
+ * 改成一次性票据：URL 里只有一个 60 秒有效、用过即废的码，
+ * 桥接页拿它去 POST /auth/exchange 换真正的 Token（存 sessionStorage）。
+ * 漏出去的都是废码。
+ */
 ipcMain.handle('open-bridge-url', () => {
   const status = apiServer.getStatus();
-  if (!status.running) return false;
+  if (!status.running) return { ok: false, reason: 'bridge-not-running' };
+
+  const ticket = bridgeTickets.issue(status.port);
   const { shell } = require('electron');
-  shell.openExternal(`${status.url}/?token=${status.token}`);
-  return true;
+  shell.openExternal(`${status.url}/?otc=${encodeURIComponent(ticket)}`);
+  return { ok: true };
 });
 
 ipcMain.handle('get-auto-launch', () => {
