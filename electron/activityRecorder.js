@@ -16,6 +16,7 @@
  */
 
 const MAX_IDLE_SEGMENT_MS = 2 * 60 * 60 * 1000; // 单段空闲最多记 2 小时
+const crypto = require('crypto');
 const { isExcludedSample } = require('./privacyRules');
 
 const DEFAULTS = {
@@ -279,11 +280,24 @@ class ActivityRecorder {
     });
   }
 
+  /**
+   * 片段入缓冲。rid 在这里统一生成——active 与 idle 两个调用点都经过此处，
+   * 放在这里就不会漏掉其中一种。
+   *
+   * 为什么需要 rid：iCloud / OneDrive 发生写入冲突时会生成一份副本文件，
+   * 主文件和副本里可能有同一条记录，也可能各有一条不同的记录。没有稳定标识
+   * 就只能靠「内容一样」判断重复，而内容一样的两条记录完全可能都是真的
+   * （同一分钟在两个窗口各记了一次）。rid 让「是否同一条」变成可以确定的问题。
+   *
+   * 只在生成时写一次，之后随记录落盘；重启读回时沿用，绝不重算——
+   * 重算就等于换了个身份，去重立刻失效。
+   */
   _emit(record) {
-    this._buffer.push(record);
+    const withId = record.rid ? record : { ...record, rid: crypto.randomUUID() };
+    this._buffer.push(withId);
     this._stats.segments += 1;
 
-    this.onSegment(record);
+    this.onSegment(withId);
 
     if (this._buffer.length >= DEFAULTS.flushBufferSize) {
       this.flush();

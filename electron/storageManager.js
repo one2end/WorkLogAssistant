@@ -122,6 +122,10 @@ class StorageManager {
   _fromSegment(rec, index) {
     return {
       id: `${rec.t}#${index}`,
+      // 注意：id 是「文件名+行号」派生的，同一条记录换个文件位置就变了，
+      // 只能用于当次读取的定位，不能当作跨读取的身份。
+      // rid 才是持久身份；历史记录没有 rid，这里是 null，不是空字符串。
+      rid: rec.rid || null,
       timestamp: rec.t,
       processName: rec.app || 'unknown',
       windowTitle: rec.title || '',
@@ -350,6 +354,9 @@ class StorageManager {
             t: r.t,
             dur: r.dur,
             kind: r.kind || 'active',
+            // 稳定标识：冲突副本去重与「编辑只补一条」都依赖它。
+            // 只有真实存在时才写，历史记录不会凭空多出这个字段。
+            ...(r.rid ? { rid: r.rid } : {}),
             app: r.app,
             title: r.title || '',
             platform: r.platform || 'windows',

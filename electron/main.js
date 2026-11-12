@@ -1050,6 +1050,8 @@ ipcMain.handle('convert-plan-to-fact', (event, payload) => {
     parsed.record.platform = 'plan';
     parsed.record.origin = 'plan';
     parsed.record.groupId = crypto.randomUUID();
+    // rid 标识单条记录，与 groupId（一次操作的多段分组）不同层
+    if (!parsed.record.rid) parsed.record.rid = crypto.randomUUID();
     parsed.record.planKey = planManager.keyOf(plan, date);
     let ok;
     try {
@@ -1211,6 +1213,7 @@ ipcMain.handle('add-manual-record', (event, payload) => {
   if (parsed.error) return { ok: false, error: parsed.error };
   const { dateStr, durationMin, record } = parsed;
   record.groupId = crypto.randomUUID();
+  if (!record.rid) record.rid = crypto.randomUUID();
   let ok;
   try {
     ok = storageManager.appendActivityRecords(splitRecordAtMidnight(record));
@@ -1233,6 +1236,7 @@ ipcMain.handle('replace-display-ranges', (event, payload) => {
   if (!Array.isArray(ranges) || ranges.length > 200 ||
       payload?.record?.date !== parsed.dateStr) return { ok: false, error: '日期或区间无效' };
   parsed.record.groupId = crypto.randomUUID();
+  if (!parsed.record.rid) parsed.record.rid = crypto.randomUUID();
   const result = callStorage(
     () => storageManager.replaceDisplayRanges(parsed.dateStr, ranges, parsed.record), 'success');
   if (result.success) notifyDataChanged();
