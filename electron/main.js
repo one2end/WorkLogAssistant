@@ -1213,7 +1213,37 @@ function manualRecordFromPayload(payload) {
 ipcMain.handle('add-manual-record', (event, payload) => {
   const parsed = manualRecordFromPayload(payload);
   if (parsed.error) return { ok: false, error: parsed.error };
-  const { dateStr, durationMin, record } = parsed;
+  const { dateStr, durationMin, record, snapped } = parsed;
+
+  // 重叠检测（方案 §5.4）。
+  //
+  // 与**自动记录**重叠是补记的正当用途——用户就是要在录制器漏掉的时段补一条，
+  // 而录制器其实录到了。这种情况只提示，不阻断。
+  //
+  // 与**另一条人工记录**重叠则大概率是重复记录，默认阻断，让用户自己改时间。
+  //
+  // 无论哪种，都只是「不写」或「照写」，**绝不改动已有的记录层采样**。
+  // 补记写的是展示层标注，记录层逐字节保持原样。
+  let overlaps = [];
+  try {
+    const dayRecords = storageManager.getActivities(new Date(`${dateStr}T12:00:00`));
+    overlaps = slotRule.findOverlaps(dateStr, snapped.startMin, snapped.endMin, dayRecords);
+  } catch (_) {
+    overlaps = [];   // 读不到当日记录就不做重叠判断，不因此阻断补记
+  }
+
+  const manualConflicts = overlaps.filter(o => o.kind === 'display' && o.source === 'manual');
+  if (manualConflicts.length && !payload?.allowOverlap) {
+    const first = manualConflicts[0].record;
+    return {
+      ok: false,
+      error: `该时段与已有的人工记录重叠（${first.processName || '手工标注'}，` +
+        `重叠 ${manualConflicts[0].overlapMin} 分钟），请调整时间后再保存`,
+      code: 'OVERLAP_MANUAL',
+      overlaps: manualConflicts.map(o => ({ overlapMin: o.overlapMin, app: o.record.processName }))
+    };
+  }
+
   record.groupId = crypto.randomUUID();
   if (!record.rid) record.rid = crypto.randomUUID();
   let ok;
@@ -1226,7 +1256,22 @@ ipcMain.handle('add-manual-record', (event, payload) => {
   if (ok) {
     logManager.addLog(`手工补记 ${dateStr} ${payload.startTime} · ${durationMin} 分钟`, 'info');
   }
-  return { ok, error: ok ? null : '写入失败' };
+  return {
+    ok,
+    error: ok ? null : '写入失败',
+    durationMin,
+    snapped: {
+      start: snapped.start,
+      end: snapped.end,
+      durationMin: snapped.durationMin,
+      distorted: snapped.distorted,
+      rawDurationMin: snapped.rawDurationMin
+    },
+    // 与自动记录重叠：如实告知，但已经写入
+    autoOverlaps: overlaps
+      .filter(o => o.kind === 'record')
+      .map(o => ({ overlapMin: o.overlapMin, app: o.record.processName }))
+  };
 });
 
 /**
