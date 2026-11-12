@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { app } = require('electron');
 const { copyMissingData } = require('./fileMigration');
 const { writeFileAtomic } = require('./atomicFile');
@@ -510,6 +511,12 @@ class StorageManager {
         if (typeof patch.title === 'string') next.title = patch.title;
         if (typeof patch.cat === 'string') next.cat = patch.cat;
         if (typeof patch.app === 'string') next.app = patch.app;
+        // 只给「被实际编辑的这一条」补 rid（V0.10.3 §4.6）。
+        // 为什么要补：用户主动编辑过的记录，从此以后会参与冲突副本去重；
+        // 不补的话它永远是「无 rid」状态，副本里的同一份永远无法被识别。
+        // 为什么只补这一条：给同文件其他记录批量补 rid 等于改写历史，
+        // 而且一旦补错，原本无法确认的重复会被「确认」成不同记录。
+        if (!next.rid) next.rid = crypto.randomUUID();
         next.editedAt = new Date().toISOString();
         out.push(JSON.stringify(next));
         continue;
