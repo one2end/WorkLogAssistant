@@ -109,14 +109,35 @@ D-03 第 7 条要求「重要事件订阅也按窗口角色设置白名单」。
 
 ### A 组：Electron 运行环境
 
-| 阶段 | 内容 | 回退 | 验收 |
-|---|---|---|---|
-| **A1** | 新增 `electron/preload.js`，按角色暴露白名单 API；**暂不启用** | 删文件 | 行为零变化 |
-| **A2** | 6 个前端文件改用 `window.worklog`，`require` 保留为降级 | 改回 | 调用全走 preload |
-| **A3** | focus + float 关 `nodeIntegration`、开 `contextIsolation`、挂 preload | 改配置 | 计时窗/悬浮条完整 |
-| **A4** | mainWindow 同上 | 改配置 | **全功能回归** |
-| **A5** | 移除前端全部 `require('electron')` | 恢复 | 构建通过、grep 无残留 |
-| **A6** | 74 通道 + 事件订阅按矩阵加校验 | 逐通道 | 越权测试全拒 |
+**渲染入口共 8 个**（不是 6 个）：
+
+| # | 入口 | 类型 |
+|---|---|---|
+| 1 | `src/App.vue` | Vue |
+| 2 | `src/views/TimelineView.vue` | Vue |
+| 3 | `src/views/SettingsView.vue` | Vue |
+| 4 | `src/components/CompareCard.vue` | Vue |
+| 5 | `src/components/ProductivityOverview.vue` | Vue |
+| 6 | `src/components/WeeklyReview.vue` | Vue |
+| 7 | `electron/focus.html` | 独立 HTML |
+| 8 | `electron/float.html` | 独立 HTML |
+
+| 阶段 | 内容 | 覆盖入口 | 回退 | 验收 |
+|---|---|---|---|---|
+| **A1** | 新增 preload（主窗角色），按白名单暴露具名 API；**暂不启用** | — | 删文件 | 行为零变化 |
+| **A2** | 6 个 Vue 文件改走 `window.worklog`，`require` 保留为降级 | 1-6 | 改回 require | 调用全走 preload |
+| **A3a** | 新增 focus / float 两个角色 preload；**先改 `focus.html`、`float.html` 使用 preload API**，此时两窗仍开 nodeIntegration | 7, 8 | 改回 require | 两窗功能完整 |
+| **A3b** | 两窗关闭 `nodeIntegration`、开启 `contextIsolation`、挂对应 preload | 7, 8 | 改配置 | 计时窗/悬浮条完整 |
+| **A4** | mainWindow 同上 | 1-6 | 改配置 | **全功能回归** |
+| **A5** | 移除全部 8 个入口的 `require('electron')`，静态断言 grep 无残留 | **1-8** | 恢复 | 构建通过 |
+| **A6** | 74 通道 + 事件订阅按矩阵加校验 | — | 逐通道 | 越权测试全拒 |
+
+> **A3 必须拆成 a/b 两步**：直接关 nodeIntegration 而 HTML 页面还在 `require('electron')`，
+> 页面会立刻白屏。先迁移调用，再关能力。
+
+**A1 关键设计**：preload 不暴露通用 `invoke(channel, ...)`（D-03 第 2 条禁止），
+而是**每个通道一个具名方法**。三个窗口使用三个独立 preload 文件，
+避免运行时推断角色——推断错了就是权限错配。
 
 **A1 关键设计**：preload 不暴露通用 `invoke(channel, ...)`（D-03 第 2 条禁止），而是**每个通道一个具名方法**。三个窗口加载不同 preload（或同一 preload 按 `process.argv` 角色裁剪）。
 
@@ -125,8 +146,8 @@ D-03 第 7 条要求「重要事件订阅也按窗口角色设置白名单」。
 | 阶段 | 内容 | 回退 | 验收 |
 |---|---|---|---|
 | **B1** | `safeStorage` 加密 + 明文兼容 + 原子迁移 | 保留明文备份 | 老配置可用，迁移后明文消失 |
-| **B2** | `openExternal` 协议白名单（仅 https）+ 目标校验 | 恢复 | 非法协议被拒 |
-| **B3** | CORS 收紧到 localhost/127.0.0.1 | 改回 `*` | 本地可用、外部被拒 |
+| **B2** | `openExternal` 目标白名单（见 4·六）+ 桥接 Token 安全传递 | 恢复原调用 | 非法目标被拒、Token 不入 URL |
+| **B3** | CORS 严格 Origin 解析 + 明确「CORS 不是认证」 | 改回 `*` | 本地可用、外部被拒 |
 | **B4** | 删除 `enableRemoteModule` | 加回 | 无行为变化 |
 
 ### C 组：AI 隐私出口
@@ -137,6 +158,116 @@ D-03 第 7 条要求「重要事件订阅也按窗口角色设置白名单」。
 | **C2** | 设置页展示实际发送的数据类型 | 纯 UI | 用户可见 |
 
 **顺序约束**：A1→A2 前置；A3 先于 A4；A5 在 A2 之后；A6 最后（角色边界此时才清晰）。
+
+---
+
+## 四·五、密钥返回边界（修订补充，最高优先）
+
+### 实测确认的问题
+
+```
+main.js:824   ipcMain.handle('get-config', () => configManager.getConfig());
+configManager.js:235   getConfig() { return this.config; }
+```
+
+**`get-config` 直接返回含明文 `api.apiKey` 与 `dida.token` 的完整配置对象。**
+渲染层任何脚本（含将来可能引入的第三方代码、或页面被注入时）都能读到密钥。
+
+`configManager.js:220-223` 的置空操作**只作用于写入 `config.json` 的那份副本**，
+与渲染层拿到的对象无关。这一点必须在文档里写清楚，否则容易被误认为「已经脱敏」。
+
+### 安全配置投影（B1 的强制要求）
+
+新增 `configManager.getSafeConfig()`，`get-config` 只能返回它：
+
+```
+投影规则：
+  api.apiKey       → 删除原文，改置 api.hasApiKey: boolean
+  dida.token       → 删除原文，改置 dida.hasDidaToken: boolean
+  其余字段          → 原样返回
+```
+
+**禁止**用空字符串代替原文——空串会让前端无法区分「没设过」和「设了但被隐藏」，
+进而出现「保存设置时把已有密钥覆盖成空」这类事故。
+
+### 密钥写入语义（避免空值覆盖）
+
+`save-config` 收到前端回传的配置时：
+
+| 前端传来的值 | 语义 | 后端行为 |
+|---|---|---|
+| 字段不存在 | 未修改 | **保留现有密钥** |
+| `''`（空串） | 用户主动清除 | **清除密钥** |
+| 非空字符串 | 用户设置新密钥 | 覆盖 |
+
+**判定依据是「字段是否存在」而不是「值是否为空」**。这条规则必须写进测试，
+因为它的失效方式是静默的：用户改个开关，密钥没了。
+
+### 主动清除接口
+
+提供 `clear-api-key` 与 `clear-dida-token` 两个独立通道，
+语义明确、可审计，不必依赖「传空串」这个隐晦约定。
+
+---
+
+## 四·六、外部打开与桥接 Token 传递（修订补充）
+
+### 为什么不能「一律只允许 https」
+
+实测：桥接服务监听 `127.0.0.1` 上的**动态端口**，地址形如 `http://127.0.0.1:52873`。
+它永远是 `http`，且端口每次启动不同。简单禁止 `http` 会直接废掉「打开桥接页」这个功能。
+
+### 白名单规则
+
+允许打开的目标，只限两类：
+
+| 类型 | 规则 | 示例 |
+|---|---|---|
+| 本机桥接地址 | `http://127.0.0.1:<当前实际监听端口>` **精确匹配** | `http://127.0.0.1:52873/` |
+| 外部 https | 仅 `https:` 协议 | 帮助文档链接 |
+
+**明确拒绝**：
+
+- 任意其他 `http://` 地址（含 `http://localhost:*`、`http://127.0.0.1:*` 的其他端口）
+- `file:`、`javascript:`、`data:`、`vbscript:` 等协议
+- 非字符串、空值、无法解析的 URL
+- 端口不在当前监听端口的本机地址
+
+**端口来源**：从 `apiServer.getStatus().port` 取，不从前端传。前端传端口等于让渲染层决定白名单。
+
+### 桥接 Token 的泄漏风险
+
+现状：`shell.openExternal(`${status.url}/?token=${status.token}`)`。
+
+Token 出现在 URL 查询串里，会留下这些痕迹：
+
+| 泄漏面 | 说明 |
+|---|---|
+| 浏览器历史 | 长期 Token 被持久化，用户下次输 `127.0.0.1` 时可能从历史联想出来 |
+| Referer | 桥接页若引用任何外部资源，`Referer` 会带出完整 URL |
+| 地址栏 / 截图 | 用户截图反馈问题时 Token 一并泄漏 |
+| 扩展 / 剪贴板 | 浏览器扩展可读当前 URL |
+
+### 安全传递方案（本版本实施）
+
+**方案：改为一次性短票据换长期 Token**
+
+```
+1. 主进程生成一次性码（otc）：
+     · 随机 32 字节，有效期 60 秒，绑定端口
+     · 存入内存 Map，用过即删（single-use）
+2. openExternal 打开 http://127.0.0.1:<port>/?otc=<一次性码>
+3. 桥接页加载后，用 otc 调 POST /auth/exchange 换取实际 token
+     · 主进程校验 otc：存在、未过期、未使用
+     · 校验通过 → 返回 token，并立即删除 otc
+4. 桥接页把 token 存在 sessionStorage（关标签页即失效）
+```
+
+**为什么这样能降低风险**：URL 里只有 60 秒有效的一次性码，用完即废。
+被历史记录、截图、Referer 带走的都是废码。长期 Token 不再出现在任何 URL 中。
+
+**兼容性**：桥接页是应用自己提供的，可同步改造。若外部工具直接用
+`?token=` 访问，保留该方式一个版本并在下一版移除（记录在案）。
 
 ---
 
@@ -155,18 +286,42 @@ available = safeStorage.isEncryptionAvailable()
   basic_text → 视为安全工作不可用（不得描述为安全加密）
 ```
 
-### 迁移流程（仅当加密可用）
+### 迁移流程（仅当加密可用）—— 五步，任何一步失败都保留原始配置
 
 ```
-1. 读 config.local.json
-2. 对每个密钥:
-   a. 已是 enc:v1: 前缀 → 跳过（已加密）
-   b. 明文 → safeStorage.encryptString() → "enc:v1:" + base64
-3. 写入临时文件 config.local.json.tmp
-4. 原子 rename 替换
-5. 读回并逐个解密验证
-6. 全部验证成功 → 删除相应明文；任一失败 → 恢复备份，保留明文
+步骤 0  备份
+        把 config.local.json 复制为 config.local.json.bak-<时间戳>
+        备份失败 → 整个迁移中止，不做任何改动
+
+步骤 1  生成临时密文（不落盘到正式位置）
+        对每个明文密钥：
+          · 已有 enc:v1: 前缀 → 跳过
+          · safeStorage.encryptString() → "enc:v1:" + base64
+        写入 config.local.json.tmp
+
+步骤 2  验证临时密文
+        读回 .tmp，对每个 enc:v1: 值执行 decryptString()
+        与原始明文逐字符比对
+        任一不匹配 → 删除 .tmp，保留原文件，报错退出
+
+步骤 3  原子替换
+        fs.renameSync(.tmp → config.local.json)
+        失败 → 保留原文件与原备份，报错退出
+
+步骤 4  最终验证
+        重新从正式文件读取，再次解密并比对
+        成功 → 完成，保留 .bak 供用户手动回退
+        失败 → 从 .bak 恢复，报错退出
 ```
+
+**四条不可违反的约束**：
+
+| 约束 | 原因 |
+|---|---|
+| 备份必须先于任何写入 | 没有备份就无法「失败时保留原始配置」 |
+| 验证必须读回真实文件 | 只验证内存中的密文，无法发现写入被截断 |
+| 明文只在最终验证通过后才算迁移完成 | 中途失败不能留下「一半加密一半明文」 |
+| `.bak` 不自动删除 | 用户需要能自己回退 |
 
 ### 加密不可用时（D-02 第 4-6 条）
 
@@ -183,6 +338,62 @@ available = safeStorage.isEncryptionAvailable()
 - **不得解释为空密钥**
 - **不得覆盖原密文**
 - 保留原值，报错，提示用户重新输入
+
+---
+
+## 五·五、CORS 收紧的边界（修订补充）
+
+### 核心前提：CORS 不是身份验证
+
+CORS 是**浏览器**的同源策略执行机制，它只约束「浏览器里的脚本能不能读响应」。
+它**不能**阻止：
+
+- 非浏览器客户端（curl、脚本）直接发请求——它们根本不看 CORS 头
+- 已经拿到 Token 的攻击者
+
+**所以 CORS 收紧只是「减少浏览器端被跨站读取」的一层，真正的认证必须靠 Token。**
+这一条要写进代码注释，避免将来有人以为设好了 CORS 就安全了。
+
+### 严格 Origin 解析（不用字符串包含判断）
+
+```
+错误写法：origin.includes('localhost')     ← http://evil-localhost.com 也会通过
+错误写法：origin.startsWith('http://127.') ← http://127.0.0.1.evil.com 也会通过
+```
+
+正确做法：`new URL(origin)` 解析后逐项比对
+
+| 检查项 | 允许值 |
+|---|---|
+| protocol | `http:` |
+| hostname | `127.0.0.1` 或 `localhost` **精确相等** |
+| port | 空（默认 80）或白名单端口 |
+| 无凭据 | `username` / `password` 必须为空 |
+
+解析失败（非法 URL）→ 拒绝。
+
+### Token 验证仍是唯一认证
+
+| 层 | 作用 | 不能替代什么 |
+|---|---|---|
+| CORS | 减少浏览器跨站读取 | 不能阻止 curl |
+| Token | **真正的认证** | — |
+| 绑定 127.0.0.1 | 阻止局域网访问 | 不能阻止本机其他进程 |
+
+三者叠加，缺一不可。
+
+### 必测的边界用例
+
+| 用例 | 期望 |
+|---|---|
+| `Origin: http://localhost:5173` | 允许 |
+| `Origin: http://127.0.0.1:5173` | 允许 |
+| `Origin: http://evil-localhost.com` | **拒绝**（包含判断会误放） |
+| `Origin: http://127.0.0.1.evil.com` | **拒绝**（前缀判断会误放） |
+| `Origin: https://localhost` | 拒绝（协议不符） |
+| `Origin: null` | 拒绝 |
+| 无 `Origin` 头（curl） | 不做 CORS 判断，但**仍要校验 Token** |
+| `Origin: http://user:pass@127.0.0.1` | 拒绝（含凭据） |
 
 ---
 
@@ -219,6 +430,14 @@ available = safeStorage.isEncryptionAvailable()
 ### 正文约束（D-01 第 2 条）
 
 `ai.sendWindowTitle === false` 时，请求正文**不得包含窗口标题原文**——不是空字符串占位，是根本不出现该字段。
+
+`ai.sendAppName === false` 时，**完全不发送 `processName`**。
+
+**本版本不做匿名映射**（如「应用 A / 应用 B」）。理由：映射表本身就是信息——
+应用数量、切换频率、时段分布仍然可推断，却让用户以为自己被完全匿名了。
+要做匿名就要做到不可逆且无序号，那是另一个设计问题，不在本版本。
+
+关闭即不发，语义最直白，也最容易验证：**测试直接断言请求正文里不出现该字符串**。
 
 ### 不做
 
@@ -284,10 +503,13 @@ available = safeStorage.isEncryptionAvailable()
 
 ---
 
-## 十、待确认事项
+## 十、范围确认状态
 
-1. 本任务书的阶段划分与提交粒度是否认可
-2. 事件订阅白名单（3.3 节）是否纳入 A6（D-03 第 7 条要求纳入，此处确认范围）
-3. `ai.sendAppName` 关闭时，`processName` 也不发送——是否需要提供「应用名脱敏」（如「应用 A / 应用 B」）作为中间选项
+**已确认，无待决事项。**
 
-> 第 3 条不阻塞开发，可按「关闭即不发」实现，后续有需要再扩展。
+- 版本范围：一个完整版本、10 个阶段（A1/A2/A3a/A3b/A4/A5/A6 + B1-B4 + C1/C2）
+- 事件订阅白名单：**已纳入 A6**（D-03 第 7 条）
+- `ai.sendAppName = false`：完全不发送 `processName`，**本版本不做匿名映射**
+
+后续各阶段由 Agent 自主完成，仅在出现新的产品决策冲突、不可逆数据风险
+或重大范围变化时暂停确认。
