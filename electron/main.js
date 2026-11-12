@@ -335,9 +335,16 @@ function createWindow() {
     // Windows 下用 .ico 才能在任务栏/Alt+Tab 拿到多尺寸清晰图标
     icon: process.platform === 'win32' ? assetPath('icon.ico') : assetPath('icon.png'),
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      enableRemoteModule: true
+      // A4：主窗关闭 Node 能力，开启上下文隔离，挂主窗 preload。
+      // 这是全项目风险最高的一处改动——主窗承载全部业务界面。
+      //
+      // 不启用 sandbox：主窗要加载打包后的 Vite 产物与本地资源，
+      // 沙箱会限制 preload 之外的 Node 能力，而本窗口的 preload 已经
+      // 按白名单收窄了暴露面，再加沙箱的收益小于它可能引入的加载问题。
+      // 两个小窗是纯静态 HTML，沙箱开销小、收益明确，所以它们开了。
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
     },
     show: false,
     frame: false,
@@ -391,7 +398,8 @@ function createWindow() {
   // 把渲染进程的报错转存到应用日志，便于排查白屏/黑屏
   mainWindow.webContents.on('console-message', (event, level, message) => {
     if (level < 2) return;
-    // Electron 自带的 CSP 提示在开启 nodeIntegration 时无解，不往诊断日志里塞噪音
+    // Electron 的安全警告（CSP、nodeIntegration 等）在开发模式下会刷屏，
+    // 不往诊断日志里塞噪音——真正的错误在它后面，别被淹掉。
     if (message.includes('Electron Security Warning')) return;
     logManager.addLog('[渲染进程] ' + message, 'error');
   });

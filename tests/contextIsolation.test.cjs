@@ -48,11 +48,14 @@ test('the auxiliary windows do not share one preload', () => {
   assert.equal(/preload-focus/.test(float), false);
 });
 
-test('the main window is untouched — A3b only closes the small windows', () => {
-  // A4 才动主窗。保持分开，是为了主窗万一出问题时能单独回退这一组。
+test('the main window was closed last, and is closed too', () => {
+  // A3b 时这条断言的是「主窗还没动」。A4 把它也关了，
+  // 断言随之更新——阶段顺序本身就是验收标准的一部分：
+  // 先小窗后主窗，任何一步出问题都能只回退那一组。
   const block = webPrefsOf(read('electron/main.js'), 'mainWindow = new BrowserWindow');
-  assert.match(block, /nodeIntegration:\s*true/,
-    'A3b 阶段主窗应仍开启 nodeIntegration');
+  assert.match(block, /nodeIntegration:\s*false/);
+  assert.match(block, /contextIsolation:\s*true/);
+  assert.match(block, /preload:\s*path\.join\(__dirname,\s*'preload\.js'\)/);
 });
 
 test('sandboxed preloads only require electron', () => {

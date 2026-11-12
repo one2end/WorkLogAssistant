@@ -185,12 +185,12 @@ test('the preload requires electron but nothing else', () => {
     'preload 运行在受限环境，不应依赖其他模块');
 });
 
-test('the preload is wired into the auxiliary windows but not the main one yet', () => {
-  // A1 时还没有任何窗口挂 preload；A3b 挂上了两个小窗。
-  // 主窗留给 A4，且必须能单独回退，所以这一条盯住「主窗还没挂」。
+test('every window now loads its own preload', () => {
+  // A1 时还没有任何窗口挂 preload；A3b 挂上两个小窗；A4 补上主窗。
+  // 这条断言跟着阶段走，但每一次变动的都是「实际行为」，不是口径。
   const mainSrc = fs.readFileSync(MAIN_JS, 'utf8');
   assert.match(mainSrc, /preload-focus\.js/, '专注窗应已挂 preload');
   assert.match(mainSrc, /preload-float\.js/, '悬浮条应已挂 preload');
-  assert.equal(/preload:\s*path\.join\(__dirname,\s*'preload\.js'\)/.test(mainSrc), false,
-    '主窗 preload 应在 A4 挂上，本阶段不动');
+  assert.match(mainSrc, /preload:\s*path\.join\(__dirname,\s*'preload\.js'\)/,
+    '主窗应已挂 preload');
 });

@@ -25,6 +25,15 @@ function hasBridge() {
  * 用 require 而不是 import，因为 electron 只能从 CommonJS 拿。
  */
 function legacy() {
+  // 主窗与两个小窗都已关闭 nodeIntegration，`require` 在渲染层不再存在。
+  // 走到这里说明 preload 没挂上，而不是「调用写错了」——
+  // 直接 throw 一个看不懂的 ReferenceError 会让人查错方向。
+  if (typeof require !== 'function') {
+    throw new Error(
+      '当前窗口没有挂载 preload，无法调用主进程。' +
+      '这通常意味着窗口配置里的 preload 路径不对或 preload 加载失败。'
+    );
+  }
   // eslint-disable-next-line global-require
   return require('electron');
 }
