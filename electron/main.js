@@ -2001,8 +2001,11 @@ ipcMain.handle('get-bridge-status', () => {
     mcpConfig: getMcpConfigSnippet(),
     exampleUrls: {
       health: status.url ? `${status.url}/health` : null,
-      today: status.url ? `${status.url}/api/report/day?token=${status.token}` : null,
-      landing: status.url ? `${status.url}/?token=${status.token}` : null
+      // 这里曾经放的是 `?token=<长期凭据>`，等于把密钥交给渲染层去显示、
+      // 去复制、去贴进聊天窗口。示例地址只给路径，Token 由「打开桥接页」
+      // 用一次性码换，不经过渲染层。
+      today: status.url ? `${status.url}/api/report/day` : null,
+      landing: status.url ? `${status.url}/` : null
     }
   };
 });
