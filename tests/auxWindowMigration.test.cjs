@@ -116,11 +116,14 @@ test('multi-argument channels keep all their arguments', () => {
   }
 });
 
-test('nodeIntegration is still on — A3a only prepares the migration', () => {
+test('the auxiliary windows no longer have nodeIntegration', () => {
+  // A3a 时这条断言的是「三个窗口都还开着」。A3b 把它关掉了，
+  // 于是断言随行为一起更新——不是放宽，是行为本身变了。
   const main = read('electron/main.js');
-  // 关掉这件事发生在 A3b，本阶段不做
-  const count = (main.match(/nodeIntegration:\s*true/g) || []).length;
-  assert.equal(count, 3, 'A3a 阶段三个窗口都应仍开启 nodeIntegration');
+  assert.equal((main.match(/nodeIntegration:\s*true/g) || []).length, 1,
+    '只剩主窗还开 nodeIntegration（A4 处理）');
+  assert.equal((main.match(/nodeIntegration:\s*false/g) || []).length, 2,
+    '两个小窗都应已关闭 nodeIntegration');
 });
 
 test('the preload files are in sync with the registry', () => {

@@ -197,7 +197,14 @@ function createFocusWindow() {
     hasShadow: false,
     focusable: true,
     show: false,
-    webPreferences: { nodeIntegration: true, contextIsolation: false }
+    // A3b：关闭 Node 能力，开启上下文隔离，挂专注窗专用 preload。
+    // 专注窗只需要 5 个通道（会话控制 + 状态查询），拿不到活动记录也改不了配置。
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload-focus.js')
+    }
   });
 
   focusWindow.loadFile(path.join(__dirname, 'focus.html'));
@@ -487,9 +494,12 @@ function createFloatWindow() {
     skipTaskbar: true,
     resizable: false,
     hasShadow: false,
+    // A3b：同上。悬浮条只有 6 个通道，主要是拖动自己与开关录制。
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload-float.js')
     }
   });
 
