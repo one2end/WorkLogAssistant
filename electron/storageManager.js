@@ -683,6 +683,15 @@ class StorageManager {
     return { success: true };
   }
 
+  /**
+   * 直接删除全部按天活动文件。
+   *
+   * ⚠️ 不要在导入、同步或任何「恢复」流程里调用它。
+   * 它是不可撤销的：没有快照、没有备份、没有回收站，调用一次历史就没了。
+   * 唯一曾经的生产调用（导入的覆盖模式）已在 V0.10.2b 删除，
+   * 现在它是死代码，保留仅供将来「用户明确要求清空」的入口使用——
+   * 那种入口必须自带二次确认与快照。
+   */
   clearActivities() {
     writeGate.assertWritable('清空活动记录');
     try {
@@ -727,6 +736,63 @@ class StorageManager {
       return false;
     }
   }
+
+  /**
+   * 保存摘要，并分别报告 JSON 与 Markdown 的结果。
+   *
+   * 为什么需要它：saveSummary 先写 JSON 再写 MD，两次独立操作。若 MD 失败，
+   * 它返回 false，但 JSON 里其实已经有这条摘要了——调用方计入「失败」，
+   * 用户以为没导入，重试就会写第二条。
+   *
+   * 判定规则（方案 §3.4）：JSON 是唯一事实来源，MD 是可再生的派生产物。
+   * jsonOk 为 true 即视为「已导入」；mdOk 为 false 只意味着文字版要补。
+   *
+   * @returns {{ jsonOk: boolean, mdOk: boolean, error?: string, mdPath?: string }}
+   */
+  saveSummaryDetailed(summary) {
+    writeGate.assertWritable('保存摘要');
+
+    let dateStr;
+    let filePath;
+    try {
+      dateStr = summary.date || this._toDateStr(summary.timestamp);
+      filePath = this._summaryFile(dateStr);
+      const summaries = this._readJsonFile(filePath);
+      summaries.push(summary);
+      if (!this._writeJsonFile(filePath, summaries)) {
+        return { jsonOk: false, mdOk: false, error: 'summary-json-write-failed' };
+      }
+    } catch (error) {
+      return { jsonOk: false, mdOk: false, error: error.message };
+    }
+
+    // JSON 已成功落盘。后面无论出什么问题，这条摘要都算「已导入」。
+    let mdPath = null;
+    try {
+      const mdDir = path.join(this.dataDir, 'summaries_md');
+      if (!fs.existsSync(mdDir)) fs.mkdirSync(mdDir, { recursive: true });
+      const mdFilename = `summary_${new Date(summary.timestamp).toISOString().replace(/[:.]/g, '-')}.md`;
+      mdPath = path.join(mdDir, mdFilename);
+      fs.writeFileSync(mdPath, this.generateMarkdownSummary(summary), 'utf8');
+      return { jsonOk: true, mdOk: true, mdPath };
+    } catch (error) {
+      return { jsonOk: true, mdOk: false, error: error.message, mdPath };
+    }
+  }
+
+  /**
+   * 从已落盘的 JSON 重建某条摘要的 Markdown（方案 §3.4 规则 2）。
+   * 不写 JSON，因此不会产生重复记录。
+   */
+  rebuildSummaryMarkdown(summary) {
+    const mdDir = path.join(this.dataDir, 'summaries_md');
+    if (!fs.existsSync(mdDir)) fs.mkdirSync(mdDir, { recursive: true });
+    const mdFilename = `summary_${new Date(summary.timestamp).toISOString().replace(/[:.]/g, '-')}.md`;
+    const mdPath = path.join(mdDir, mdFilename);
+    fs.writeFileSync(mdPath, this.generateMarkdownSummary(summary), 'utf8');
+    return { ok: true, mdPath };
+  }
+
   generateMarkdownSummary(summary) {
     let content = `# 工作日志摘要\n\n`;
     content += `**时间**: ${new Date(summary.timestamp).toLocaleString('zh-CN')}\n\n`;
@@ -955,6 +1021,71 @@ class StorageManager {
   }
 
   // --- Data migration between paths ---
+
+  /**
+   * 导入前的三目录快照（方案 §3.2）。
+   *
+   * 为什么要三个目录：完整 JSON 导入同时写 activities 和 summaries，而
+   * saveSummary 还会写 summaries_md。只快照 activities 等于只保护了三分之二。
+   *
+   * 快照失败必须让调用方**中止导入**——没有快照就没有回退能力，
+   * 「先导进去再说」是这类工具最不该有的态度。
+   *
+   * @param {string} [reason] 触发原因，写进 manifest 供审计
+   * @returns {{ ok: boolean, snapshotPath?: string, counts?: object, error?: string }}
+   */
+  snapshotBeforeImport(reason) {
+    writeGate.assertWritable('创建导入快照');
+    try {
+      const base = path.join(this.dataDir, 'snapshots');
+      const ts = this._toDateStr(Date.now()) + '-' +
+        new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+      let dir = path.join(base, `import-${ts}`);
+      // 同一秒内连续导入两次：加后缀，绝不覆盖上一份快照
+      let suffix = 1;
+      while (fs.existsSync(dir)) {
+        dir = path.join(base, `import-${ts}-${suffix}`);
+        suffix += 1;
+      }
+
+      const dirs = {
+        activities: this.activitiesDir,
+        summaries: this.summariesDir,
+        summaries_md: path.join(this.dataDir, 'summaries_md')
+      };
+
+      const counts = {};
+      for (const [name, sourceDir] of Object.entries(dirs)) {
+        const destDir = path.join(dir, name);
+        fs.mkdirSync(destDir, { recursive: true });
+        let n = 0;
+        if (fs.existsSync(sourceDir)) {
+          for (const file of fs.readdirSync(sourceDir)) {
+            const from = path.join(sourceDir, file);
+            let stat;
+            try { stat = fs.statSync(from); } catch (_) { continue; }
+            if (!stat.isFile()) continue;
+            fs.copyFileSync(from, path.join(destDir, file));
+            n += 1;
+          }
+        }
+        counts[name] = n;
+      }
+
+      const manifest = {
+        createdAt: new Date().toISOString(),
+        trigger: reason || 'import-merge',
+        dataDir: this.dataDir,
+        counts
+      };
+      fs.writeFileSync(path.join(dir, 'snapshot-manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+
+      return { ok: true, snapshotPath: dir, counts, manifest };
+    } catch (error) {
+      console.error('创建导入快照失败:', error);
+      return { ok: false, error: error.message };
+    }
+  }
 
   migrateDataTo(newPath) {
     // 整个数据目录复制，与迁移互斥
