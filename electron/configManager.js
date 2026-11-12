@@ -1,13 +1,59 @@
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
+const { safeStorage } = require('electron');
+const secretStorage = require('./secretStorage');
 
 class ConfigManager {
   constructor() {
     const userDataPath = app.getPath('userData');
     this.configPath = path.join(userDataPath, 'config.json');
     this.localConfigPath = path.join(userDataPath, 'config.local.json');
+    /** 加密不可用时的说明，供 UI 提示（不清空配置、不改变 AI 状态） */
+    this.encryptionNotice = null;
     this.config = this.loadConfig();
+  }
+
+  /** 加密是否可用。某些 Linux 无 keyring，此时降级为明文而不是阻断。 */
+  _canEncrypt() {
+    try {
+      return !!safeStorage.isEncryptionAvailable();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * 把磁盘上的密钥解成明文（只在内存里）。
+   *
+   * 解不开时保留原密文字符串而不是置空：置空等于「用户没设过」，
+   * 下一次保存会把它覆盖掉。留着密文至少还有恢复的机会
+   * （备份文件、另一台机器上的 keyring）。
+   */
+  _decryptSecrets(localConfig) {
+    const result = secretStorage.decryptConfig(safeStorage, localConfig);
+    if (!result.ok) {
+      this.encryptionNotice = '部分密钥无法解密（可能是系统凭据服务变化）。' +
+        '密钥保持原样，请重新填写以覆盖。';
+      console.error('解密密钥失败:', result.failures);
+    }
+    return result.config;
+  }
+
+  /**
+   * 把内存里的明文密钥加密后返回可落盘的对象。
+   *
+   * 加密不可用时返回原文并记下提示——硬要加密会让人打不开软件。
+   */
+  _encryptSecrets(localConfig) {
+    if (!this._canEncrypt()) {
+      this.encryptionNotice = '系统未提供安全的凭据存储，密钥以明文保存。' +
+        '在 Windows / macOS 上通常不会出现这种情况。';
+      return { ok: true, config: localConfig, migrated: 0 };
+    }
+    const r = secretStorage.encryptConfig(safeStorage, localConfig);
+    if (r.ok) this.encryptionNotice = null;
+    return r;
   }
 
   loadConfig() {
@@ -35,7 +81,13 @@ class ConfigManager {
       if (fs.existsSync(this.localConfigPath)) {
         try {
           const localData = fs.readFileSync(this.localConfigPath, 'utf8');
-          const localConfig = this.migrateLegacyAppearance(JSON.parse(localData));
+          const rawLocal = this.migrateLegacyAppearance(JSON.parse(localData));
+
+          // 密钥在磁盘上是密文（可能），进内存前必须解密。
+          // 解不开时不解释成空串——那会让上层以为「没设过」，
+          // 下一次保存就把损坏的密文覆盖成空，密钥永久丢失。
+          const localConfig = this._decryptSecrets(rawLocal);
+
           return this.mergeDeep(baseConfig, localConfig);
         } catch (e) {
           console.error('解析 config.local.json 失败:', e);
@@ -226,7 +278,15 @@ class ConfigManager {
         api: { apiKey: nextApiKey },
         dida: { token: nextDidaToken }
       });
-      fs.writeFileSync(this.localConfigPath, JSON.stringify(localConfig, null, 2), 'utf8');
+
+      // 落盘前加密。这一步失败就整个保存失败——宁可保存不成功，
+      // 也不要把明文密钥悄悄写到磁盘上。
+      const enc = this._encryptSecrets(localConfig);
+      if (!enc.ok) {
+        console.error('加密密钥失败，配置未保存:', enc.error);
+        return false;
+      }
+      fs.writeFileSync(this.localConfigPath, JSON.stringify(enc.config, null, 2), 'utf8');
 
       // Save non-sensitive data to main config
       const safeConfig = JSON.parse(JSON.stringify(config));
@@ -332,7 +392,15 @@ class ConfigManager {
         } catch (_) { /* 损坏则重建 */ }
       }
       localConfig[section] = { ...(localConfig[section] || {}), [field]: '' };
-      fs.writeFileSync(this.localConfigPath, JSON.stringify(localConfig, null, 2), 'utf8');
+
+      // 清除也要走一遍加密流程：其它字段可能还是明文（旧配置尚未迁移），
+      // 顺手加密掉比留一半明文好。
+      const enc = this._encryptSecrets(localConfig);
+      if (!enc.ok) {
+        console.error('清除密钥时加密失败:', enc.error);
+        return false;
+      }
+      fs.writeFileSync(this.localConfigPath, JSON.stringify(enc.config, null, 2), 'utf8');
 
       this.config[section] = { ...(this.config[section] || {}), [field]: '' };
       return true;
@@ -340,6 +408,32 @@ class ConfigManager {
       console.error('清除密钥失败:', error);
       return false;
     }
+  }
+
+  /**
+   * 启动时把已有明文密钥加密（五步流程见 secretStorage.migrate）。
+   *
+   * 由 main.js 在 app ready 之后调用一次。失败不影响启动——
+   * 只是继续用明文，并把说明留在 encryptionNotice 里。
+   */
+  migratePlaintextSecrets() {
+    const r = secretStorage.migrate({
+      safeStorage,
+      localConfigPath: this.localConfigPath,
+      isAvailable: () => this._canEncrypt()
+    });
+
+    if (r.status === 'unavailable') {
+      this.encryptionNotice = '系统未提供安全的凭据存储，密钥以明文保存。';
+    } else if (r.status === 'migrated') {
+      console.log(`已加密 ${r.migrated} 个密钥，原文件备份为 ${r.backup}`);
+      // 迁移后重新加载，让内存里拿到的是解密后的明文
+      this.config = this.loadConfig();
+    } else if (!r.ok) {
+      this.encryptionNotice = `密钥加密失败（${r.status}），已保留原始配置。`;
+      console.error('密钥迁移失败:', r);
+    }
+    return r;
   }
 
   updateConfig(updates) {

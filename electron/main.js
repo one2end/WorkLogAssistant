@@ -777,6 +777,22 @@ if (!gotTheLock) {
 
 app.whenReady().then(() => {
   logManager.addLog('应用程序启动中...', 'info');
+
+  // 把已存在的明文密钥加密。失败不阻断启动——只是继续用明文并记一条提示。
+  // 必须在创建窗口之前做，否则窗口里可能拿到尚未迁移的配置。
+  try {
+    const encryption = configManager.migratePlaintextSecrets();
+    if (encryption.status === 'migrated') {
+      logManager.addLog(`已加密 ${encryption.migrated} 个密钥`, 'info');
+    } else if (encryption.status === 'unavailable') {
+      logManager.addLog('系统未提供安全凭据存储，密钥以明文保存', 'error');
+    } else if (!encryption.ok) {
+      logManager.addLog(`密钥加密失败（${encryption.status}），已保留原始配置`, 'error');
+    }
+  } catch (error) {
+    logManager.addLog(`密钥加密流程异常: ${error.message}`, 'error');
+  }
+
   try {
     const merged = planManager.mergeLegacyOvernightPlans();
     if (merged) logManager.addLog(`已合并 ${merged} 组旧版跨日计划，并备份原计划文件`, 'info');
