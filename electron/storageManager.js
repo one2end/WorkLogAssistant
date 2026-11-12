@@ -166,8 +166,23 @@ class StorageManager {
 
   /**
    * 某一天的所有活动文件：主文件 + iCloud 冲突副本。
-   * 副本命名形如 "2026-11-08 2.jsonl"（数字后缀），也可能是 "2026-11-08 (1).jsonl"。
+   *
+   * 副本命名只有两种形态（同步软件生成）：
+   *   "2026-11-08 2.jsonl"      空格 + 纯数字
+   *   "2026-11-08 (1).jsonl"    空格 + 括号数字
+   *
+   * 早先用 startsWith(dateStr) && endsWith('.jsonl') 判断，会把备份文件也
+   * 当成当天数据读进来：
+   *   "2026-11-08-backup.jsonl"  用户手工备份
+   *   "2026-11-08.old.jsonl"     改名前留的旧版
+   *   "2026-11-080.jsonl"        另一个日期（11-08 与 080 的歧义）
+   * 结果是同一天的记录凭空多出一份，而用户看不出它们从哪来。
    */
+  static _dayFileRegex(dateStr) {
+    // 日期本身只含数字和连字符，不需要转义；括号需要
+    return new RegExp(`^${dateStr}(?: (?:\\(\\d+\\)|\\d+))?\\.jsonl$`);
+  }
+
   _activityFilesOfDay(dateStr) {
     const main = this._activityJsonlFile(dateStr);
     const files = [main];
@@ -175,10 +190,10 @@ class StorageManager {
       const dir = path.dirname(main);
       if (!fs.existsSync(dir)) return files;
       const base = path.basename(main);
+      const pattern = StorageManager._dayFileRegex(dateStr);
       for (const name of fs.readdirSync(dir)) {
         if (name === base) continue;
-        if (!name.startsWith(dateStr)) continue;
-        if (!name.endsWith('.jsonl')) continue;
+        if (!pattern.test(name)) continue;
         files.push(path.join(dir, name));
       }
     } catch (_) { /* 目录读不到就只用主文件 */ }
