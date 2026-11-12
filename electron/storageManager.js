@@ -149,19 +149,50 @@ class StorageManager {
    * 同步进程发现同名文件被别处改过，会生成 "2026-11-08 2.jsonl" 这样的副本。
    * 主文件虽然能读到，但副本里的记录会被漏掉——表现为「那段时间凭空消失了」。
    * 所以这里把同名前缀的文件一起读进来。
+   *
+   * 去重规则（V0.10.3 §4.4）——只在**跨文件**之间按 rid 去重，且必须双方都有 rid：
+   *
+   *   双方同 rid           → 合并成一条（同步软件把同一条复制到了副本）
+   *   双方不同 rid         → 两条都留（并发写入产生的两条不同记录）
+   *   一方无 rid           → 两条都留（无法确认，宁可保留）
+   *   双方都无 rid         → 两条都留（历史数据，无法确认）
+   *   同一文件内重复       → **永不去重**（那本来就是两条真实记录）
+   *
+   * 「无法确认就保留」是这里唯一安全的选项：错删一条真实记录无法挽回，
+   * 多留一条重复记录下次还能发现。
    */
   _readActivityFile(dateStr) {
     const items = [];
 
     const legacy = this._readJsonFile(this._activityFile(dateStr));
-    if (Array.isArray(legacy)) items.push(...legacy);
+    // 旧版 JSON 里的记录没有 rid，不参与跨文件去重，但也不阻止其他记录参与
+    if (Array.isArray(legacy)) items.push(...legacy.map(a => ({ ...a, rid: a.rid || null })));
 
+    // 每条记录记住自己来自哪个文件：同一文件内的重复必须保留
+    const ridToFirstFile = new Map(); // rid -> 首次出现的文件路径
     let index = 0;
-    for (const file of this._activityFilesOfDay(dateStr)) {
+
+    const files = this._activityFilesOfDay(dateStr);
+    for (const file of files) {
       const segments = this._readJsonlFile(file);
-      segments.forEach((rec) => {
-        if (rec && rec.t) items.push(this._fromSegment(rec, index++));
-      });
+      for (const rec of segments) {
+        if (!rec || !rec.t) continue;
+
+        if (rec.rid) {
+          const firstFile = ridToFirstFile.get(rec.rid);
+          if (firstFile === undefined) {
+            ridToFirstFile.set(rec.rid, file);
+          } else if (firstFile !== file) {
+            // 同一 rid 出现在**另一个文件**里：同步软件把同一条记录复制过去了。
+            // 注意这里必须比较文件名：同一文件内出现两次是数据本身的问题，
+            // 删掉其中一条等于替用户决定哪条是假的，而两条可能都真。
+            continue;
+          }
+          // 同文件内的重复：不跳过，原样保留
+        }
+
+        items.push(this._fromSegment(rec, index++));
+      }
     }
 
     items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));

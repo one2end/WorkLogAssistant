@@ -17,6 +17,10 @@ function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifelog-copies-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
+  for (const key of Object.keys(require.cache)) {
+    if (key.includes(`${path.sep}electron${path.sep}storageManager.js`)) delete require.cache[key];
+  }
+
   const originalLoad = Module._load;
   Module._load = function (id, ...args) {
     if (id === 'electron') return { app: { getPath: () => root } };
