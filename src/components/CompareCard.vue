@@ -86,6 +86,7 @@
 </template>
 
 <script>
+import { ipc } from '../utils/ipc.mjs';
 import { buildComparison } from '../utils/compareRange.mjs';
 import { colorForCategory } from '../styles/palette.js';
 
@@ -222,10 +223,9 @@ export default {
       const id = ++this.requestId;
       this.loading = true;
       try {
-        const { ipcRenderer } = require('electron');
         const [current, previous] = await Promise.all([
-          ipcRenderer.invoke('get-range-analytics', { from: w.from, to: w.to }),
-          ipcRenderer.invoke('get-range-analytics', { from: w.previousFrom, to: w.previousTo })
+          ipc.invoke('get-range-analytics', { from: w.from, to: w.to }),
+          ipc.invoke('get-range-analytics', { from: w.previousFrom, to: w.previousTo })
         ]);
         if (id !== this.requestId) return;
         this.current = current?.ok ? current.report : null;

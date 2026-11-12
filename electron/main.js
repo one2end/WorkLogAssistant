@@ -1547,6 +1547,28 @@ ipcMain.handle('open-logs-folder', () => {
   shell.openPath(logManager.logsDir);
 });
 
+/**
+ * 渲染层请求打开外部链接。
+ *
+ * A2 只做「不收任意协议」的最小校验；完整白名单（含桥接端口精确匹配）
+ * 在 B2 实现。这里先把能力从渲染层收到主进程——
+ * 一旦渲染层还能直接调 shell.openExternal，B2 的白名单就形同虚设。
+ */
+ipcMain.handle('open-external', (event, url) => {
+  const { shell } = require('electron');
+  if (typeof url !== 'string' || !url.trim()) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_) {
+    return false;
+  }
+  // 只放行 http/https；file: / javascript: / data: 等一律拒绝
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  shell.openExternal(url);
+  return true;
+});
+
 ipcMain.handle('export-data', async (event, { filename, content }) => {
   const { dialog, shell } = require('electron');
   const result = await dialog.showSaveDialog(mainWindow, {

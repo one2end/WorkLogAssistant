@@ -16,7 +16,7 @@
  * 手写一定会漏，而漏掉的表现是某个功能在切换之后突然失灵。
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, clipboard } = require('electron');
 
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
@@ -129,5 +129,25 @@ contextBridge.exposeInMainWorld('worklog', {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on(eventName, listener);
     return () => ipcRenderer.removeListener(eventName, listener);
-  }
+  },
+
+  /**
+   * 复制一段文本到剪贴板。
+   *
+   * 为什么不暴露整个 electron.clipboard：那个模块包含**读**能力，
+   * 而这里只需要写。能给一个参数就不要给一个模块。
+   */
+  writeClipboard: (text) => {
+    if (typeof text !== 'string') return false;
+    clipboard.writeText(text);
+    return true;
+  },
+
+  /**
+   * 请求主进程打开外部链接。
+   *
+   * 渲染层不直接调 shell.openExternal —— 那等于把「可以打开任意协议」
+   * 的能力交给渲染层。这里只递交 URL，是否放行由主进程按白名单判断（B2）。
+   */
+  openExternal: (url) => invoke('open-external', url)
 });

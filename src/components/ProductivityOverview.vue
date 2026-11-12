@@ -45,6 +45,7 @@
 </template>
 
 <script>
+import { ipc } from '../utils/ipc.mjs';
 const LEVELS = {
   productive: { label: '积极', color: '#3fa77a' },
   neutral: { label: '平稳', color: '#8391a7' },
@@ -140,8 +141,7 @@ export default {
       from.setDate(from.getDate() - this.days + 1);
       const dateStr = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       try {
-        const { ipcRenderer } = require('electron');
-        const res = await ipcRenderer.invoke('get-range-analytics', { from: dateStr(from), to: dateStr(to) });
+        const res = await ipc.invoke('get-range-analytics', { from: dateStr(from), to: dateStr(to) });
         if (id === this.requestId) this.range = res?.ok ? res.report : null;
       } catch (_) {
         if (id === this.requestId) this.range = null;

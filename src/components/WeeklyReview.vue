@@ -28,6 +28,7 @@
 </template>
 
 <script>
+import { ipc } from '../utils/ipc.mjs';
 export default {
   name: 'WeeklyReview',
   props: { selectedDate: { type: String, required: true } },
@@ -72,10 +73,9 @@ export default {
       const previousStart = new Date(previousEnd); previousStart.setDate(previousStart.getDate() - 6);
       this.from = this.dateStr(start); this.to = this.dateStr(end);
       try {
-        const { ipcRenderer } = require('electron');
         const [current, previous] = await Promise.all([
-          ipcRenderer.invoke('get-range-analytics', { from: this.from, to: this.to }),
-          ipcRenderer.invoke('get-range-analytics', { from: this.dateStr(previousStart), to: this.dateStr(previousEnd) })
+          ipc.invoke('get-range-analytics', { from: this.from, to: this.to }),
+          ipc.invoke('get-range-analytics', { from: this.dateStr(previousStart), to: this.dateStr(previousEnd) })
         ]);
         if (id === this.requestId) { this.report = current?.ok ? current.report : null; this.previous = previous?.ok ? previous.report : null; }
       } catch (_) { if (id === this.requestId) { this.report = null; this.previous = null; } }

@@ -44,8 +44,11 @@ test('the registry covers every channel main.js actually registers', () => {
   assert.equal(declared.length, actual.length);
 });
 
-test('the channel count matches what the plan documents: 74', () => {
-  assert.equal(Object.keys(reg.allChannels()).length, 74,
+test('the channel count matches what the plan documents: 75', () => {
+  // 74 是 V0.10.6 规划时的实测值。A2 为渲染层新增了 open-external ——
+  // 渲染层需要打开链接，但不能直接把 shell 交出去，所以加一个由主进程
+  // 做白名单校验的通道。总数因此是 75，任务书与矩阵同步更新。
+  assert.equal(Object.keys(reg.allChannels()).length, 75,
     '通道总数变化时必须同步更新任务书与矩阵，否则文档会悄悄过期');
 });
 
@@ -103,7 +106,9 @@ test('an unknown role gets nothing', () => {
 
 test('the preload exposes exactly the main-role channel set', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '../electron/preload.js'), 'utf8');
-  const exposed = [...src.matchAll(/^\s+([a-zA-Z0-9_]+):\s*\(payload\)\s*=>\s*invoke\('([a-z0-9-]+)'/gm)]
+  // 参数名不固定（payload / url / config …）。按名字匹配会漏掉后来加的通道，
+  // 而漏掉的表现是「preload 少一个方法」，直到 A4 某个功能失灵才发现。
+  const exposed = [...src.matchAll(/^\s+([a-zA-Z0-9_]+):\s*\([a-zA-Z0-9_]*\)\s*=>\s*invoke\('([a-z0-9-]+)'/gm)]
     .map(m => m[2]);
 
   const expected = reg.channelsForRole('main');

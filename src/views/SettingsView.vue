@@ -593,6 +593,7 @@
   </div>
 </template>
 <script>
+import { ipc } from '../utils/ipc.mjs';
 import Icon from '../components/Icon.vue';
 import { MODES, SURFACES } from '../styles/accents.js';
 import { colorForCategory } from '../styles/palette.js';
@@ -935,8 +936,7 @@ export default {
       this.loadingProjects = true;
       this.projectError = '';
       try {
-        const { ipcRenderer } = require('electron');
-        const res = await ipcRenderer.invoke('dida-projects', { force: !!force });
+        const res = await ipc.invoke('dida-projects', { force: !!force });
         if (res && res.ok) {
           this.didaProjects = res.items || [];
           if (res.warning) this.projectError = res.warning;

@@ -411,7 +411,7 @@ import slotRule from '@slot-rule';
 
 const { snapToStep } = slotRule;
 
-const { ipcRenderer } = require('electron');
+import { ipc } from '../utils/ipc.mjs';
 
 /** 小于这个分钟数的缝隙不单独画空闲块，避免碎片刷屏 */
 const GAP_MIN = 5;
@@ -882,7 +882,7 @@ export default {
 
       // 专注不是活动记录，它在 arhat/sessions 里，得用另一个接口删
       if (b.focusId) {
-        const res = await ipcRenderer.invoke('delete-focus-session', { date, id: b.focusId });
+        const res = await ipc.invoke('delete-focus-session', { date, id: b.focusId });
         if (!res || !res.success) {
           this.$emit('manual-error', (res && res.error) || '删除专注失败');
           return;
@@ -903,7 +903,7 @@ export default {
         d.setMinutes(min);
         return d.toISOString();
       };
-      const res = await ipcRenderer.invoke('delete-display-range', {
+      const res = await ipc.invoke('delete-display-range', {
         date,
         start: toIso(b.startMin),
         end: toIso(b.endMin)
@@ -937,7 +937,7 @@ export default {
           const date = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`;
           let report = null;
           try {
-            const res = await ipcRenderer.invoke('get-day-analytics', date);
+            const res = await ipc.invoke('get-day-analytics', date);
             report = res && res.ok ? res.report : null;
           } catch (e) { /* 单天失败不影响整体 */ }
           if (token !== this._calToken) return;
@@ -1198,7 +1198,7 @@ export default {
       this.proposePlanMove({ ...original, date, startMin, occurrenceDate: original.date });
     },
     async savePlanAt(item, date, startMin, keepIdentity = false) {
-      const res = await ipcRenderer.invoke('save-local-plan', {
+      const res = await ipc.invoke('save-local-plan', {
         localId: keepIdentity ? item.localId : '',
         date,
         startMin,
@@ -1677,7 +1677,7 @@ export default {
             this.$emit('manual-error', `当天没有找到「${payload.app}」的其它时段`);
             return;
           }
-          const res = await ipcRenderer.invoke('recategorize-app-for-day', {
+          const res = await ipc.invoke('recategorize-app-for-day', {
             date,
             app: payload.app,
             category: payload.category,
@@ -1696,8 +1696,8 @@ export default {
         }
 
         const res = ranges.length
-          ? await ipcRenderer.invoke('replace-display-ranges', { ranges, record })
-          : await ipcRenderer.invoke('add-manual-record', record);
+          ? await ipc.invoke('replace-display-ranges', { ranges, record })
+          : await ipc.invoke('add-manual-record', record);
         if (!res || !res.ok) {
           this.$emit('manual-error', (res && res.error) || '保存失败');
           return;
@@ -1768,7 +1768,7 @@ export default {
       this._manualHintSeq = (this._manualHintSeq || 0) + 1;
       const seq = this._manualHintSeq;
       try {
-        const res = await ipcRenderer.invoke('find-note-hints', { keyword: String(keyword || '').trim() });
+        const res = await ipc.invoke('find-note-hints', { keyword: String(keyword || '').trim() });
         if (!res || !res.ok) return;
         if (seq !== this._manualHintSeq) return;
         this.manualHints = (res.hints || []).slice(0, 6);
@@ -1791,7 +1791,7 @@ export default {
       const seq = this._hintSeq;
       if (!kw) { this.noteHints = []; return; }
       try {
-        const res = await ipcRenderer.invoke('find-note-hints', {
+        const res = await ipc.invoke('find-note-hints', {
           keyword: kw,
           app: kw ? '' : app,
           category: kw ? '' : category
@@ -1864,7 +1864,7 @@ export default {
       };
       const ranges = [{ start: toIso(startMin), end: toIso(startMin + durationMin) }];
       if (oldRange) ranges.push({ start: toIso(oldRange[0]), end: toIso(oldRange[1]) });
-      const res = await ipcRenderer.invoke('replace-display-ranges', { ranges, record: {
+      const res = await ipc.invoke('replace-display-ranges', { ranges, record: {
         date,
         startTime: this.clock(startMin),
         durationMin,
@@ -1888,7 +1888,7 @@ export default {
     async pasteAt(date, startMin) {
       const c = this.clipBlock;
       if (!c) return;
-      await ipcRenderer.invoke('add-manual-record', {
+      await ipc.invoke('add-manual-record', {
         date,
         startTime: this.clock(Math.min(1425, startMin)),
         durationMin: c.durationMin,
@@ -2088,7 +2088,7 @@ export default {
       if (this.savingPlan) return;
       this.savingPlan = true;
       try {
-        const res = await ipcRenderer.invoke('save-local-plan', payload);
+        const res = await ipc.invoke('save-local-plan', payload);
         if (!res?.ok) {
           this.$emit('manual-error', res?.error || '保存计划失败');
           return;
@@ -2113,7 +2113,7 @@ export default {
         : `删除计划「${item.label}」？已经生成的事实不会被删除。`;
       if (!window.confirm(text)) return;
       try {
-        const res = await ipcRenderer.invoke('delete-local-plan', { localId: item.localId });
+        const res = await ipc.invoke('delete-local-plan', { localId: item.localId });
         if (!res?.ok) {
           this.$emit('manual-error', res?.error || '删除计划失败');
           return;
@@ -2141,7 +2141,7 @@ export default {
       if (!item || this.convertingPlanKey) return;
       this.convertingPlanKey = item.planKey || item.id;
       try {
-        const res = await ipcRenderer.invoke('convert-plan-to-fact', {
+        const res = await ipc.invoke('convert-plan-to-fact', {
           // 日历可能显示多天，按计划自己所属的日期转换，而不是当前选中日
           date: date || item.date || this.selectedDate,
           plan: item,
@@ -2197,7 +2197,7 @@ export default {
       };
       this.savingManual = true;
       try {
-        const res = await ipcRenderer.invoke('add-manual-record', payload);
+        const res = await ipc.invoke('add-manual-record', payload);
         if (res && res.ok) {
           this.manualOpen = false;
           this.manualTitle = '';

@@ -195,7 +195,7 @@
 </template>
 
 <script>
-const { ipcRenderer, shell, clipboard } = require('electron');
+import { ipc, writeClipboard, openExternal } from './utils/ipc.mjs';
 
 import Icon from './components/Icon.vue';
 import TitleBar from './components/TitleBar.vue';
@@ -331,9 +331,9 @@ export default {
     await this.loadLogs();
     await this.loadBridgeStatus();
     await this.loadDidaStatus();
-    this.appVersion = await ipcRenderer.invoke('get-app-version');
-    this.autoLaunch = await ipcRenderer.invoke('get-auto-launch');
-    this.isMonitoring = await ipcRenderer.invoke('get-monitoring-status');
+    this.appVersion = await ipc.invoke('get-app-version');
+    this.autoLaunch = await ipc.invoke('get-auto-launch');
+    this.isMonitoring = await ipc.invoke('get-monitoring-status');
     await this.loadRecorderStatus();
     await this.loadFocusPresets();
     await this.loadFocusState();
@@ -397,7 +397,7 @@ export default {
       writePath(this.config, plugin.path, next);
       if (id === 'mcp') {
         try {
-          await ipcRenderer.invoke('set-bridge-config', { enabled: next });
+          await ipc.invoke('set-bridge-config', { enabled: next });
           await this.loadBridgeStatus();
         } catch (e) { /* 配置已落盘，状态刷新失败不阻塞切换 */ }
       }
@@ -413,7 +413,7 @@ export default {
 
     async loadDidaStatus() {
       try {
-        const st = await ipcRenderer.invoke('dida-status');
+        const st = await ipc.invoke('dida-status');
         if (st) this.didaStatus = st;
       } catch (_) { /* 插件未加载时保持空状态 */ }
     },
@@ -421,7 +421,7 @@ export default {
     /** 设置页单向推送；仍需启用和选择目标清单。 */
     async syncDida() {
       try {
-        const res = await ipcRenderer.invoke('dida-sync-now', { direction: 'push' });
+        const res = await ipc.invoke('dida-sync-now', { direction: 'push' });
         const r = res;
         if (r && r.error) this.showToast(r.error, 'error');
         else if (r && r.skipped) this.showToast(r.reason || '推送未开启', 'error');
@@ -447,7 +447,7 @@ export default {
     // ============ 数据加载 ============
 
     async loadKnownApps() {
-      try { this.knownApps = await ipcRenderer.invoke('get-known-apps'); } catch (_) { this.knownApps = []; }
+      try { this.knownApps = await ipc.invoke('get-known-apps'); } catch (_) { this.knownApps = []; }
     },
 
     async reloadDate(forceHeat = false) {
@@ -464,7 +464,7 @@ export default {
     async loadReport() {
       const date = this.selectedDate;
       try {
-        const res = await ipcRenderer.invoke('get-day-analytics', date);
+        const res = await ipc.invoke('get-day-analytics', date);
         if (date === this.selectedDate) this.report = (res && res.ok) ? res.report : emptyReport(date);
       } catch (error) {
         if (date === this.selectedDate) this.report = emptyReport(date);
@@ -473,7 +473,7 @@ export default {
 
     async loadActivities() {
       try {
-        const all = await ipcRenderer.invoke('get-activities', this.selectedDate);
+        const all = await ipc.invoke('get-activities', this.selectedDate);
         this.activities = [...all].reverse();
       } catch (error) {
         this.activities = [];
@@ -482,7 +482,7 @@ export default {
 
     async loadSummaries() {
       try {
-        const items = await ipcRenderer.invoke('get-summaries', this.selectedDate);
+        const items = await ipc.invoke('get-summaries', this.selectedDate);
         this.summaries = [...items].reverse();
       } catch (error) {
         this.summaries = [];
@@ -490,14 +490,14 @@ export default {
     },
 
     async loadAiUsage() {
-      try { this.aiUsage = await ipcRenderer.invoke('get-ai-usage'); } catch (_) { /* keep last value */ }
+      try { this.aiUsage = await ipc.invoke('get-ai-usage'); } catch (_) { /* keep last value */ }
     },
 
     async loadAnnotationSuggestions() {
       const date = this.selectedDate;
       if (this.report.date !== date) return;
       try {
-        const result = await ipcRenderer.invoke('get-annotation-suggestions', { date, slots: this.report.slots || [] });
+        const result = await ipc.invoke('get-annotation-suggestions', { date, slots: this.report.slots || [] });
         if (date === this.selectedDate) this.annotationSuggestions = Array.isArray(result) ? result : [];
       } catch (_) {
         if (date === this.selectedDate) this.annotationSuggestions = [];
@@ -512,7 +512,7 @@ export default {
         d.setMinutes(min);
         return d.toISOString();
       };
-      const res = await ipcRenderer.invoke('replace-display-ranges', {
+      const res = await ipc.invoke('replace-display-ranges', {
         ranges: [{ start: toIso(startMin), end: toIso(startMin + 15) }],
         record: {
           date,
@@ -542,7 +542,7 @@ export default {
       // 同一段时间被取整两次，结果取决于两次取整是否会叠加。
       const rawDurationMin = Math.max(1, Math.round((end - start) / 60000));
       try {
-        const result = await ipcRenderer.invoke('replace-display-ranges', {
+        const result = await ipc.invoke('replace-display-ranges', {
           ranges: [{ start: thread.start, end: thread.end }],
           record: {
             date: this.selectedDate,
@@ -564,13 +564,13 @@ export default {
 
     async dismissSuggestion(suggestion) {
       const date = this.selectedDate;
-      const ok = await ipcRenderer.invoke('dismiss-annotation-suggestion', { date, ...suggestion });
+      const ok = await ipc.invoke('dismiss-annotation-suggestion', { date, ...suggestion });
       if (ok) this.annotationSuggestions = this.annotationSuggestions.filter(item => item.startMin !== suggestion.startMin);
     },
 
     async loadDatesWithData() {
       try {
-        const dates = await ipcRenderer.invoke('get-dates-with-data');
+        const dates = await ipc.invoke('get-dates-with-data');
         this.datesWithData = new Set(dates);
       } catch (error) { /* noop */ }
     },
@@ -582,7 +582,7 @@ export default {
       this._lastHeatLoad = now;
       const { from, to } = heatRange(this.heatWeeks, this.heatOffset);
       try {
-        const res = await ipcRenderer.invoke('get-daily-tracked', { from, to });
+        const res = await ipc.invoke('get-daily-tracked', { from, to });
         this.heatDaily = (res && res.ok) ? res.days : [];
         this.heatFrom = from;
         this.heatTo = to;
@@ -593,20 +593,20 @@ export default {
 
     async loadRecorderStatus() {
       try {
-        this.recorder = await ipcRenderer.invoke('get-recorder-status');
+        this.recorder = await ipc.invoke('get-recorder-status');
       } catch (error) { /* noop */ }
     },
 
     async loadLogs() {
       try {
-        const items = await ipcRenderer.invoke('get-logs');
+        const items = await ipc.invoke('get-logs');
         this.logs = [...items].reverse();
       } catch (error) { /* noop */ }
     },
 
     async loadConfig() {
       try {
-        this.config = await ipcRenderer.invoke('get-config');
+        this.config = await ipc.invoke('get-config');
         const m = (this.config.monitoring = this.config.monitoring || {});
         if (m.idleThresholdSec === undefined) m.idleThresholdSec = 180;
         if (m.minSegmentSec === undefined) m.minSegmentSec = 3;
@@ -621,7 +621,7 @@ export default {
         }
         this.theme = this.config.ui?.mode === 'light' ? 'light' : 'dark';
         this.accent = SURFACES.find(s => s.id === this.config.ui?.surface)?.accent || 'blue';
-        this.storagePath = await ipcRenderer.invoke('get-storage-path');
+        this.storagePath = await ipc.invoke('get-storage-path');
       } catch (error) {
         this.addLog('读取配置失败: ' + error.message, 'error');
       }
@@ -629,7 +629,7 @@ export default {
 
     async loadProviderPresets() {
       try {
-        this.providerPresets = await ipcRenderer.invoke('get-provider-presets');
+        this.providerPresets = await ipc.invoke('get-provider-presets');
       } catch (error) { /* noop */ }
     },
 
@@ -637,7 +637,7 @@ export default {
 
     async saveConfig() {
       try {
-        const res = await ipcRenderer.invoke('save-config', JSON.parse(JSON.stringify(this.config)));
+        const res = await ipc.invoke('save-config', JSON.parse(JSON.stringify(this.config)));
         if (res && res.success === false) {
           this.showToast('保存失败: ' + (res.error || '未知错误'), 'error');
           return false;
@@ -711,7 +711,7 @@ export default {
     async suggestCategories() {
       this.categorySuggesting = true;
       try {
-        const result = await ipcRenderer.invoke('suggest-categories');
+        const result = await ipc.invoke('suggest-categories');
         if (!result?.ok) throw new Error(result?.error || '分类建议生成失败');
         this.categorySuggestions = result.categories;
         this.mappingSuggestions = result.mappings || [];
@@ -757,7 +757,7 @@ export default {
 
     async toggleAutoLaunch(enabled) {
       try {
-        await ipcRenderer.invoke('set-auto-launch', enabled);
+        await ipc.invoke('set-auto-launch', enabled);
         this.autoLaunch = enabled;
         this.showToast(enabled ? '已开启开机自启动' : '已关闭开机自启动', 'success');
       } catch (error) {
@@ -778,14 +778,14 @@ export default {
 
     async selectStoragePath() {
       try {
-        const chosen = await ipcRenderer.invoke('select-storage-folder');
+        const chosen = await ipc.invoke('select-storage-folder');
         if (!chosen) return;
-        const res = await ipcRenderer.invoke('migrate-storage', chosen);
+        const res = await ipc.invoke('migrate-storage', chosen);
         if (res && res.success) {
           this.config.storage = { ...(this.config.storage || {}), customPath: chosen };
           const ok = await this.saveConfig();
           // 无论保存结果如何，都以主进程实际生效的目录为准
-          this.storagePath = await ipcRenderer.invoke('get-storage-path');
+          this.storagePath = await ipc.invoke('get-storage-path');
           if (ok) {
             this.showToast(`已切换到该目录，立即生效（合并 ${res.fileCount} 个新文件，未覆盖已有数据）`, 'success');
             await this.reloadDate();
@@ -803,7 +803,7 @@ export default {
     async resetStoragePath() {
       this.config.storage = { customPath: '' };
       await this.saveConfig();
-      this.storagePath = await ipcRenderer.invoke('get-storage-path');
+      this.storagePath = await ipc.invoke('get-storage-path');
       this.showToast('已恢复默认路径，立即生效', 'success');
       await this.reloadDate();
       await this.loadDailyTracked(true);
@@ -907,7 +907,7 @@ export default {
 
     async toggleMonitoring() {
       try {
-        this.isMonitoring = await ipcRenderer.invoke('toggle-monitoring');
+        this.isMonitoring = await ipc.invoke('toggle-monitoring');
         await this.loadRecorderStatus();
         this.showToast(this.isMonitoring ? '已开始记录' : '已暂停记录', 'success');
       } catch (error) {
@@ -933,7 +933,7 @@ export default {
       this.isGeneratingSummary = true;
       try {
         const date = this.selectedDate;
-        const result = await ipcRenderer.invoke('generate-summary-range', {
+        const result = await ipc.invoke('generate-summary-range', {
           startTime: new Date(`${date}T00:00:00`).toISOString(),
           endTime: new Date(`${date}T23:59:59.999`).toISOString()
         });
@@ -958,7 +958,7 @@ export default {
       }
       this.isGeneratingSummary = true;
       try {
-        const result = await ipcRenderer.invoke('generate-summary-range', {
+        const result = await ipc.invoke('generate-summary-range', {
           startTime: new Date(this.summaryStartTime).toISOString(),
           endTime: new Date(this.summaryEndTime).toISOString()
         });
@@ -979,13 +979,13 @@ export default {
 
     async loadFocusPresets() {
       try {
-        this.focusPresets = await ipcRenderer.invoke('focus-presets');
+        this.focusPresets = await ipc.invoke('focus-presets');
       } catch (error) { /* noop */ }
     },
 
     async loadFocusState() {
       try {
-        const s = await ipcRenderer.invoke('focus-state');
+        const s = await ipc.invoke('focus-state');
         if (s) this.focusState = s;
       } catch (error) { /* noop */ }
     },
@@ -1005,7 +1005,7 @@ export default {
 
     async startFocus() {
       try {
-        const state = await ipcRenderer.invoke('focus-start', {
+        const state = await ipc.invoke('focus-start', {
           mode: this.focusMode,
           focusText: (this.focusInput || '').trim()
         });
@@ -1018,19 +1018,19 @@ export default {
 
     async toggleFocusPause() {
       try {
-        this.focusState = await ipcRenderer.invoke('focus-toggle-pause');
+        this.focusState = await ipc.invoke('focus-toggle-pause');
       } catch (error) { /* noop */ }
     },
 
     async skipFocusPhase() {
       try {
-        this.focusState = await ipcRenderer.invoke('focus-skip');
+        this.focusState = await ipc.invoke('focus-skip');
       } catch (error) { /* noop */ }
     },
 
     async endFocus() {
       try {
-        await ipcRenderer.invoke('focus-end');
+        await ipc.invoke('focus-end');
         this.focusState = { active: false };
         await this.loadReport();
       } catch (error) {
@@ -1040,7 +1040,7 @@ export default {
 
     async addFocusNote(text) {
       try {
-        const note = await ipcRenderer.invoke('focus-add-note', text, 'random');
+        const note = await ipc.invoke('focus-add-note', text, 'random');
         if (note) this.showToast('已记录', 'success');
       } catch (error) {
         this.showToast('记录失败: ' + error.message, 'error');
@@ -1050,7 +1050,7 @@ export default {
     async updateFocusRecord(payload) {
       try {
         const channel = payload.kind === 'note' ? 'update-focus-note' : 'update-focus-session';
-        const result = await ipcRenderer.invoke(channel, { ...payload, date: this.selectedDate });
+        const result = await ipc.invoke(channel, { ...payload, date: this.selectedDate });
         if (!result?.success) throw new Error(result?.error || '保存失败');
         this.showToast('已更新', 'success');
         await this.loadReport();
@@ -1063,7 +1063,7 @@ export default {
 
     async loadBridgeStatus() {
       try {
-        this.bridge = await ipcRenderer.invoke('get-bridge-status');
+        this.bridge = await ipc.invoke('get-bridge-status');
         this.bridgePortInput = this.bridge.port || this.bridge.basePort || 47821;
       } catch (error) { /* noop */ }
     },
@@ -1074,7 +1074,7 @@ export default {
       // 否则设置页标题开关和首页插件坞会显示两个不同状态
       this.config.bridge = { ...(this.config.bridge || {}), enabled };
       try {
-        await ipcRenderer.invoke('set-bridge-config', { enabled });
+        await ipc.invoke('set-bridge-config', { enabled });
         await this.loadBridgeStatus();
         this.showToast(enabled ? '接口已开启' : '接口已关闭', 'success');
       } catch (error) {
@@ -1092,7 +1092,7 @@ export default {
       }
       this.bridgeLoading = true;
       try {
-        await ipcRenderer.invoke('set-bridge-config', { port });
+        await ipc.invoke('set-bridge-config', { port });
         await this.loadBridgeStatus();
         this.showToast('端口已更新为 ' + port, 'success');
       } catch (error) {
@@ -1105,7 +1105,7 @@ export default {
     async regenerateBridgeToken() {
       this.bridgeLoading = true;
       try {
-        await ipcRenderer.invoke('set-bridge-config', { regenerateToken: true });
+        await ipc.invoke('set-bridge-config', { regenerateToken: true });
         await this.loadBridgeStatus();
         this.showToast('Token 已重置', 'success');
       } catch (error) {
@@ -1119,7 +1119,7 @@ export default {
       this.bridgeTesting = true;
       this.bridgeTestResult = null;
       try {
-        this.bridgeTestResult = await ipcRenderer.invoke('test-bridge');
+        this.bridgeTestResult = await ipc.invoke('test-bridge');
       } catch (error) {
         this.bridgeTestResult = { ok: false, error: error.message };
       } finally {
@@ -1130,7 +1130,7 @@ export default {
     copyBridgeText(text, tag) {
       if (!text) return;
       try {
-        clipboard.writeText(text);
+        writeClipboard(text);
         this.bridgeCopied = tag;
         setTimeout(() => {
           if (this.bridgeCopied === tag) this.bridgeCopied = '';
@@ -1141,15 +1141,15 @@ export default {
     },
 
     openBridgeUrl() {
-      ipcRenderer.invoke('open-bridge-url');
+      ipc.invoke('open-bridge-url');
     },
 
     // ============ 导入导出 ============
 
     async exportData() {
       try {
-        const items = await ipcRenderer.invoke('get-activities', this.selectedDate);
-        await ipcRenderer.invoke('export-data', {
+        const items = await ipc.invoke('get-activities', this.selectedDate);
+        await ipc.invoke('export-data', {
           filename: `worklog_${this.selectedDate}.json`,
           content: JSON.stringify({ version: this.appVersion, date: this.selectedDate, activities: items }, null, 2)
         });
@@ -1160,7 +1160,7 @@ export default {
 
     async exportFullJSON() {
       try {
-        await ipcRenderer.invoke('export-full-data', 'json');
+        await ipc.invoke('export-full-data', 'json');
       } catch (error) {
         this.showToast('导出失败: ' + error.message, 'error');
       }
@@ -1168,7 +1168,7 @@ export default {
 
     async exportCSV() {
       try {
-        await ipcRenderer.invoke('export-full-data', 'csv');
+        await ipc.invoke('export-full-data', 'csv');
       } catch (error) {
         this.showToast('导出失败: ' + error.message, 'error');
       }
@@ -1176,11 +1176,11 @@ export default {
 
     async importData(mode) {
       try {
-        const res = await ipcRenderer.invoke('import-data', mode);
+        const res = await ipc.invoke('import-data', mode);
         if (res && res.success) {
           if (res.mode === 'directory') {
             this.showToast(`已切换到数据目录，立即生效（发现 ${res.importedCount} 个日期数据文件）`, 'success');
-            this.storagePath = await ipcRenderer.invoke('get-storage-path');
+            this.storagePath = await ipc.invoke('get-storage-path');
           } else {
             // 逐条结果如实展示：只有全部写成功才算「成功」，有失败要说清失败几条
             const level = res.ok ? 'success' : 'error';
@@ -1204,31 +1204,31 @@ export default {
     // ============ 窗口 / 日志 / 更新 ============
 
     minimizeWindow() {
-      ipcRenderer.invoke('minimize-window');
+      ipc.invoke('minimize-window');
     },
 
     /** 贴边成竖窗格：再点一次还原 */
     toggleSnap() {
-      ipcRenderer.invoke('toggle-snap');
+      ipc.invoke('toggle-snap');
     },
 
     closeWindow() {
-      ipcRenderer.invoke('minimize-window');
+      ipc.invoke('minimize-window');
     },
 
     async clearLogs() {
-      await ipcRenderer.invoke('clear-logs');
+      await ipc.invoke('clear-logs');
       this.logs = [];
     },
 
     openLogsFolder() {
-      ipcRenderer.invoke('open-logs-folder');
+      ipc.invoke('open-logs-folder');
     },
 
     async checkForUpdates() {
       this.checkingUpdate = true;
       try {
-        this.updateInfo = await ipcRenderer.invoke('check-for-updates');
+        this.updateInfo = await ipc.invoke('check-for-updates');
       } catch (error) {
         this.updateInfo = { hasUpdate: false, error: error.message };
       } finally {
@@ -1238,7 +1238,7 @@ export default {
 
     openDownloadLink() {
       if (this.updateInfo && this.updateInfo.downloadUrl) {
-        shell.openExternal(this.updateInfo.downloadUrl);
+        openExternal(this.updateInfo.downloadUrl);
       }
     },
 
@@ -1309,16 +1309,19 @@ export default {
         }
       };
 
-      Object.entries(this._listeners).forEach(([channel, handler]) => {
-        ipcRenderer.on(channel, handler);
-      });
+      // 保存每个订阅的取消函数。以前依赖 removeListener(channel, handler)
+      // 按引用匹配，一旦 handler 被包装过就删不掉，监听器会跨挂载累积。
+      this._unsubscribes = Object.entries(this._listeners).map(
+        ([channel, handler]) => onEvent(channel, handler)
+      );
     },
 
     removeEventListeners() {
       if (!this._listeners) return;
-      Object.entries(this._listeners).forEach(([channel, handler]) => {
-        ipcRenderer.removeListener(channel, handler);
-      });
+      if (Array.isArray(this._unsubscribes)) {
+        this._unsubscribes.forEach(fn => { if (typeof fn === 'function') fn(); });
+      }
+      this._unsubscribes = null;
       this._listeners = null;
     },
 

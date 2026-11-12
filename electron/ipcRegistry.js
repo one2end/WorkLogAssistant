@@ -112,6 +112,8 @@ const MAIN_ONLY_CHANNELS = [
   'import-data',
   'migrate-storage', 'minimize-window',
   'open-bridge-url', 'open-logs-folder',
+  // 渲染层请求打开外部链接（主进程按白名单校验，B2 实现校验逻辑）
+  'open-external',
   'preview-snap',
   'recategorize-app-for-day', 'replace-display-ranges',
   'save-config', 'save-local-plan', 'select-storage-folder',
