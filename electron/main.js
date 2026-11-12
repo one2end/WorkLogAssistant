@@ -23,6 +23,7 @@ const LogManager = require('./logManager');
 const importSafety = require('./importSafety');
 const slotRule = require('./slotRule');
 const storagePrecheck = require('./storagePrecheck');
+const reportRunner = require('./reportRunner');
 const ArhatManager = require('./arhatManager');
 const FocusManager = require('./focusManager');
 const { ApiServer, generateToken } = require('./apiServer');
@@ -990,14 +991,28 @@ ipcMain.handle('get-activities', (event, date) => {
 
 // --- 聚合统计（前端与 AI 接口共用同一套口径） ---
 
-ipcMain.handle('get-day-analytics', (event, date) => {
+ipcMain.handle('get-day-analytics', async (event, date) => {
   try {
     const dateStr = date || analytics.toDateStr(new Date());
-    const report = analytics.buildDayReport(storageManager.getDataDir(), dateStr, configManager.getConfig().analysis);
+    // 报表计算放到 worker 线程：读文件是这里唯一可能长时间阻塞的操作，
+    // 放在主进程会连带冻住所有窗口（尤其在云端目录上）。
+    // 失败或超时会回退到同步计算，并如实标记 degraded——不返回空报告。
+    const { report, degraded, reason } = await reportRunner.buildDayReportSafe(
+      storageManager.getDataDir(),
+      dateStr,
+      configManager.getConfig().analysis,
+      { onLog: (msg, level) => logManager.addLog(msg, level) }
+    );
     // 计划层只是意图参考，不进入 analytics 的实际工时和来源优先级计算。
     // 计划已全部本地化：不再合并滴答《记录》的只读计划。
     report.plan = planManager.listForDate(dateStr);
-    return { ok: true, report, markdown: analytics.renderDayMarkdown(report, 'normal') };
+    return {
+      ok: true,
+      report,
+      markdown: analytics.renderDayMarkdown(report, 'normal'),
+      degraded,
+      degradedReason: degraded ? reason : undefined
+    };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -1028,7 +1043,7 @@ ipcMain.handle('delete-local-plan', (event, payload) => {
  * 1. plan   —— 用户确认“就按计划记”，写一条人工事实；
  * 2. screen —— 复用已经存在的屏幕活动，只给计划挂上识别结果，不复制工时。
  */
-ipcMain.handle('convert-plan-to-fact', (event, payload) => {
+ipcMain.handle('convert-plan-to-fact', async (event, payload) => {
   try {
     const plan = payload?.plan || {};
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.date || '')) ? payload.date : '';
@@ -1038,7 +1053,10 @@ ipcMain.handle('convert-plan-to-fact', (event, payload) => {
     }
 
     if (mode === 'screen') {
-      const report = analytics.buildDayReport(storageManager.getDataDir(), date, configManager.getConfig().analysis);
+      const { report } = await reportRunner.buildDayReportSafe(
+        storageManager.getDataDir(), date, configManager.getConfig().analysis,
+        { onLog: (msg, level) => logManager.addLog(msg, level) }
+      );
       const endMin = Number(plan.endMin) || Number(plan.startMin) + Number(plan.durationMin);
       const matches = (report.activityThreads || []).map(thread => {
         const start = Number(thread.startMin) || 0;
