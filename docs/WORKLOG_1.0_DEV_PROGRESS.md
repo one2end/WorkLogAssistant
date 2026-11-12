@@ -852,3 +852,105 @@ D-03 要求「必须经过完整静态调用扫描核实」。扫描结果：
 | `docs/WORKLOG_1.0_DEV_PROGRESS.md` | 本段 |
 
 **生产代码零改动**（`git status` 除上述文档外应为空）。
+
+---
+
+# V0.10.6：Electron 安全与本地数据边界加固 —— 开发完成
+
+10 个阶段全部完成，按 A/B/C 三组推进，每个阶段一个独立提交。
+
+## A 组：Electron 运行环境
+
+| 阶段 | Commit | 内容 |
+|---|---|---|
+| A1 | `b6e4026` | `ipcRegistry`（权限矩阵）+ 主窗 preload（暂不启用） |
+| A2 | `be330b4` | 6 个 Vue 入口改走 `window.worklog`，新增 `open-external` 通道 |
+| A3a | `49ae165` | 两个 HTML 窗口改走 preload（仍开 nodeIntegration） |
+| A3b | `ddac643` | 两个小窗关闭 nodeIntegration + sandbox |
+| A4 | `e66b239` | 主窗关闭 nodeIntegration（**最高风险**） |
+| A5 | `8a9b204` | 删除全部 8 个入口的 `require('electron')` |
+| A6 | `a2f93a4` | 按角色校验 IPC 来源 + 密钥投影 |
+
+## B 组：本地数据与访问
+
+| 阶段 | Commit | 内容 |
+|---|---|---|
+| B1 | `12f920d` | `safeStorage` 加密 + 五步迁移 |
+| B2+B3 | `9aef31c` | URL 白名单 + 一次性票据 + CORS 收紧 |
+| B4 | — | `enableRemoteModule` 已在 A4 删除（Electron 28 起为无效配置） |
+
+## C 组：AI 隐私出口
+
+| 阶段 | Commit | 内容 |
+|---|---|---|
+| C1+C2 | `a69b231` | 发送前二次过滤 + 标题/应用名开关 + 设置页展示 |
+
+## 实测指标
+
+| 项 | 完成前 | 完成后 |
+|---|---|---|
+| `nodeIntegration: true` | 3 处 | **0** |
+| `contextIsolation: false` | 3 处 | **0** |
+| 前端 `require('electron')` | 6 文件 | **0** |
+| IPC 通道 | 74（无来源校验） | **76**（全部按角色校验） |
+| 密钥在磁盘上 | 明文 | **`enc:v1:` 密文**（无 keyring 时降级明文+提示） |
+| `get-config` 返回 | 含明文密钥 | **脱敏投影**（`hasApiKey` 布尔位） |
+| CORS | `*` | **仅回音可信 Origin** |
+| 桥接 Token 位置 | `?token=` 查询串 | **一次性票据 → sessionStorage** |
+| AI 发送 `windowTitle` | 总是 | **默认 false**（用户可选） |
+
+## 过程中发现并修复的真实缺陷
+
+1. **`get-config` 直接返回含明文密钥的活对象**（第 1 条修订所指），渲染层一次调用即拿到 apiKey 与滴答 token
+2. **`saveConfig` 用 `|| ''` 会抹掉已有密钥**——前端回传脱敏投影时，空串被当成"清空"
+3. **桥接 Token 拼在 URL 里**，且**落地页把 Token 印进正文和每个示例链接**
+4. **`get-bridge-status` 的 `exampleUrls` 仍返回带 token 的地址**——审计时发现，A2 改了打开入口却漏了状态查询
+5. **`port: 0` 被 `|| DEFAULT_PORT` 吞掉**，导致多实例抢同一端口
+6. **`apiServer` 顶层错误处理引用了未定义的 `origin`**，所有未捕获错误都变成 ReferenceError
+7. **`splitRecordAtMidnight` 跨午夜两段共享 rid**（V0.10.3 已修，此处记录）
+
+## 关于权限矩阵的一条更正
+
+任务书写的 74 个通道，实际是 74；A2 新增 `open-external`、A6 新增 `clear-secret`，最终 **76**。
+矩阵与任务书均已同步，测试断言总数，改动会失败。
+
+## 回归实测
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npm test` | **0** | **498 tests，498 pass，0 fail** |
+| `npm run lint` | **0** | 0 error / 0 warning |
+| `npm run build` | **0** | ✓ built |
+
+新增测试 **158 项**（A 组 88 + B 组 52 + C 组 18），覆盖配置、契约、静态扫描与端到端 HTTP。
+
+## 独立审计
+
+| 审计项 | 结果 |
+|---|---|
+| V0.10.3 受保护模块（迁移引擎/写锁/导入安全/指纹/slotRule/timeSplit/storageManager/activityRecorder） | ✅ `git diff bf942e6..HEAD` **无输出** |
+| 三窗是否仍有 Node 能力 | ✅ 0 处 `nodeIntegration: true` |
+| CORS 是否仍有通配 | ✅ 0 处（仅注释提及） |
+| 长期 Token 是否进入 URL | ✅ 静态扫描断言，含注释剥离 |
+| 密钥是否明文落盘 | ✅ `config.local.json` 为密文；`config.json` 从不含密钥 |
+| preload 与矩阵是否一致 | ✅ `scripts/gen-preload.js --check` 在测试中执行 |
+
+## 未做 / 已知边界
+
+| 项 | 说明 |
+|---|---|
+| 主窗未启用 sandbox | 与两个小窗不同：主窗加载 Vite 产物与本地资源，preload 已收窄暴露面，sandbox 收益小于其加载风险 |
+| `?token=` 查询参数 | 服务端仍接受（外部工具兼容），计划下一版移除 |
+| 密钥迁移的 `.bak` 文件 | 不自动删除，留给用户回退 |
+| `ipcGuard` 对 `ipcMain.on` | 只包装了 `handle`；当前项目无 `on` 注册，将来加需同步扩展 |
+| 无 keyring 环境 | 降级明文 + 日志 + `encryptionNotice`，不阻断启动 |
+
+## 手工验收清单
+
+- [ ] 启动无白屏，主窗功能正常（录制、补录、时间线拖拽、设置保存、导出、导入）
+- [ ] 专注窗：倒计时、暂停、结束、加备注、主题切换
+- [ ] 悬浮条：拖动、缩放、双击、开关录制
+- [ ] 设置页：密钥输入框显示"已设置（留空则不修改）"，改主题后密钥不丢
+- [ ] 设置页：AI 区能看到"本次将发送：…"的具体字段列表
+- [ ] 打开桥接页：地址栏为 `?otc=...`，随即被抹掉，页面显示 Token
+- [ ] 桥接页直接访问（不带 otc）：提示"需要从应用内打开"
