@@ -280,40 +280,30 @@
 
 <script>
 /**
- * 过渡期适配层（A3a）。
+ * 主进程调用的唯一入口（A5 之后）。
  *
- * preload 已经存在并暴露了 window.worklog，但这两个窗口的 nodeIntegration
- * 还没关（A3b 才关），所以这里先同时支持两条路。
+ * 这个窗口已关闭 nodeIntegration，`require` 不存在。
+ * 唯一的通路是 preload 通过 contextBridge 暴露的 window.worklog。
  *
- * 把现有调用改成 worklog.xxx 需要改 12 处，而任何一处漏改都会在 A3b
- * 关闭 nodeIntegration 之后才暴露——那时报错信息是「ipcRenderer is not
- * defined」，与真正的原因隔着好几层。保留同名方法的适配对象，
- * A3b 之后这里只剩一个分支，删起来也不会漏。
+ * 保留 ipc.invoke(channel, ...args) 这个形状，是为了让下面十几处调用
+ * 不必逐个改名——少一次机械改动就少一次引入错误的机会。
  */
 const ipc = (() => {
   const bridge = window.worklog;
-  if (bridge) {
-    return {
-      invoke: (channel, ...args) => {
-        const method = channel.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase());
-        const fn = bridge[method];
-        if (typeof fn !== 'function') {
-          throw new Error('该窗口没有调用此通道的权限: ' + channel);
-        }
-        return fn(...args);
-      },
-      on: (channel, handler) => {
-        if (typeof bridge.on !== 'function') return () => {};
-        return bridge.on(channel, (payload) => handler(null, payload));
-      }
-    };
+  if (!bridge) {
+    throw new Error('专注窗口没有挂载 preload，无法调用主进程');
   }
-  // 降级路径到这里才 require：A3b 关闭 nodeIntegration 之后，
-  // 顶层的 require('electron') 会直接抛错，整个脚本一行都不执行，
-  // 页面变成一块死掉的 HTML，而且报错与真正原因隔了好几层。
-  // 放进函数里，没有 bridge 时才会走到这里。
-  const { ipcRenderer } = require('electron');
-  return ipcRenderer;
+  return {
+    invoke: (channel, ...args) => {
+      const method = channel.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase());
+      const fn = bridge[method];
+      if (typeof fn !== 'function') {
+        throw new Error('该窗口没有调用此通道的权限: ' + channel);
+      }
+      return fn(...args);
+    },
+    on: (channel, handler) => bridge.on(channel, (payload) => handler(null, payload))
+  };
 })();
 
 const el = {

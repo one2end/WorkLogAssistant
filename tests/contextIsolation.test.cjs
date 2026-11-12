@@ -80,13 +80,14 @@ test('the auxiliary pages do not depend on Node globals at module level', () => 
   }
 });
 
-test('both pages still reference worklog before any fallback', () => {
+test('both pages use the bridge, and only the bridge', () => {
+  // A3a 时这条断言的是「先判断 bridge 再回退 require」。A5 删掉了回退：
+  // 窗口已经没有 nodeIntegration，那条路走不通，留着只会误导。
   for (const f of ['electron/focus.html', 'electron/float.html']) {
     const src = read(f);
-    const bridgeIdx = src.indexOf('window.worklog');
-    const requireIdx = src.indexOf("require('electron')");
-    assert.ok(bridgeIdx >= 0, `${f} 应使用 window.worklog`);
-    assert.ok(bridgeIdx < requireIdx, `${f} 必须先判断 bridge，再回退 require`);
+    assert.match(src, /window\.worklog/, `${f} 应使用 window.worklog`);
+    assert.equal(/require\(\s*['"]electron['"]\s*\)/.test(src), false,
+      `${f} 不应再有 require`);
   }
 });
 
@@ -134,18 +135,19 @@ test('the page adapters actually forward arguments and refuse what they lack', (
   }
 });
 
-test('the adapter survives having no bridge but no electron either', () => {
-  // 隔离生效后，若 preload 没挂上就是这种状态：window.worklog 不存在，
-  // require 也不可用。此时应该是明确的报错，而不是一个看不懂的 TypeError。
+test('the adapter fails with its own message when the preload is missing', () => {
+  // 若 preload 没挂上：window.worklog 不存在，require 也不存在。
+  // 应当是我们自己写的那句话，而不是一个指向错误方向的 ReferenceError。
   const vm = require('node:vm');
-  const file = 'electron/focus.html';
-  const src = read(file);
-  const script = src.slice(src.indexOf('<script>') + 8, src.lastIndexOf('</script>'));
-  const adapter = script.slice(0, script.indexOf('})();') + 5);
+  for (const file of ['electron/focus.html', 'electron/float.html']) {
+    const src = read(file);
+    const script = src.slice(src.indexOf('<script>') + 8, src.lastIndexOf('</script>'));
+    const adapter = script.slice(0, script.indexOf('})();') + 5);
 
-  const sandbox = { window: {}, console };
-  vm.createContext(sandbox);
-  assert.throws(() => vm.runInContext(adapter, sandbox),
-    /require is not defined|ipcRenderer/,
-    '没有 bridge 且没有 require 时应当立刻失败，而不是留个空壳');
+    const sandbox = { window: {}, console };
+    vm.createContext(sandbox);
+    assert.throws(() => vm.runInContext(adapter, sandbox),
+      /没有挂载 preload/,
+      `${file} 应给出明确原因`);
+  }
 });

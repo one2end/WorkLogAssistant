@@ -158,7 +158,7 @@ test('a channel the role does not have fails loudly, not with undefined', () => 
     /没有调用该通道的权限/);
 });
 
-test('the built renderer bundle carries the bridge path and no top-level require', () => {
+test('the built renderer bundle talks to the bridge and nothing else', () => {
   const assets = path.join(ROOT, 'dist/assets');
   if (!fs.existsSync(assets)) {
     // 没构建过就跳过——CI 里 build 在前，本地偶尔会先跑测试
@@ -167,9 +167,8 @@ test('the built renderer bundle carries the bridge path and no top-level require
   const bundle = fs.readdirSync(assets).filter(f => f.endsWith('.js'))
     .map(f => fs.readFileSync(path.join(assets, f), 'utf8')).join('\n');
   assert.ok(bundle.includes('window.worklog'), '产物里应有 bridge 判断');
-  // require('electron') 会以函数形式出现在降级分支里，这是允许的：
-  // 有 bridge 时那条路根本不会执行。真正要确认的是它在调用时被判断过——
-  // 适配层里对 typeof require 的检查必须被打进产物。
-  assert.ok(bundle.includes('typeof require'),
-    '产物里应保留 typeof require 的保护，否则无 Node 时会抛 ReferenceError');
+  // A5 之前这里断言的是「保留 typeof require 的保护」。降级分支删掉之后，
+  // 产物里根本不该再有 require('electron')——渲染层已经没有 require 了。
+  assert.equal(/require\(\s*['"]electron['"]\s*\)/.test(bundle), false,
+    '产物里不应再有 require(electron)，窗口已关闭 nodeIntegration');
 });

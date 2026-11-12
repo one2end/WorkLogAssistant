@@ -56,16 +56,13 @@ test('the import path in each file actually resolves', () => {
   }
 });
 
-test('the adapter prefers window.worklog over require', () => {
+test('the adapter has exactly one path now, and it is the bridge', () => {
+  // A2 时这里断言的是「先 bridge 再回退 require」。A5 删掉了回退：
+  // 三个窗口都关了 nodeIntegration，`require` 已经不存在，
+  // 留着那条分支只会让人以为还有第二条路。
   const src = read('src/utils/ipc.mjs');
-  const invokeBody = src.slice(src.indexOf('export function invoke'), src.indexOf('export function on'));
-
-  // 必须先判断 bridge，再回退
-  const bridgeIdx = invokeBody.indexOf('hasBridge()');
-  const legacyIdx = invokeBody.indexOf('legacy()');
-  assert.ok(bridgeIdx >= 0, 'invoke 必须检查 preload 是否可用');
-  assert.ok(legacyIdx >= 0, 'A2 阶段需要降级路径');
-  assert.ok(bridgeIdx < legacyIdx, '必须先尝试 bridge，再回退 require');
+  assert.match(src, /window\.worklog/, '应读 preload 暴露的桥');
+  assert.equal(/require\(/.test(src), false, '不应再有 require');
 });
 
 test('the adapter throws when the bridge exists but lacks the method', () => {
@@ -98,8 +95,8 @@ test('opening external links goes through the main process', () => {
   const src = read('src/utils/ipc.mjs');
   const fn = src.slice(src.indexOf('export function openExternal'));
   // 有 bridge 时必须走通道，不能直接调 shell
-  assert.match(fn, /open-external|window\.worklog\.openExternal/,
-    'openExternal 应经由主进程通道，由主进程做白名单校验');
+  assert.match(fn, /bridge\(\)\.openExternal|window\.worklog\.openExternal/,
+    'openExternal 应经由 preload 交给主进程，由主进程做白名单校验');
 
   for (const f of VUE_FILES) {
     assert.equal(/\bshell\.openExternal/.test(read(f)), false,
@@ -114,11 +111,10 @@ test('the on() adapter keeps the (event, payload) signature App.vue relies on', 
     'App.vue 的 handler 签名是 (event, payload)，bridge 路径必须补齐第一个参数');
 });
 
-test('subscriptions return an unsubscribe function in both paths', () => {
+test('subscriptions return an unsubscribe function', () => {
   const src = read('src/utils/ipc.mjs');
   const fn = src.slice(src.indexOf('export function on'), src.indexOf('export function writeClipboard'));
-  assert.match(fn, /return window\.worklog\.on/, 'bridge 路径应返回 preload 给的取消函数');
-  assert.match(fn, /return \(\) => ipcRenderer\.removeListener/, '降级路径也必须返回取消函数');
+  assert.match(fn, /bridge\(\)\.on/, '应返回 preload 给的取消函数');
 });
 
 test('App.vue stores unsubscribe handles instead of removing by reference', () => {
