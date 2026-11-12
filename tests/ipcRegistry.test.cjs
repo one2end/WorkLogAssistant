@@ -108,7 +108,9 @@ test('the preload exposes exactly the main-role channel set', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '../electron/preload.js'), 'utf8');
   // 参数名不固定（payload / url / config …）。按名字匹配会漏掉后来加的通道，
   // 而漏掉的表现是「preload 少一个方法」，直到 A4 某个功能失灵才发现。
-  const exposed = [...src.matchAll(/^\s+([a-zA-Z0-9_]+):\s*\([a-zA-Z0-9_]*\)\s*=>\s*invoke\('([a-z0-9-]+)'/gm)]
+  // 方法一律写成 (...args) => invoke('channel', ...args)：少数通道是多参数的，
+  // 单参数签名会把第二个参数悄悄丢掉。
+  const exposed = [...src.matchAll(/^\s+([a-zA-Z0-9_]+):\s*\([^)]*\)\s*=>\s*invoke\('([a-z0-9-]+)'/gm)]
     .map(m => m[2]);
 
   const expected = reg.channelsForRole('main');

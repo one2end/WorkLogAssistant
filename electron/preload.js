@@ -3,22 +3,26 @@
 /**
  * preload.js — 主窗口 preload
  *
+ * 由 scripts/gen-preload.js 从 electron/ipcRegistry.js 生成，请勿手改。
+ * 要加通道，改注册表，再重新生成本文件。
+ *
  * 为什么不用一个通用的 invoke(channel, ...)：
  *   那等于把「能调哪些通道」交给渲染层决定，隔离就白做了。
  *   这里每个通道一个具名方法，暴露面就是白名单本身。
- *   想知道这个窗口能做什么，读这个文件就够了。
  *
  * 为什么按角色分文件而不是运行时判断：
  *   角色推断错一次就是权限错配，而这种错误不会报错，
  *   只会让某个窗口悄悄多出不该有的能力。
  *
- * 通道清单由 electron/ipcRegistry.js 生成，不手写——
- * 手写一定会漏，而漏掉的表现是某个功能在切换之后突然失灵。
+ * 主窗拥有全部能力，因为它是唯一能修改数据的界面。
+ * 但它同样不使用通用 invoke(channel, ...)：暴露面就是白名单本身。
  */
 
 const { contextBridge, ipcRenderer, clipboard } = require('electron');
 
-const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
+// 透传全部参数：少数通道是多参数的（focus-add-note 的 (text, category)、
+// set-float-pos 的 (x, y)）。只转发一个 payload 会让它们静默收不到第二个参数。
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
 /** 允许订阅的事件（主进程推送）。不在表内的事件不允许监听。 */
 const EVENTS = new Set([
@@ -42,84 +46,83 @@ const EVENTS = new Set([
 ]);
 
 contextBridge.exposeInMainWorld('worklog', {
-  addLog: (payload) => invoke('add-log', payload),
-  addManualRecord: (payload) => invoke('add-manual-record', payload),
-  arhatAddNote: (payload) => invoke('arhat-add-note', payload),
-  arhatGetNotes: (payload) => invoke('arhat-get-notes', payload),
-  arhatGetSessions: (payload) => invoke('arhat-get-sessions', payload),
-  arhatGetStats: (payload) => invoke('arhat-get-stats', payload),
-  checkForUpdates: (payload) => invoke('check-for-updates', payload),
-  clearLogs: (payload) => invoke('clear-logs', payload),
-  convertPlanToFact: (payload) => invoke('convert-plan-to-fact', payload),
-  deleteDisplayRange: (payload) => invoke('delete-display-range', payload),
-  deleteDisplayRecord: (payload) => invoke('delete-display-record', payload),
-  deleteFocusSession: (payload) => invoke('delete-focus-session', payload),
-  deleteLocalPlan: (payload) => invoke('delete-local-plan', payload),
-  didaProjects: (payload) => invoke('dida-projects', payload),
-  didaStatus: (payload) => invoke('dida-status', payload),
-  didaSyncNow: (payload) => invoke('dida-sync-now', payload),
-  dismissAnnotationSuggestion: (payload) => invoke('dismiss-annotation-suggestion', payload),
-  exportData: (payload) => invoke('export-data', payload),
-  exportFullData: (payload) => invoke('export-full-data', payload),
-  findNoteHints: (payload) => invoke('find-note-hints', payload),
-  flushRecorder: (payload) => invoke('flush-recorder', payload),
-  focusAddNote: (payload) => invoke('focus-add-note', payload),
-  focusEnd: (payload) => invoke('focus-end', payload),
-  focusHudExpand: (payload) => invoke('focus-hud-expand', payload),
-  focusPresets: (payload) => invoke('focus-presets', payload),
-  focusSkip: (payload) => invoke('focus-skip', payload),
-  focusStart: (payload) => invoke('focus-start', payload),
-  focusState: (payload) => invoke('focus-state', payload),
-  focusTogglePause: (payload) => invoke('focus-toggle-pause', payload),
-  generateSummary: (payload) => invoke('generate-summary', payload),
-  generateSummaryRange: (payload) => invoke('generate-summary-range', payload),
-  getActivities: (payload) => invoke('get-activities', payload),
-  getAiUsage: (payload) => invoke('get-ai-usage', payload),
-  getAnnotationSuggestions: (payload) => invoke('get-annotation-suggestions', payload),
-  getAppVersion: (payload) => invoke('get-app-version', payload),
-  getAutoLaunch: (payload) => invoke('get-auto-launch', payload),
-  getBridgeStatus: (payload) => invoke('get-bridge-status', payload),
-  getConfig: (payload) => invoke('get-config', payload),
-  getDailyTracked: (payload) => invoke('get-daily-tracked', payload),
-  getDatesWithData: (payload) => invoke('get-dates-with-data', payload),
-  getDayAnalytics: (payload) => invoke('get-day-analytics', payload),
-  getFloatBounds: (payload) => invoke('get-float-bounds', payload),
-  getKnownApps: (payload) => invoke('get-known-apps', payload),
-  getLogs: (payload) => invoke('get-logs', payload),
-  getMonitoringStatus: (payload) => invoke('get-monitoring-status', payload),
-  getProviderPresets: (payload) => invoke('get-provider-presets', payload),
-  getRangeAnalytics: (payload) => invoke('get-range-analytics', payload),
-  getRecorderStatus: (payload) => invoke('get-recorder-status', payload),
-  getStoragePath: (payload) => invoke('get-storage-path', payload),
-  getSummaries: (payload) => invoke('get-summaries', payload),
-  importData: (payload) => invoke('import-data', payload),
-  migrateStorage: (payload) => invoke('migrate-storage', payload),
-  minimizeWindow: (payload) => invoke('minimize-window', payload),
-  openBridgeUrl: (payload) => invoke('open-bridge-url', payload),
-  openLogsFolder: (payload) => invoke('open-logs-folder', payload),
-  previewSnap: (payload) => invoke('preview-snap', payload),
-  recategorizeAppForDay: (payload) => invoke('recategorize-app-for-day', payload),
-  replaceDisplayRanges: (payload) => invoke('replace-display-ranges', payload),
-  saveConfig: (payload) => invoke('save-config', payload),
-  saveFloatWidth: (payload) => invoke('save-float-width', payload),
-  saveLocalPlan: (payload) => invoke('save-local-plan', payload),
-  selectStorageFolder: (payload) => invoke('select-storage-folder', payload),
-  setAutoLaunch: (payload) => invoke('set-auto-launch', payload),
-  setBridgeConfig: (payload) => invoke('set-bridge-config', payload),
-  setFloatPos: (payload) => invoke('set-float-pos', payload),
-  setFloatWidth: (payload) => invoke('set-float-width', payload),
-  showMainWindow: (payload) => invoke('show-main-window', payload),
-  suggestCategories: (payload) => invoke('suggest-categories', payload),
-  testBridge: (payload) => invoke('test-bridge', payload),
-  toggleMonitoring: (payload) => invoke('toggle-monitoring', payload),
-  toggleSnap: (payload) => invoke('toggle-snap', payload),
-  updateDisplayRecord: (payload) => invoke('update-display-record', payload),
-  updateFocusNote: (payload) => invoke('update-focus-note', payload),
-  updateFocusSession: (payload) => invoke('update-focus-session', payload),
+  addLog: (...args) => invoke('add-log', ...args),
+  addManualRecord: (...args) => invoke('add-manual-record', ...args),
+  arhatAddNote: (...args) => invoke('arhat-add-note', ...args),
+  arhatGetNotes: (...args) => invoke('arhat-get-notes', ...args),
+  arhatGetSessions: (...args) => invoke('arhat-get-sessions', ...args),
+  arhatGetStats: (...args) => invoke('arhat-get-stats', ...args),
+  checkForUpdates: (...args) => invoke('check-for-updates', ...args),
+  clearLogs: (...args) => invoke('clear-logs', ...args),
+  convertPlanToFact: (...args) => invoke('convert-plan-to-fact', ...args),
+  deleteDisplayRange: (...args) => invoke('delete-display-range', ...args),
+  deleteDisplayRecord: (...args) => invoke('delete-display-record', ...args),
+  deleteFocusSession: (...args) => invoke('delete-focus-session', ...args),
+  deleteLocalPlan: (...args) => invoke('delete-local-plan', ...args),
+  didaProjects: (...args) => invoke('dida-projects', ...args),
+  didaStatus: (...args) => invoke('dida-status', ...args),
+  didaSyncNow: (...args) => invoke('dida-sync-now', ...args),
+  dismissAnnotationSuggestion: (...args) => invoke('dismiss-annotation-suggestion', ...args),
+  exportData: (...args) => invoke('export-data', ...args),
+  exportFullData: (...args) => invoke('export-full-data', ...args),
+  findNoteHints: (...args) => invoke('find-note-hints', ...args),
+  flushRecorder: (...args) => invoke('flush-recorder', ...args),
+  focusAddNote: (...args) => invoke('focus-add-note', ...args),
+  focusEnd: (...args) => invoke('focus-end', ...args),
+  focusHudExpand: (...args) => invoke('focus-hud-expand', ...args),
+  focusPresets: (...args) => invoke('focus-presets', ...args),
+  focusSkip: (...args) => invoke('focus-skip', ...args),
+  focusStart: (...args) => invoke('focus-start', ...args),
+  focusState: (...args) => invoke('focus-state', ...args),
+  focusTogglePause: (...args) => invoke('focus-toggle-pause', ...args),
+  generateSummary: (...args) => invoke('generate-summary', ...args),
+  generateSummaryRange: (...args) => invoke('generate-summary-range', ...args),
+  getActivities: (...args) => invoke('get-activities', ...args),
+  getAiUsage: (...args) => invoke('get-ai-usage', ...args),
+  getAnnotationSuggestions: (...args) => invoke('get-annotation-suggestions', ...args),
+  getAppVersion: (...args) => invoke('get-app-version', ...args),
+  getAutoLaunch: (...args) => invoke('get-auto-launch', ...args),
+  getBridgeStatus: (...args) => invoke('get-bridge-status', ...args),
+  getConfig: (...args) => invoke('get-config', ...args),
+  getDailyTracked: (...args) => invoke('get-daily-tracked', ...args),
+  getDatesWithData: (...args) => invoke('get-dates-with-data', ...args),
+  getDayAnalytics: (...args) => invoke('get-day-analytics', ...args),
+  getFloatBounds: (...args) => invoke('get-float-bounds', ...args),
+  getKnownApps: (...args) => invoke('get-known-apps', ...args),
+  getLogs: (...args) => invoke('get-logs', ...args),
+  getMonitoringStatus: (...args) => invoke('get-monitoring-status', ...args),
+  getProviderPresets: (...args) => invoke('get-provider-presets', ...args),
+  getRangeAnalytics: (...args) => invoke('get-range-analytics', ...args),
+  getRecorderStatus: (...args) => invoke('get-recorder-status', ...args),
+  getStoragePath: (...args) => invoke('get-storage-path', ...args),
+  getSummaries: (...args) => invoke('get-summaries', ...args),
+  importData: (...args) => invoke('import-data', ...args),
+  migrateStorage: (...args) => invoke('migrate-storage', ...args),
+  minimizeWindow: (...args) => invoke('minimize-window', ...args),
+  openBridgeUrl: (...args) => invoke('open-bridge-url', ...args),
+  openLogsFolder: (...args) => invoke('open-logs-folder', ...args),
+  previewSnap: (...args) => invoke('preview-snap', ...args),
+  recategorizeAppForDay: (...args) => invoke('recategorize-app-for-day', ...args),
+  replaceDisplayRanges: (...args) => invoke('replace-display-ranges', ...args),
+  saveConfig: (...args) => invoke('save-config', ...args),
+  saveFloatWidth: (...args) => invoke('save-float-width', ...args),
+  saveLocalPlan: (...args) => invoke('save-local-plan', ...args),
+  selectStorageFolder: (...args) => invoke('select-storage-folder', ...args),
+  setAutoLaunch: (...args) => invoke('set-auto-launch', ...args),
+  setBridgeConfig: (...args) => invoke('set-bridge-config', ...args),
+  setFloatPos: (...args) => invoke('set-float-pos', ...args),
+  setFloatWidth: (...args) => invoke('set-float-width', ...args),
+  showMainWindow: (...args) => invoke('show-main-window', ...args),
+  suggestCategories: (...args) => invoke('suggest-categories', ...args),
+  testBridge: (...args) => invoke('test-bridge', ...args),
+  toggleMonitoring: (...args) => invoke('toggle-monitoring', ...args),
+  toggleSnap: (...args) => invoke('toggle-snap', ...args),
+  updateDisplayRecord: (...args) => invoke('update-display-record', ...args),
+  updateFocusNote: (...args) => invoke('update-focus-note', ...args),
+  updateFocusSession: (...args) => invoke('update-focus-session', ...args),
 
   /**
-   * 订阅主进程推送。
-   * 返回取消订阅函数；调用方应在组件卸载时调用它，
+   * 订阅主进程推送。返回取消订阅函数；调用方应在卸载时调用它，
    * 否则重复打开窗口会累积监听器。
    */
   on: (eventName, handler) => {
@@ -130,7 +133,6 @@ contextBridge.exposeInMainWorld('worklog', {
     ipcRenderer.on(eventName, listener);
     return () => ipcRenderer.removeListener(eventName, listener);
   },
-
   /**
    * 复制一段文本到剪贴板。
    *
@@ -149,5 +151,5 @@ contextBridge.exposeInMainWorld('worklog', {
    * 渲染层不直接调 shell.openExternal —— 那等于把「可以打开任意协议」
    * 的能力交给渲染层。这里只递交 URL，是否放行由主进程按白名单判断（B2）。
    */
-  openExternal: (url) => invoke('open-external', url)
+  openExternal: (...args) => invoke('open-external', ...args)
 });

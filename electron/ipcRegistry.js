@@ -112,7 +112,6 @@ const MAIN_ONLY_CHANNELS = [
   'import-data',
   'migrate-storage', 'minimize-window',
   'open-bridge-url', 'open-logs-folder',
-  // 渲染层请求打开外部链接（主进程按白名单校验，B2 实现校验逻辑）
   'open-external',
   'preview-snap',
   'recategorize-app-for-day', 'replace-display-ranges',
@@ -165,7 +164,18 @@ function isEventAllowed(eventName, role) {
   return roles.includes(role);
 }
 
+/**
+ * 这些通道不由 preload 生成器产出同名方法，而是在 preload 里手写成收窄的能力：
+ *
+ *   open-external  → openExternal(url)，主进程按白名单校验（B2）
+ *
+ * 它们仍然是真实注册的通道，必须出现在矩阵里（否则「注册表覆盖所有通道」
+ * 这条断言会失败），只是不自动生成方法。
+ */
+const HAND_WIRED = new Set(['open-external']);
+
 module.exports = {
+  HAND_WIRED,
   ROLES,
   SHARED_CHANNELS,
   EVENT_SUBSCRIPTIONS,
