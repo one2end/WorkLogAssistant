@@ -33,6 +33,9 @@ export default {
       items: [
         { id: 'today', label: '今日概览', icon: 'home' },
         { id: 'timeline', label: '时间线', icon: 'timeline' },
+        // 项目放在时间线旁边：它回答的是「我这几周到底做了什么」，
+        // 与逐日翻时间线是同一个问题的两种尺度。
+        { id: 'projects', label: '项目', icon: 'folder' },
         { id: 'settings', label: '设置', icon: 'settings' }
       ]
     };

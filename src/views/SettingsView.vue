@@ -785,6 +785,17 @@ export default {
     }
   },
   methods: {
+    /**
+     * 滚动到指定区块。供其他页面跳转过来用（比如项目页的「去配置规则」）。
+     * 找不到区块时什么都不做——这比抛错让整个设置页崩掉要好。
+     */
+    scrollToSection(id) {
+      const el = this.$el && this.$el.querySelector ? this.$el.querySelector(`#${id}`) : null;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    },
+
     colorForCategory,
     /** 写入配置并持久化。path 支持 "dida.pullIntervalMin" */
     set(path, value) {

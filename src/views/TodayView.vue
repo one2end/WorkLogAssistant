@@ -209,6 +209,14 @@
       @open-settings="$emit('open-plugin-settings', 'categories')"
     />
 
+    <!-- 每日复盘放在周复盘之前：每天收尾比每周回顾更高频 -->
+    <DailyReview
+      v-if="cards.dailyReview !== false"
+      :selected-date="selectedDate"
+      :ai-enabled="!!(config.ai && config.ai.enabled)"
+      :ai-ready="aiReadyForReview"
+    />
+
     <WeeklyReview v-if="cards.weeklyReview" :selected-date="selectedDate" />
 
     <CompareCard
@@ -366,6 +374,7 @@ import PluginDock from '../components/PluginDock.vue';
 import ProductivityOverview from '../components/ProductivityOverview.vue';
 import ActivityThreads from '../components/ActivityThreads.vue';
 import WeeklyReview from '../components/WeeklyReview.vue';
+import DailyReview from '../components/DailyReview.vue';
 import CompareCard from '../components/CompareCard.vue';
 import PlanOverview from '../components/PlanOverview.vue';
 import { colorForCategory } from '../styles/palette.js';
@@ -387,7 +396,7 @@ function balanceFromSlots(report) {
 
 export default {
   name: 'TodayView',
-  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock, ProductivityOverview, ActivityThreads, WeeklyReview, CompareCard, PlanOverview },
+  components: { Icon, DateNav, ActivityHeatmap, EmptyIllustration, AiPanel, PluginDock, ProductivityOverview, ActivityThreads, WeeklyReview, DailyReview, CompareCard, PlanOverview },
   props: {
     config: { type: Object, default: () => ({}) },
     report: { type: Object, required: true },
@@ -417,6 +426,12 @@ export default {
     return { tick: 0, timer: null, editingFocus: null, focusDraft: '', focusNoteDraft: '' };
   },
   computed: {
+    /** AI 建议按钮只在「已开启且配了 key」时出现——否则点了必然报错 */
+    aiReadyForReview() {
+      const ai = this.config && this.config.ai;
+      const api = this.config && this.config.api;
+      return !!(ai && ai.enabled && api && api.hasApiKey);
+    },
     /** 首页卡片显隐：配置缺字段时默认全开，旧配置不用迁移 */
     cards() {
       const all = {};

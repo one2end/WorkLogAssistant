@@ -126,6 +126,14 @@
           @add-category="addCategoryQuick"
         />
 
+        <ProjectsView
+          v-else-if="view === 'projects'"
+          @open-project-rules="openProjectRules"
+          @search-project="searchFromProject"
+          @jump-date="jumpToDateFromSearch"
+          @jump-segment="jumpToSegmentFromSearch"
+        />
+
         <SettingsView
           ref="settingsView"
           v-else
@@ -204,6 +212,7 @@ import FocusOverlay from './components/FocusOverlay.vue';
 import TodayView from './views/TodayView.vue';
 import TimelineView from './views/TimelineView.vue';
 import SettingsView from './views/SettingsView.vue';
+import ProjectsView from './views/ProjectsView.vue';
 import { SURFACES } from './styles/accents.js';
 import { pluginById, pluginOn, writePath } from './plugins/registry.js';
 
@@ -253,7 +262,7 @@ function emptyReport(date) {
 
 export default {
   name: 'App',
-  components: { Icon, TitleBar, NavRail, FocusOverlay, TodayView, TimelineView, SettingsView },
+  components: { Icon, TitleBar, NavRail, FocusOverlay, TodayView, TimelineView, ProjectsView, SettingsView },
   data() {
     return {
       view: 'today',
@@ -1174,6 +1183,44 @@ export default {
       } catch (error) {
         this.showToast('导出失败: ' + error.message, 'error');
       }
+    },
+
+    /** 从项目页跳去配置规则：直接打开设置的对应区块 */
+    openProjectRules() {
+      this.view = 'settings';
+      this.$nextTick(() => {
+        const el = this.$refs.settingsView;
+        if (el && typeof el.scrollToSection === 'function') el.scrollToSection('sec-categories');
+      });
+    },
+
+    /** 检索结果里点「跳到这一天」：切回今日页并定位到那天 */
+    jumpToDateFromSearch(date) {
+      if (!date) return;
+      this.onSelectDate(date);
+      this.view = 'today';
+    },
+
+    /**
+     * 检索结果里点某一条：跳到时间线并定位到那个时段。
+     * 复用现有的 timelineTarget 机制，不另造一套定位逻辑。
+     */
+    jumpToSegmentFromSearch(hit) {
+      if (!hit || !hit.time) return;
+      const d = new Date(hit.time);
+      if (Number.isNaN(d.getTime())) return;
+      this.timelineTarget = {
+        minutes: d.getHours() * 60 + d.getMinutes(),
+        date: hit.date
+      };
+      if (hit.date && hit.date !== this.selectedDate) this.onSelectDate(hit.date);
+      this.view = 'timeline';
+    },
+
+    /** 从项目页跳到检索：把项目名填进去并切到时间线的检索面板 */
+    searchFromProject(name) {
+      this.timelineTarget = { type: 'search', project: name };
+      this.view = 'timeline';
     },
 
     async importData(mode) {

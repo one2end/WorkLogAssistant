@@ -193,7 +193,36 @@ function planComparison(planItems, report, options) {
     }
   }
 
-  return { done, partial, missed };
+  // 临时增加：计划里没有、但实际投入不小的活动。
+  // 计算方式是把活动线程和计划时段求差，不是「实际 - 计划」的算术。
+  const threads = Array.isArray(report.activityThreads) ? report.activityThreads : [];
+  const extra = [];
+  for (const t of threads) {
+    if ((t.durationMs || 0) < 20 * 60000) continue; // 短穿插不算「增加了活动」
+    const startMin = minutesOfDay(t.start);
+    const endMin = minutesOfDay(t.end);
+    if (startMin === null || endMin === null) continue;
+
+    const overlapsPlan = plans.some(p => {
+      const ps = Number(p.startMin);
+      const pe = Number(p.endMin);
+      if (!Number.isFinite(ps) || !Number.isFinite(pe)) return false;
+      // 与计划时段有任何交集就算「落在计划里」
+      return startMin < pe && endMin > ps;
+    });
+    if (!overlapsPlan) {
+      extra.push({ thread: t, durationMs: t.durationMs });
+    }
+  }
+
+  return { done, partial, missed, extra };
+}
+
+/** ISO 时间 → 当天分钟数 */
+function minutesOfDay(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getHours() * 60 + d.getMinutes();
 }
 
 /**
@@ -282,6 +311,16 @@ function buildDailyReview(input) {
       for (const d of cmp.partial) {
         planLines.push(`- ${d.item.title || d.item.category}：计划 ${d.planned} 分钟，实际 ${d.actualMin} 分钟`);
       }
+    }
+    if (cmp.extra && cmp.extra.length) {
+      planLines.push('**计划外的时间**');
+      for (const e of cmp.extra.slice(0, 5)) {
+        const label = e.thread.label || e.thread.category || '未命名活动';
+        planLines.push(`- ${label}：${humanDuration(e.durationMs)}`);
+      }
+      // 这句话很重要：计划外的时间不是「浪费」，只是没被安排
+      planLines.push('');
+      planLines.push('> 计划外的时间不一定是浪费——那可能正是当天真正要紧的事。');
     }
     if (cmp.missed.length) {
       planLines.push('**没有对应的记录**');

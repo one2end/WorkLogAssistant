@@ -214,3 +214,54 @@ test('reviewing does not modify the report it was given', () => {
   dailyReview.buildDailyReview({ report, plans: [plan('x', 30, null)], date: '2026-11-12' });
   assert.equal(JSON.stringify(report), snapshot);
 });
+
+// --- 计划外的时间 ---
+
+test('a thread outside every planned window is reported as unplanned, not as waste', () => {
+  const report = makeReport({
+    activityThreads: [
+      { id: '1', start: '2026-11-12T09:00:00', end: '2026-11-12T10:00:00', durationMs: 3600000, label: '写文档', category: '文档' },
+      { id: '2', start: '2026-11-12T15:00:00', end: '2026-11-12T16:00:00', durationMs: 3600000, label: '紧急修线上问题', category: '开发编码' }
+    ]
+  });
+  const plans = [{ title: '写文档', durationMin: 60, startMin: 540, endMin: 600, actual: { durationMs: 3600000 } }];
+  const out = dailyReview.buildDailyReview({ report, plans, date: '2026-11-12' });
+
+  assert.match(out.markdown, /计划外的时间/);
+  assert.match(out.markdown, /紧急修线上问题/);
+  assert.match(out.markdown, /计划外的时间不一定是浪费/,
+    '计划外不等于浪费时间，措辞不能带评判');
+  assert.equal(/分心|不专注|效率低/.test(out.markdown), false);
+});
+
+test('a thread overlapping a plan is not counted as unplanned', () => {
+  const report = makeReport({
+    activityThreads: [
+      // 10:00-11:00，与 10:00 开始的那段计划重叠
+      { id: '1', start: '2026-11-12T10:00:00', end: '2026-11-12T11:00:00', durationMs: 3600000, label: '写文档' }
+    ]
+  });
+  const plans = [{ title: '写文档', durationMin: 60, startMin: 600, endMin: 660, actual: { durationMs: 3600000 } }];
+  const cmp = dailyReview.planComparison(plans, report);
+  assert.equal(cmp.extra.length, 0);
+});
+
+test('a short interruption is not elevated to an unplanned activity', () => {
+  // 10 分钟的临时插话很常见，把它列为「计划外的活动」会制造噪音
+  const report = makeReport({
+    activityThreads: [
+      { id: '1', start: '2026-11-12T15:00:00', end: '2026-11-12T15:10:00', durationMs: 10 * 60000, label: '回了个消息' }
+    ]
+  });
+  const plans = [{ title: '写文档', durationMin: 60, startMin: 540, endMin: 600 }];
+  const cmp = dailyReview.planComparison(plans, report);
+  assert.equal(cmp.extra.length, 0);
+});
+
+test('dropping capacity for a cancelled afternoon is not called a failure', () => {
+  // 一个下午的会打断了原计划。草稿要陈述事实，不要下结论。
+  const plans = [{ title: '写文档', durationMin: 120, startMin: 840, endMin: 960, actual: null }];
+  const out = dailyReview.buildDailyReview({ report: makeReport(), plans, date: '2026-11-12' });
+  assert.equal(/未完成|失败|没做到/.test(out.markdown), false);
+  assert.match(out.markdown, /没有对应的记录/);
+});
